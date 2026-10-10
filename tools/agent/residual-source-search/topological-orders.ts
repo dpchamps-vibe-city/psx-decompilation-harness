@@ -1,0 +1,371 @@
+import type { SemanticNode } from "./types.js";
+
+/**
+ * Dependency-valid statement orders (grammar rule 4.2): conservative scalar,
+ * memory, and barrier dependencies derived under the active web partition,
+ * with exact linear-extension counting, ranking, and unranking.
+ */
+
+export const MAX_REGION_NODES = 16;
+
+export type MemoryNamespace = "field" | "object" | "element" | "global" | "unknown";
+
+export interface MemoryEffect {
+  token: string;
+  namespace: MemoryNamespace;
+  key: string;
+  field?: string;
+  /** Web ids of local base variables at this node (identity of the pointed-to object). */
+  baseWebs: string[];
+  /** Global identifiers appearing in the object key. */
+  globals: string[];
+}
+
+export interface RegionNodeView {
+  id: string;
+  node: SemanticNode;
+  /** Effective scalar reads/writes as partition group names. */
+  reads: Set<string>;
+  writes: Set<string>;
+  memoryReads: MemoryEffect[];
+  memoryWrites: MemoryEffect[];
+}
+
+export function parseMemoryToken(
+  token: string,
+  webOfVariable: (variable: string) => string | undefined,
+  isVariable: (name: string) => boolean,
+): MemoryEffect {
+  if (token === "*unknown*") return { token, namespace: "unknown", key: "", baseWebs: [], globals: [] };
+  const match = token.match(/^(field|object|element|global):(.*)$/);
+  if (!match) return { token, namespace: "unknown", key: "", baseWebs: [], globals: [] };
+  const namespace = match[1] as MemoryNamespace;
+  let key = match[2]!;
+  let field: string | undefined;
+  if (namespace === "field") {
+    const split = key.lastIndexOf(":");
+    field = key.slice(split + 1);
+    key = key.slice(0, split);
+  }
+  const identifiers = [...new Set([...key.matchAll(/\b[A-Za-z_]\w*\b/g)].map((item) => item[0]!))];
+  const baseWebs = identifiers
+    .filter((name) => isVariable(name))
+    .map((name) => webOfVariable(name) ?? `?:${name}`)
+    .sort();
+  const globals = namespace === "global"
+    ? [key]
+    : identifiers.filter((name) => !isVariable(name)).sort();
+  const effect: MemoryEffect = { token, namespace, key, baseWebs, globals };
+  if (field !== undefined) effect.field = field;
+  return effect;
+}
+
+function shareBase(left: MemoryEffect, right: MemoryEffect): boolean {
+  return left.baseWebs.some((web) => right.baseWebs.includes(web)) ||
+    left.globals.some((name) => right.globals.includes(name));
+}
+
+/**
+ * Conservative may-alias test for two memory effects where at least one
+ * writes. Distinct named fields of one identical object commute; everything
+ * sharing a base object or global is ordered; effects with provably distinct
+ * named bases rely on the recorded non-aliasing assumption.
+ */
+export function memoryEffectsConflict(left: MemoryEffect, right: MemoryEffect): boolean {
+  if (left.namespace === "unknown" || right.namespace === "unknown") return true;
+  if (left.namespace === "global" && right.namespace === "global") return left.key === right.key;
+  if (left.namespace === "global") return right.globals.includes(left.key);
+  if (right.namespace === "global") return left.globals.includes(right.key);
+  const sameObject = left.key === right.key &&
+    left.baseWebs.join(",") === right.baseWebs.join(",") &&
+    !left.baseWebs.some((web) => web.startsWith("?:"));
+  if (left.namespace === "field" && right.namespace === "field" && sameObject) {
+    return left.field === right.field;
+  }
+  if (left.namespace === "element" && right.namespace === "element" && sameObject) return true;
+  if (sameObject) return true;
+  return shareBase(left, right);
+}
+
+function nodesConflict(left: RegionNodeView, right: RegionNodeView): { conflict: boolean; kind?: string } {
+  for (const write of left.writes) {
+    if (right.reads.has(write)) return { conflict: true, kind: `raw:${write}` };
+    if (right.writes.has(write)) return { conflict: true, kind: `waw:${write}` };
+  }
+  for (const write of right.writes) {
+    if (left.reads.has(write)) return { conflict: true, kind: `war:${write}` };
+  }
+  for (const leftEffect of left.memoryWrites) {
+    for (const rightEffect of [...right.memoryReads, ...right.memoryWrites]) {
+      if (memoryEffectsConflict(leftEffect, rightEffect)) return { conflict: true, kind: `memory:${leftEffect.token}` };
+    }
+  }
+  for (const rightEffect of right.memoryWrites) {
+    for (const leftEffect of left.memoryReads) {
+      if (memoryEffectsConflict(leftEffect, rightEffect)) return { conflict: true, kind: `memory:${rightEffect.token}` };
+    }
+  }
+  return { conflict: false };
+}
+
+export interface RegionDependency {
+  from: string;
+  to: string;
+  kind: string;
+}
+
+/** Precedence edges among region nodes given in original program order. */
+export function regionDependencies(views: RegionNodeView[]): RegionDependency[] {
+  const edges: RegionDependency[] = [];
+  for (let left = 0; left < views.length; left++) {
+    for (let right = left + 1; right < views.length; right++) {
+      const result = nodesConflict(views[left]!, views[right]!);
+      if (result.conflict) edges.push({ from: views[left]!.id, to: views[right]!.id, kind: result.kind! });
+    }
+  }
+  return edges;
+}
+
+/**
+ * Edges a loop's back edge adds to a body region.
+ *
+ * A permutation of a loop body cannot move a statement across the iteration
+ * boundary: every instance of the body still runs after the previous one in
+ * full. So a conflict between statement `a` in iteration *i* and statement `b`
+ * in iteration *i+1* is preserved by construction, and it constrains the
+ * permutation only through the pair's own within-iteration order.
+ *
+ * `nodesConflict` is symmetric in the pair — it tests both directions of the
+ * scalar and memory effects — so every loop-carried conflict is also an
+ * intra-iteration conflict, and the intra-iteration edge already orders it.
+ * This function checks that rather than assuming it: any loop-carried conflict
+ * without a corresponding intra-iteration edge is returned as a real
+ * precedence edge, which can only shrink the domain, never enlarge it.
+ */
+export function loopCarriedDependencies(
+  views: RegionNodeView[],
+  intra: RegionDependency[],
+): RegionDependency[] {
+  const ordered = new Set(intra.map((edge) => `${edge.from}->${edge.to}`));
+  const extra: RegionDependency[] = [];
+  for (let left = 0; left < views.length; left++) {
+    for (let right = left + 1; right < views.length; right++) {
+      const carried = nodesConflict(views[right]!, views[left]!);
+      if (!carried.conflict) continue;
+      const key = `${views[left]!.id}->${views[right]!.id}`;
+      if (ordered.has(key)) continue;
+      extra.push({ from: views[left]!.id, to: views[right]!.id, kind: `loop-carried:${carried.kind}` });
+    }
+  }
+  return extra;
+}
+
+/** Two effects that name the same storage, whether or not either writes. */
+function effectsTouchSameObject(left: MemoryEffect, right: MemoryEffect): boolean {
+  if (left.namespace === "unknown" || right.namespace === "unknown") return true;
+  if (left.namespace === "global" && right.namespace === "global") return left.key === right.key;
+  if (left.namespace === "global") return right.globals.includes(left.key);
+  if (right.namespace === "global") return left.globals.includes(right.key);
+  return left.key === right.key &&
+    left.baseWebs.join(",") === right.baseWebs.join(",") &&
+    !left.baseWebs.some((web) => web.startsWith("?:"));
+}
+
+function nodesTouchSameObject(left: RegionNodeView, right: RegionNodeView): boolean {
+  const leftEffects = [...left.memoryReads, ...left.memoryWrites];
+  const rightEffects = [...right.memoryReads, ...right.memoryWrites];
+  for (const leftEffect of leftEffects) {
+    for (const rightEffect of rightEffects) {
+      if (effectsTouchSameObject(leftEffect, rightEffect)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Publication barriers.
+ *
+ * `addPrim(ot, p)` hands `p` to a list a later stage walks. Field-level
+ * aliasing alone does not order an initializer against it — `setRGB0` writes
+ * `r0/g0/b0` while `addPrim` writes `addr`, and those commute as C — so
+ * without this the domain would contain candidates that initialize a packet
+ * after linking it in. Those are not representations of the same program in
+ * any sense a decompilation cares about, and the original source will not have
+ * been written that way.
+ *
+ * The rule is conservative in the direction that only ever shrinks the domain:
+ * every statement touching a published object keeps its side of the
+ * publication point, and two publication points keep their relative order.
+ * Both are recorded as suppressions in `grammar.json` rather than applied
+ * silently.
+ */
+export function publicationBarrierDependencies(views: RegionNodeView[]): RegionDependency[] {
+  const edges: RegionDependency[] = [];
+  const publishes = views.map((view) => view.node.publishes === true);
+  if (!publishes.some(Boolean)) return edges;
+
+  for (let left = 0; left < views.length; left++) {
+    for (let right = left + 1; right < views.length; right++) {
+      if (!publishes[left] && !publishes[right]) continue;
+      if (publishes[left] && publishes[right]) {
+        edges.push({
+          from: views[left]!.id,
+          to: views[right]!.id,
+          kind: `publication-order:${views[left]!.node.macro}->${views[right]!.node.macro}`,
+        });
+        continue;
+      }
+      if (!nodesTouchSameObject(views[left]!, views[right]!)) continue;
+      edges.push({
+        from: views[left]!.id,
+        to: views[right]!.id,
+        kind: `publication:${(publishes[right] ? views[right]! : views[left]!).node.macro}`,
+      });
+    }
+  }
+  return edges;
+}
+
+export class RegionTooLargeError extends Error {
+  constructor(readonly nodeCount: number) {
+    super(`region with ${nodeCount} reorderable nodes exceeds the exact-counting bound of ${MAX_REGION_NODES}`);
+  }
+}
+
+/**
+ * Counting tables are `2^n` entries and one is built per region variant, of
+ * which a domain can hold hundreds of thousands. Only the most recently used
+ * ones stay resident; the rest rebuild on demand, which costs time on a rank
+ * lookup and bounds memory in exchange.
+ */
+const RESIDENT_TABLES = 64;
+const residentTables: RegionOrderModel[] = [];
+
+function retainTable(model: RegionOrderModel): void {
+  residentTables.push(model);
+  while (residentTables.length > RESIDENT_TABLES) {
+    const evicted = residentTables.shift();
+    if (evicted && evicted !== model) evicted.dropTable();
+  }
+}
+
+/**
+ * Exact linear-extension model over one region. `preds[i]` is the bitmask of
+ * nodes that must precede node `i`. Enumeration order is deterministic: the
+ * original order always has rank 0.
+ */
+export class RegionOrderModel {
+  private counts: bigint[] | undefined;
+
+  constructor(readonly size: number, readonly preds: number[]) {
+    if (size > MAX_REGION_NODES) throw new RegionTooLargeError(size);
+  }
+
+  static fromDependencies(ids: string[], edges: RegionDependency[]): RegionOrderModel {
+    const index = new Map(ids.map((id, position) => [id, position]));
+    const preds = ids.map(() => 0);
+    for (const edge of edges) {
+      const from = index.get(edge.from);
+      const to = index.get(edge.to);
+      if (from === undefined || to === undefined) continue;
+      preds[to] = preds[to]! | (1 << from);
+    }
+    return new RegionOrderModel(ids.length, preds);
+  }
+
+  /** Project the model onto the nodes outside `removeMask` (removed nodes must have no predecessors). */
+  withRemoved(removeMask: number): { model: RegionOrderModel; kept: number[] } {
+    const kept: number[] = [];
+    for (let index = 0; index < this.size; index++) {
+      if ((removeMask & (1 << index)) === 0) kept.push(index);
+    }
+    const remap = new Map(kept.map((original, compressed) => [original, compressed]));
+    const preds = kept.map((original) => {
+      let mask = 0;
+      let bits = this.preds[original]!;
+      while (bits !== 0) {
+        const bit = bits & -bits;
+        bits ^= bit;
+        const predecessor = Math.log2(bit) | 0;
+        const compressed = remap.get(predecessor);
+        if (compressed !== undefined) mask |= 1 << compressed;
+      }
+      return mask;
+    });
+    return { model: new RegionOrderModel(kept.length, preds), kept };
+  }
+
+  private table(): bigint[] {
+    if (this.counts) return this.counts;
+    const total = 1 << this.size;
+    const counts = new Array<bigint>(total).fill(0n);
+    counts[0] = 1n;
+    for (let mask = 1; mask < total; mask++) {
+      let sum = 0n;
+      for (let node = 0; node < this.size; node++) {
+        const bit = 1 << node;
+        if ((mask & bit) === 0) continue;
+        /* node can be placed last among `mask` when no successor... use the
+           dual: node is placeable FIRST when preds are outside mask; count by
+           first-placement recursion on the remaining set. */
+        if ((this.preds[node]! & mask) !== 0) continue;
+        sum += counts[mask ^ bit]!;
+      }
+      counts[mask] = sum;
+    }
+    this.counts = counts;
+    retainTable(this);
+    return counts;
+  }
+
+  /** Release the counting table; it rebuilds on the next count or rank. */
+  dropTable(): void {
+    this.counts = undefined;
+  }
+
+  count(): bigint {
+    return this.table()[(1 << this.size) - 1]!;
+  }
+
+  unrank(rank: bigint): number[] {
+    const counts = this.table();
+    let mask = (1 << this.size) - 1;
+    let remaining = rank;
+    const order: number[] = [];
+    while (mask !== 0) {
+      let placed = false;
+      for (let node = 0; node < this.size; node++) {
+        const bit = 1 << node;
+        if ((mask & bit) === 0) continue;
+        if ((this.preds[node]! & mask) !== 0) continue;
+        const subCount = counts[mask ^ bit]!;
+        if (remaining < subCount) {
+          order.push(node);
+          mask ^= bit;
+          placed = true;
+          break;
+        }
+        remaining -= subCount;
+      }
+      if (!placed) throw new Error("rank exceeds the number of linear extensions");
+    }
+    return order;
+  }
+
+  rank(order: number[]): bigint {
+    const counts = this.table();
+    let mask = (1 << this.size) - 1;
+    let rank = 0n;
+    for (const chosen of order) {
+      for (let node = 0; node < this.size; node++) {
+        const bit = 1 << node;
+        if ((mask & bit) === 0) continue;
+        if ((this.preds[node]! & mask) !== 0) continue;
+        if (node === chosen) break;
+        rank += counts[mask ^ bit]!;
+      }
+      mask ^= 1 << chosen;
+    }
+    return rank;
+  }
+}

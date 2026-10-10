@@ -1,0 +1,6 @@
+{
+  "upstream": "cd96c559d54ea8644177e89cee07e4f0b0ac4825",
+  "files": 1275,
+  "algorithm": "sha256(sorted JSON [relative path, file sha256] pairs)",
+  "sha256": "ff26bdd932ca22d7b4fc42d47097ba540b7a041e7e1a8d57670dd70e163204ef"
+}

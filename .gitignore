@@ -1,0 +1,17 @@
+# Generated outputs (anchored: tools/build/ is source code).
+/build/
+/extracted/
+/run_output/
+/node_modules/
+/coverage/
+.env
+.env.*
+!.env.example
+*.log
+*.pid
+*.tsbuildinfo
+*.m2c
+__pycache__/
+*.pyc
+src/**/*.c.*
+tools/vendor/old-gcc/build-gcc-*/

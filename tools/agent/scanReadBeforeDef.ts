@@ -1,0 +1,362 @@
+#!/usr/bin/env npx tsx
+/**
+ * scanReadBeforeDef.ts — label-aware scanner for registers read before any
+ * definition (or after call clobber) in target assembly.
+ *
+ * Fingerprint scanner for two anomaly classes that ordinary compiled C can
+ * never produce, both established in this project's research notes:
+ *
+ *  - entry-liveness: a caller-saved register ($v0/$v1/$t*) is read on some
+ *    path before ANY definition. GCC only allocates a pseudo read-before-set
+ *    via global-alloc, which cannot produce the observed hard-register
+ *    reuse — the practical source construct is a register variable
+ *    (`register s32 x asm("$2")`), block-scope or file-scope
+ *    (see notes/research/func_8001E878-dead-spill-allocation.md §9).
+ *
+ *  - call-clobbered read: a call-clobbered register is read after a call
+ *    without an intervening definition (file-scope register variable across
+ *    calls, or handwritten assembly; see notes/research/func_8001E9F8.md).
+ *
+ * Scans target .s directly (no assembly step), with real basic blocks and a
+ * must-defined dataflow — linear scans false-positive on any function whose
+ * loop back-edge defines a register above its first read.
+ *
+ * A named function resolves against splat's nonmatchings tree first and the
+ * disassembler's per-function dump second, so a function that already has C
+ * source — which has no nonmatchings stub at all — still scans. `--all` stays
+ * on the nonmatchings tree, which is the outstanding-work queue.
+ *
+ * Usage:
+ *   npx tsx tools/agent/scanReadBeforeDef.ts func_8001E878
+ *   npx tsx tools/agent/scanReadBeforeDef.ts path/to/file.s
+ *   npx tsx tools/agent/scanReadBeforeDef.ts --all [--json]
+ */
+
+import { existsSync, readdirSync, readFileSync } from "fs";
+import { join } from "path";
+import { loadContainers } from "../lib/container.js";
+import { resolveAsmSource } from "./decompToolchain.js";
+import { BRANCH_MNEMONICS, buildBlocks, defUse } from "./webAnalysis.js";
+import { chainRow, nestedFunctionCensus, scanChainFunction, type ChainRow } from "../diagnostics/nestedFunctionScan.js";
+
+const ROOT = new URL("../..", import.meta.url).pathname;
+
+/**
+ * Every container's stubbed-function tree, in build order.
+ *
+ * A sweep that walks only the executable's reports a clean project while the
+ * overlays — four fifths of this game's code — were never opened. The
+ * executable's path is the fallback for a tree with no container model yet.
+ */
+function nonmatchingsTrees(): string[] {
+  try {
+    return loadContainers().map((container) => join(ROOT, container.paths.asmDir, "nonmatchings"));
+  } catch {
+    return [join(ROOT, "build/asm/nonmatchings")];
+  }
+}
+
+/**
+ * A local branch label. splat's nonmatchings tree spells these `.L80011C50`
+ * and the disassembler's per-function dump spells them `_80017AC0`, but both
+ * forms occur in both trees. Both have to be recognised: an unparsed label
+ * costs a basic-block edge, and a missing back-edge is precisely what makes a
+ * linear scan report the false entry-liveness finding this scanner exists to
+ * avoid.
+ */
+const LOCAL_LABEL = String.raw`(?:\.L[0-9A-Fa-f]+|_[0-9A-Fa-f]{8})`;
+const LABEL_DEFINITION = new RegExp(String.raw`^\s*(${LOCAL_LABEL}):`);
+const LABEL_OPERAND = new RegExp(`^${LOCAL_LABEL}$`);
+
+/** Registers with no defined value at function entry under the MIPS ABI. */
+const WATCHED = new Set(["v0", "v1", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "hi", "lo"]);
+const CALL_CLOBBERED = new Set(["a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "hi", "lo"]);
+const ALL_REGISTERS = new Set([
+  "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
+  "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
+  "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
+  "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra", "hi", "lo",
+]);
+
+export interface AsmInstruction {
+  mnemonic: string;
+  operands: string[];
+  vram: string;
+  text: string;
+  labelTarget?: string;
+  word?: number;
+}
+
+export interface Finding {
+  function: string;
+  register: string;
+  vram: string;
+  instruction: string;
+  kind: "entry-liveness" | "call-clobbered";
+  subForm?: "dead-spill" | "save-forward" | "undetermined";
+  guidance?: string;
+}
+
+export function parseAsm(content: string): { name: string; instructions: AsmInstruction[]; labels: Map<string, number> } {
+  const instructions: AsmInstruction[] = [];
+  const labels = new Map<string, number>();
+  let name = "";
+  for (const line of content.split("\n")) {
+    const label = line.match(LABEL_DEFINITION);
+    if (label) {
+      labels.set(label[1], instructions.length);
+      continue;
+    }
+    const glabel = line.match(/^\s*g?label\s+(\S+)/) || line.match(/^\s*glabel\s+(\S+)/);
+    if (glabel && !name) {
+      name = glabel[1];
+      continue;
+    }
+    const instruction = line.match(/^\s*\/\*\s*\S+\s+(\S+)\s+\S+\s*\*\/\s+(\S+)\s*(.*)$/);
+    if (!instruction) continue;
+    const mnemonic = instruction[2].toLowerCase();
+    const operandText = instruction[3].trim();
+    const operands = operandText.length > 0
+      ? operandText.split(",").map((operand) => operand.trim())
+      : [];
+    const encoding = line.match(/^\s*\/\*\s*\S+\s+\S+\s+([0-9a-fA-F]{8})\s*\*\//)?.[1];
+    const entry: AsmInstruction = {
+      ...(encoding ? { word: Buffer.from(encoding, "hex").readUInt32LE(0) } : {}),
+      mnemonic,
+      operands,
+      vram: instruction[1],
+      text: `${mnemonic} ${operandText}`,
+    };
+    const target = operands.find((operand) => LABEL_OPERAND.test(operand));
+    if (target) entry.labelTarget = target;
+    instructions.push(entry);
+  }
+  return { name, instructions, labels };
+}
+
+export function scanInstructions(name: string, instructions: AsmInstruction[], labels: Map<string, number>): Finding[] {
+  const branchTargetOf = (index: number): number | undefined => {
+    const instruction = instructions[index];
+    if (!BRANCH_MNEMONICS.has(instruction.mnemonic)) return undefined;
+    return instruction.labelTarget !== undefined ? labels.get(instruction.labelTarget) : undefined;
+  };
+  const blocks = buildBlocks(instructions, branchTargetOf);
+  if (blocks.length === 0) return [];
+
+  const blockOfStart = new Map(blocks.map((block, index) => [block.start, index]));
+  const predecessors: number[][] = blocks.map(() => []);
+  blocks.forEach((block, index) => {
+    for (const successorStart of block.successors) {
+      const successor = blockOfStart.get(successorStart);
+      if (successor !== undefined) predecessors[successor].push(index);
+    }
+  });
+
+  const entryDefined = new Set([...ALL_REGISTERS].filter((register) => !WATCHED.has(register)));
+
+  const transfer = (defined: Set<string>, clobbered: Set<string>, block: { start: number; end: number },
+    onUse?: (register: string, index: number) => void): void => {
+    const applyInstruction = (index: number): void => {
+      const { defs, uses } = defUse(instructions[index]);
+      for (const register of uses) {
+        if (onUse && !defined.has(register)) onUse(register, index);
+      }
+      for (const register of defs) {
+        defined.add(register);
+        clobbered.delete(register);
+      }
+    };
+    const applyCallClobber = (): void => {
+      for (const register of CALL_CLOBBERED) {
+        if (defined.has(register)) {
+          defined.delete(register);
+          clobbered.add(register);
+        }
+      }
+      defined.add("v0");
+      defined.add("v1");
+      defined.add("ra");
+      clobbered.delete("v0");
+      clobbered.delete("v1");
+    };
+
+    for (let index = block.start; index <= block.end; index++) {
+      const { isCall } = defUse(instructions[index]);
+      applyInstruction(index);
+      if (isCall) {
+        /* The delay slot executes before the call transfers: process it
+           against pre-call state, then apply the callee clobber. */
+        if (index + 1 <= block.end) applyInstruction(++index);
+        applyCallClobber();
+      }
+    }
+  };
+
+  /* Must-defined forward dataflow (optimistic init, intersection meet);
+     clobbered is a may-set carried alongside for finding classification. */
+  const inDefined: Array<Set<string> | null> = blocks.map(() => null);
+  const inClobbered: Array<Set<string>> = blocks.map(() => new Set());
+  const outDefined: Array<Set<string> | null> = blocks.map(() => null);
+  const outClobbered: Array<Set<string>> = blocks.map(() => new Set());
+  inDefined[0] = new Set(entryDefined);
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations++ < blocks.length * 8 + 16) {
+    changed = false;
+    blocks.forEach((block, index) => {
+      let mergedDefined: Set<string> | null = index === 0 ? new Set(entryDefined) : null;
+      const mergedClobbered = new Set<string>(index === 0 ? [] : []);
+      for (const predecessor of predecessors[index]) {
+        const predecessorOut = outDefined[predecessor];
+        if (predecessorOut === null) continue; /* not yet computed: optimistic */
+        mergedDefined = mergedDefined === null
+          ? new Set(predecessorOut)
+          : new Set([...mergedDefined].filter((register) => predecessorOut.has(register)));
+        for (const register of outClobbered[predecessor]) mergedClobbered.add(register);
+      }
+      if (mergedDefined === null) return; /* unreachable so far */
+      inDefined[index] = mergedDefined;
+      inClobbered[index] = mergedClobbered;
+      const defined = new Set(mergedDefined);
+      const clobbered = new Set(mergedClobbered);
+      transfer(defined, clobbered, block);
+      const previous = outDefined[index];
+      const same = previous !== null && previous.size === defined.size &&
+        [...defined].every((register) => previous.has(register)) &&
+        outClobbered[index].size === clobbered.size &&
+        [...clobbered].every((register) => outClobbered[index].has(register));
+      if (!same) {
+        outDefined[index] = defined;
+        outClobbered[index] = clobbered;
+        changed = true;
+      }
+    });
+  }
+
+  const findings: Finding[] = [];
+  const seen = new Set<string>();
+  blocks.forEach((block, index) => {
+    const defined = inDefined[index];
+    if (!defined) return;
+    const clobbered = new Set(inClobbered[index]);
+    transfer(new Set(defined), clobbered, block, (register, instructionIndex) => {
+      if (!WATCHED.has(register) && !clobbered.has(register)) return;
+      const key = `${register}:${instructionIndex}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      findings.push({
+        function: name,
+        register,
+        vram: instructions[instructionIndex].vram,
+        instruction: instructions[instructionIndex].text,
+        kind: clobbered.has(register) ? "call-clobbered" : "entry-liveness",
+      });
+    });
+  });
+  const bytes = Buffer.alloc(instructions.length * 4);
+  if (instructions.every(i => i.word !== undefined)) {
+    instructions.forEach((i, n) => bytes.writeUInt32LE(i.word!, n * 4));
+    const callee = scanChainFunction({ name, container: "assembly", vram: parseInt(instructions[0]!.vram, 16), bytes }).callee;
+    for (const finding of findings) if (finding.kind === "entry-liveness" && finding.register === "v0") {
+      finding.subForm = callee?.form ?? "undetermined";
+      finding.guidance = callee?.guidance ?? "Entry-$2 requires CAPTURE_PREV_RET; sub-form not established, do not guess scope/body.";
+    }
+  }
+  for (const finding of findings) finding.guidance ??= finding.kind === "entry-liveness" ?
+    "Read before definition: compiled C cannot produce this hard-register entry liveness; inspect the original construct." :
+    "Read after call clobber: inspect file-register or handwritten classification; no deterministic injection recipe.";
+  return findings;
+}
+
+function scanFile(path: string): Finding[] {
+  const parsed = parseAsm(readFileSync(path, "utf-8"));
+  const name = parsed.name || path;
+  return scanInstructions(name, parsed.instructions, parsed.labels);
+}
+
+/**
+ * Target assembly for a function, from whichever of its container's trees
+ * carries it.
+ *
+ * A container's `nonmatchings` tree only holds functions still stubbed with
+ * INCLUDE_ASM, so a function that already has C source has no entry there at
+ * all. Its `functions` directory is the disassembler's complete per-function
+ * dump and covers matched and unmatched alike. That order is the toolchain
+ * module's, and it is shared rather than restated so a diagnostic and the
+ * measurement it explains always read the same file.
+ */
+export function resolveFunctionAsm(functionName: string): string | null {
+  return resolveAsmSource(functionName);
+}
+
+function usage(): never {
+  console.error("Usage: npx tsx tools/agent/scanReadBeforeDef.ts <func|file.s> [--json]");
+  console.error("       npx tsx tools/agent/scanReadBeforeDef.ts --all [--json]");
+  process.exit(1);
+}
+
+const isCLI = process.argv[1]?.endsWith("scanReadBeforeDef.ts");
+if (isCLI) {
+  const args = process.argv.slice(2);
+  const json = args.includes("--json");
+  const positional = args.filter((arg) => !arg.startsWith("--"));
+  const findings: Finding[] = [];
+  let staticChain: ChainRow | null = null;
+  let censusComplete: boolean | null = null;
+  let scanned = 0;
+
+  if (args.includes("--all")) {
+    const trees = nonmatchingsTrees().filter((tree) => existsSync(tree));
+    if (trees.length === 0) {
+      console.error("scanReadBeforeDef: no container has a nonmatchings tree yet (run the build/split first)");
+      process.exit(1);
+    }
+    for (const tree of trees) {
+      for (const entry of readdirSync(tree).sort()) {
+        const directory = join(tree, entry);
+        for (const file of readdirSync(directory).filter((candidate) => candidate.endsWith(".s"))) {
+          findings.push(...scanFile(join(directory, file)));
+          scanned++;
+        }
+      }
+    }
+  } else if (positional.length === 1) {
+    const path = positional[0].endsWith(".s")
+      ? positional[0]
+      : resolveFunctionAsm(positional[0].replace(/^src\//, "").replace(/\.c$/, ""));
+    if (!path || !existsSync(path)) {
+      console.error(`scanReadBeforeDef: no assembly found for ${positional[0]} in any container (run npm run split-all, or npm run disassemble)`);
+      process.exit(1);
+    }
+    findings.push(...scanFile(path));
+    if (!positional[0]!.endsWith(".s")) {
+      const census = nestedFunctionCensus();
+      staticChain = chainRow(census, positional[0]!.replace(/^src\//, "").replace(/\.c$/, ""));
+      censusComplete = census.complete;
+    }
+    scanned = 1;
+  } else usage();
+
+  if (json) {
+    console.log(JSON.stringify({ scanned, findings, staticChain, censusComplete }, null, 2));
+  } else {
+    console.log(`scanned ${scanned} function(s); ${findings.length} finding(s)`);
+    for (const finding of findings) {
+      console.log(`  ${finding.function} @ 0x${finding.vram}: $${finding.register} ${finding.kind}${finding.subForm ? ` (${finding.subForm})` : ""} — ${finding.instruction}`);
+      console.log(`    ${finding.guidance}`);
+    }
+    if (staticChain) {
+      console.log(`\nStatic-chain census ${staticChain.id}: ${staticChain.verdict}`);
+      if (staticChain.callee) console.log(staticChain.callee.guidance);
+      for (const site of staticChain.calls) console.log(`  0x${site.setup.toString(16)}: ${site.verdict}, ${site.callee ?? "unknown target"}; ${site.reason}`);
+    }
+    if (findings.length > 0) {
+      console.log("\nentry-liveness: read before any definition on some path — compiled C cannot");
+      console.log("produce this; suspect a register variable (see CAPTURE_PREV_RET in common.h");
+      console.log("and notes/research/func_8001E878-dead-spill-allocation.md §9).");
+      console.log("call-clobbered: read after a call without redefinition — file-scope register");
+      console.log("variable or handwritten assembly (notes/research/func_8001E9F8.md).");
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "headers": [
+    { "role": "Umbrella header included by source files", "path": "include/common.h" },
+    { "role": "Generated declarations for data symbols", "path": "include/globals.h" },
+    { "role": "Project-owned type overrides for data symbols", "path": "include/globals_override.h" },
+    { "role": "Project-owned shared parameter and local types", "path": "include/game_types.h" },
+    { "role": "Generated m2c function declarations", "path": "include/functions.h" }
+  ]
+}

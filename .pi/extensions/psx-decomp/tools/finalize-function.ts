@@ -1,0 +1,56 @@
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { loadConfig } from "../../shared/config.ts";
+import { finalizeWorkspace } from "./finalization.ts";
+import { loadCallGraph } from "../../shared/call-graph.ts";
+import { createTreeFromWorktree, changedFilesBetweenTrees, filterNewChanges, treePatch, workspaceChangedFiles } from "../../shared/workspace.ts";
+import { getSessionBaseline } from "./session-baseline.ts";
+import { validateFunctionName } from "./shared.ts";
+
+export function registerFinalizeFunctionTool(pi: ExtensionAPI,
+  onPassed?: (name: string, changedFiles: string[], ctx: ExtensionContext) => void): void {
+  pi.registerTool({
+    name: "psx_finalize_function",
+    label: "Finalize PSX Function",
+    description: "Run the exact function diff, full binary check, modification-scope check, and clean-source policy gate. A passing result terminates the autonomous worker turn.",
+    parameters: Type.Object({
+      functionName: Type.String({ description: "Exact function symbol to finalize" }),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      validateFunctionName(params.functionName);
+      if (signal?.aborted) throw new Error("Finalization cancelled");
+      onUpdate?.({ content: [{ type: "text", text: `Finalizing ${params.functionName}...` }], details: {} });
+      const config = loadConfig(ctx.cwd);
+      const entry = loadCallGraph(ctx.cwd).functions.find((candidate) => candidate.name === params.functionName);
+      const containerNote = entry && entry.container !== "exe" ? ` in ${entry.container}` : "";
+      const tree = await createTreeFromWorktree(ctx.cwd, ctx.cwd, config.integration.allowedRoots);
+      const patch = await treePatch(ctx.cwd, "HEAD", tree, config.integration.allowedRoots);
+      const allChangedFiles = [...new Set([
+        ...await changedFilesBetweenTrees(ctx.cwd, "HEAD", tree),
+        ...await workspaceChangedFiles(ctx.cwd),
+      ])].sort();
+      const baseline = await getSessionBaseline(ctx.cwd);
+      const { newFiles: changedFiles, preExisting } = filterNewChanges(allChangedFiles, baseline);
+      /* The graph places the function; the gate needs it placed. Without the
+         container and the source path the policy scan looks for an overlay's
+         translation unit under `src/`, finds nothing, and reports a clean
+         function it never opened. */
+      const gate = await finalizeWorkspace({ projectRoot: ctx.cwd, config, functionName: params.functionName, changedFiles, patch, signal });
+      const scopeNote = preExisting.length
+        ? `\nScope gate ignored ${preExisting.length} pre-existing workspace change(s): ${preExisting.join(", ")}`
+        : "";
+      if (gate.pass) {
+        const after = filterNewChanges(await workspaceChangedFiles(ctx.cwd), baseline).newFiles;
+        onPassed?.(params.functionName, [...new Set([...changedFiles, ...after])].sort(), ctx);
+      }
+      const text = gate.pass
+        ? `${params.functionName}${containerNote} passed exact diff, full build, scope, and clean-source gates.${scopeNote}`
+        : `${params.functionName} failed finalization:\n${gate.failures.map((failure) => `- ${failure}`).join("\n")}${scopeNote}`;
+      return {
+        content: [{ type: "text", text }],
+        details: gate,
+        terminate: gate.pass,
+      };
+    },
+  });
+}

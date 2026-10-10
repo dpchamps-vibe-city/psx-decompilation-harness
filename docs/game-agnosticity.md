@@ -1,0 +1,69 @@
+# Game-agnosticity migration checklist
+
+This checklist separates implemented project boundaries from remaining assumptions.
+A generic filename is not proof of portability. Historical game notes and plans
+are not included.
+Remaining example addresses, historical references, and function-specific tests
+must never become active evidence or authorization for a new game.
+
+## Completed initial boundaries
+
+- [x] Independent vendor checkouts at the original pins, no links to the source repository.
+- [x] Exclude unused reference vendors, including `silent-hill-decomp`.
+- [x] Original project configs/headers/Makefile/loop policy live under `examples/btn-decompilation/`.
+- [x] Active project scaffolding has no BTN executable, symbols, game structs, measured layout, or per-function flag overrides.
+- [x] Active loop policy has no copied symbol allowlist and disables autonomous commits. Inherited policy mechanisms still require the review below.
+- [x] Root Makefile replaced by npm tasks; shared `toolchain.json` drives configured executables, flags, SDK inputs and explicitly selected profiles.
+- [x] No automatic overlay small-data swap; unsupported compiler analyses require capabilities; caches/receipts include toolchain inputs.
+- [x] Project-local identification skill separates measured asset evidence from configured choices.
+- [x] `classifyGlobals.ts` takes target/header and measured section-layout bounds instead of BTN filenames/load addresses/text ranges; rejects invalid bounds and does not scan data as instructions.
+- [x] Linker BSS patchers and binary diff paths use the configured/discovered executable basename; binary diff requires section metadata instead of BTN fallback offsets.
+- [x] `headerInfo.ts` accepts an explicit executable or configured/discovered target, names its report after the actual file, and supports help without a target.
+- [x] Historical guides are archived; new root instructions distinguish platform/profile rules from game facts.
+- [x] Delete `plans/` and 221 game/work-log note files; retain only the tooling inventory and its README. Deleted material is not archived elsewhere in the harness.
+- [x] Compiler-oracle instrumentation reads retained vendored GCC sources instead of deleted scratch copies; the source pairs were byte-identical.
+
+## P0 — project boundary and active evidence
+
+| Status | Files | Assumption to remove | Replacement | Acceptance test |
+| --- | --- | --- | --- | --- |
+| [ ] | `tools/lib/psxExeInfo.ts`, `tools/agent/decompToolchain.ts`, callers throughout `tools/` | `ROOT` is derived from `import.meta.url`; harness assets and target project inputs/outputs are the same tree. CLI `cwd` alone does not fix this. | Explicit immutable project context with separate harness asset, project, and runtime roots; resolve all reads/writes from that context. | Install harness outside two synthetic projects; run diagnostics/build preparation for both, verify no writes in harness/source and no cross-project reads. |
+| [ ] | `.pi/extensions/shared/workspace.ts`, `.pi/extensions/psx-decomp/`, `.pi/extensions/psx-resources/` | Project discovery and command paths assume a project containing `AGENTS.md` and `tools/agent/`. | Shared project context and validated manifest; extensions use installed tool paths and project-relative inputs separately. | Invoke installed extensions from two unrelated project directories; validate command cwd, patch paths, and scope gates. |
+| [ ] | `tools/lib/toolchainProfile.ts`, module-level root/config caches, build/runtime outputs | Cached profiles and eager constants belong to one checkout, not an explicitly identified project and inputs. | Cache keys include project identity and content-addressed config/assets; no ambiguous process-global target state. | Same process switches between projects/profiles and edits config; no stale compiler/header/container results. |
+| [ ] | `tools/build/genProjectProfile.ts`, `configs/project-info.json`, header-role callers | Project-profile generation understands only portions of the inherited layout; header-role table is not consistently consumed. | Validated project schema for paths/header roles/profile/evidence. Distinguish bootstrap defaults from verified facts. | Non-default paths and names work everywhere; absent facts remain unknown and do not become generated claims. |
+| [ ] | `include/common.h`, `include/debughook.h`, `include/scratchpad.h`, `.pi/extensions/shared/source-policy.ts`, entry-state/census tools | Retained macros/entry-value and stack-switch policy mechanisms originated in BTN; some header comments still cite BTN sites. | Platform macros separate from optional project-authorized mechanisms; authorization keyed to project/content evidence, not inherited names/census alone. | Same symbol in another game receives no standing exception; missing authorization refuses integration even if bytes match. |
+| [ ] | `prompts/legacy/`, `tools/agent/getPrompt.ts` | Archived prompt bodies and their context builder retain fixed executable/source/header paths, Make commands, original-game examples and obsolete matching/policy advice. Injecting the current `AGENTS.md` does not make the historical workflow portable. | Keep them out of active agent dispatch; use `.pi/skills/` for new work. Any future manual workflow needs container/header-role/config resolution and current verification/policy, not copied historical assumptions. | Active workflows never load archived templates; a new project is not instructed to use the old game's layout, compiler confidence, GTE exceptions or Makefile. |
+| [ ] | `notes/tools-directory-structure.md`, `prompts/`, `.pi/skills/`, historical guide archives, diagnostic citation registries | Some inherited prose and diagnostics still cite the deleted game notes/plans or assume project-owned research/approval paths. The remaining inventory also contains stale game/profile/reference-vendor claims. | Remove stale guidance and make evidence/citation lookup project-scoped. Do not restore deleted game history, fabricate a replacement citation, or fall back to the original checkout. Distinguish generic target-output directories from harness assets. | A second game's task receives only existing, relevant project evidence; no deleted BTN approvals, structs, facts, or function-family recommendations are loaded. |
+
+## P1 — supported formats and toolchain profiles
+
+| Status | Files | Assumption to remove | Replacement | Acceptance test |
+| --- | --- | --- | --- | --- |
+| [ ] | `tools/lib/container.ts`, `tools/lib/overlayManifest.ts`, overlay/bootstrap tools, `tools/build/pipeline.ts` | One main executable plus one archive-member model; `ovl_NN` symbol prefixes and fixed `src/overlays`, `configs/splat`, build paths; overlay GP defaults to zero. | Manifest-selected container IDs, symbol ownership, paths, archive adapters, load slots and per-container ABI facts. Existing archive discovery already scans rather than requiring `a_file.bin`; format recognition still needs supported-adapter boundaries. | No-overlay game, different overlay IDs/prefixes, multiple archives/executables, and nonzero overlay GP; ambiguous load addresses stay unresolved. |
+| [~] | `toolchain.json`, `tools/lib/toolchain.ts`, `tools/agent/decompToolchain.ts` | Default GCC 2.95.2 / ASPSX 2.80 / `-O2 -G8` is a supported candidate. Compile protocol and forensic adapters still assume cpp/cc1/maspsx/GAS, not arbitrary compiler drivers. | Shared config and explicit per-container flag profiles are implemented; further compiler families require real adapters and independently validated evidence. | Check a second toolchain/SDK with coherent inputs. Capabilities must not claim unsupported dump/pass semantics. |
+| [ ] | `tools/build/detectLibFunctions.ts`, `addLibSymbols.ts`, `findMissingLibDeps.ts`, `auditSdkCollisions.ts`, `splitSdkLibs.ts`, `lib/`, `include/psyq/`, `tools/vendor/psyq47/` | Several active callers hardcode SDK version `470`, SDK paths, or PSY-Q 4.7 headers/converted objects. Retained signature database covers more versions. | Detected/configured SDK profile with per-version original/converted inputs and strict provenance verification; mixtures may need explicit support. | At least two SDK versions and a no/unknown-SDK target; false signature matches do not authorize object replacement and missing assets are reported. |
+| [ ] | `tools/build/classifyGlobals.ts` | Address-named `D_` globals, `-G8` array inflation, fixed generated-header paths, source/asm layout, and target cpp executable. | Symbol metadata/header roles and profile-driven small-data threshold; do not fabricate scalar types for unknown project objects. | Alternate symbol names/paths/thresholds; conflicting TU views remain unresolved; generation does not require irrelevant source directories. |
+| [ ] | `tools/lib/ramRegions.ts` | `STACK_TOP = 0x801ffff0` is described as universal; free space between image/overlay slots is labelled heap/BSS from placement alone. | Header/measured stack facts; distinguish placement gaps from proven allocation/object ownership. Keep unresolved regions explicit. | Different stack values and no overlays; gap classification remains hypothesis unless references/metadata corroborate it. |
+| [ ] | `tools/diagnostics/diffBinary.ts` and address-range helpers | Fixed address/map windows (including a 1 MiB function-map range) can miss another executable's payload. | Header/container-derived bounds; explicit RAM aliases/address-space handling. | Alternate load address and image size, including outside the inherited window. |
+| [ ] | `tools/agent/compiler-source/`, `compiler-trace/`, allocator/scheduler/oracle modules, `tools/vendor/gcc/2.95.2/` | Forensic adapters interpret this legacy compiler's sources, dump formats, pass semantics and pinned patches. | Declare supported compiler profiles/capabilities and reject unsupported analysis; add new adapters only with independent compiler evidence. | Switching profile cannot reuse incompatible pass/dump analysis or claim an unsupported compiler is understood. |
+| [ ] | `tools/agent/triage.ts`, `fileGroupings.ts`, `tools/agent/idiom-corpus/`, benchmark/reconstruction cohort loaders, `tools/diagnostics/webPartitionDiff.ts`, `webPartitionReplay.ts`, `coldContextEvaluation.ts`, `benchmarkReconstruction.ts` | Named BTN function cohorts, research citations, and historical facts are embedded in diagnostics/configuration. Several citations/replays point to now-deleted notes; optional file-group lookup returns empty without its project ledger. | Optional provenance-labelled example registries/manifests; compiler-wide hypotheses are distinct from target evidence. | Unseen project/function gets no BTN-special behavioral lookup; self-contained historical regression remains reproducible. |
+
+## P2 — operational portability and test separation
+
+| Status | Files | Assumption to remove | Replacement | Acceptance test |
+| --- | --- | --- | --- | --- |
+| [ ] | `.pi/extensions/psx-decomp/autoloop/config.ts` | Omitting the model ladder still uses author-specific default provider/model IDs. | Explicit user/harness model configuration, supported-provider discovery, clear missing-model result. | Fresh environment with different providers starts no unintended model/task and reports missing setup. |
+| [ ] | `tools/agent/worktree.ts` | Legacy scratch directories are named `btn-worktrees`; repo/runtime assumptions remain. | Configurable project-isolated runtime/worktree roots; preserve transactional scope/security rules. | Two projects create/list/clean their own worktrees only. |
+| [ ] | `package.json`, inherited `*.test.ts` across `.pi/` and `tools/` | Unit-looking tests sometimes read target executable, recovered source, generated headers/layout, original git history, or build outputs. Strict `tsc --noEmit` also reports widespread import-extension, optional-value, and indexing errors. | Synthetic fixtures for portable contracts; separately opt-in real-project integration requiring explicit inputs and evidence; reconcile TypeScript configuration and actual types. Do not hide unrelated regressions as missing-target skips or relax strictness to manufacture green checks. | Cold harness checkout has genuinely portable green test/typecheck suites; real-project suite reports exact prerequisites and remains independently runnable. |
+| [ ] | `tools/vendor/old-gcc/build-gcc-2.95.2-psx/`, system commands, SDK/tree-sitter assets | Locally built compiler binaries and installed cross/Python tooling are not a reproducible distribution; SDK redistribution rights are not settled by `package.json`. | Documented pinned builds/setup and licensing inventory; portable platform checks, no source-repository dependencies. | New checkout can reproduce tool identities and compile a tiny synthetic C file without a preexisting BTN build. |
+
+## What is not inherently game-specific
+
+PS-X EXE magic/header offsets, MIPS R3000 instruction semantics, PS1 RAM/MMIO
+ranges, PSY-Q object-format parsers, byte-relocation checks, source-policy gates,
+and content/provenance hashing belong in a PSX harness. Historical regression
+fixtures may name BTN symbols if their inputs are self-contained. Compiler/SDK
+releases are valid **supported profiles**, not universal target facts.
+
+Do not generalize by weakening byte checks, inventing layouts/types, relaxing
+scope/source-policy gates, or suppressing missing/ambiguous evidence.

@@ -61,15 +61,14 @@ function functionTool(
  * reason, so an exclusion cannot be a silent omission.
  */
 export const UNEXPOSED_CLIS: Record<string, string> = {
+  library:
+    "Manual inventory/split/member-check wrapper. Library targets use the same " +
+    "psx_m2c, residual, progress and finalization tools through the target adapter; " +
+    "a second model-facing workflow would bypass their normal scope/policy gates.",
   getPrompt:
-    "A legacy prompt builder for the archived templates under prompts/legacy/, which " +
-    "no active workflow dispatches — the Pi commands and the autonomous workers run " +
-    ".pi/skills/ directly. Exposing it did two kinds of harm. It inlines the repository " +
-    "guide and the project profile into its output, context the caller already has, " +
-    "against a template nothing else uses. And it is " +
-    "stateful in the way this repository is removing: it needs build/callGraph.json " +
-    "and tells the caller to run callGraph.ts first. The CLI stays for manual and " +
-    "historical reproduction; it is not something an agent should be able to reach for.",
+    "Retired 2026-10-10 along with prompts/legacy/. The archived templates no longer " +
+    "exist, and the CLI now prints a removal notice. Active Pi workflows dispatch " +
+    ".pi/skills/ directly and never invoke this module.",
   migrateLedger:
     "A one-off schema migration over build/experimentLedger/, not a diagnostic. It " +
     "reclassifies pre-schema-2 rows on evidence and retires the ones that measured an " +

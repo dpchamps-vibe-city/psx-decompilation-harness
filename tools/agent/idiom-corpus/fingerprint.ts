@@ -17,7 +17,9 @@
  * which flags own which axis.
  */
 
-import { configuredCc1FlagsForContainer, configuredGccVersion, containerKindForSymbol, loadFlagOverrides } from "../decompToolchain.js";
+import { configuredGccVersion, loadFlagOverrides } from "../decompToolchain.js";
+import { configuredFlags, type FlagContext } from "../../lib/toolchain.js";
+import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
 
 /** The four residual axes, in the order the staged objective compares them. */
 export type Axis = "controlFlow" | "population" | "schedule" | "allocation";
@@ -49,7 +51,8 @@ export interface ToolchainFingerprint {
   /** Compiler version string, e.g. `2.95.2`. */
   gcc: string;
   /** Container kind, which fixes the small-data threshold. */
-  container: "exe" | "overlay";
+  container: FlagContext["kind"];
+  contextFlags?: string[];
   /** cc1 flags, sorted, including any per-file override. */
   flags: string[];
   /** Per-file override flags only — empty for a baseline translation unit. */
@@ -59,17 +62,19 @@ export interface ToolchainFingerprint {
 }
 
 export function fingerprintOf(functionName: string): ToolchainFingerprint {
-  const container = containerKindForSymbol(functionName);
-  const base = configuredCc1FlagsForContainer(container);
-  const overrides = loadFlagOverrides().get(functionName) ?? [];
+  const target = resolveFunctionTarget(functionName), container = target.owner.kind;
+  const base = configuredFlags("cc1", target.flags);
+  const contextFlags = ["cpp", "as", "maspsx"].flatMap(stage => configuredFlags(stage as "cpp" | "as" | "maspsx", target.flags).map(f => `${stage}:${f}`)).sort();
+  const overrides = loadFlagOverrides().get(container === "library" ? target.owner.id : functionName) ?? [];
   const flags = [...base, ...overrides].sort();
   const gcc = configuredGccVersion();
   return {
     gcc,
     container,
     flags,
+    contextFlags,
     overrides,
-    id: `gcc${gcc}/${container}${overrides.length > 0 ? `+${[...overrides].sort().join(" ")}` : ""}`,
+    id: `gcc${gcc}/${container}/${JSON.stringify([flags, contextFlags])}`,
   };
 }
 
@@ -105,7 +110,7 @@ export function compatibility(query: ToolchainFingerprint, hit: ToolchainFingerp
   }
 
   if (query.gcc === hit.gcc) {
-    const differing = symmetricDifference(query.flags, hit.flags);
+    const differing = [...symmetricDifference(query.flags, hit.flags), ...symmetricDifference(query.contextFlags ?? [], hit.contextFlags ?? [])];
     const unproven = new Map<Axis, string>();
     for (const flag of differing) {
       const owner = FLAG_AXES.find((entry) => entry.pattern.test(flag));

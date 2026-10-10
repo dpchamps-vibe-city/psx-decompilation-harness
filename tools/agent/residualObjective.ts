@@ -35,6 +35,8 @@ import { StubSourceError, compareFunction } from "../lib/functionOracle.js";
 import { requireFunctionLocation } from "../lib/symbolIndex.js";
 import { allocationDominant, fingerprintWebPartition } from "../diagnostics/fingerprintWebPartition.js";
 import { addressedWebFacts, renderWebDiff, type PartitionDiff } from "../diagnostics/webPartitionDiff.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
+import { readRelocatableObject, relocatableOutputIdentity } from "../lib/relocatableObject.js";
 
 interface Entry {
   label: string;
@@ -153,7 +155,9 @@ function score(functionName: string, label: string, source?: string): Entry {
     matchedWords: artifacts.report.matchedWords,
     totalWords: artifacts.report.totalWords,
     objectHash: createHash("sha256")
-      .update(artifacts.candidate.machine.insns.map((insn) => (insn.word ?? 0).toString(16)).join(","))
+      .update(resolveFunctionTarget(functionName).verification.scope === "translation-unit"
+        ? relocatableOutputIdentity(readRelocatableObject(readFileSync(artifacts.objectPath)))
+        : artifacts.candidate.machine.insns.map((insn) => (insn.word ?? 0).toString(16)).join(","))
       .digest("hex"),
     provenance: artifacts.candidateProvenance,
   };
@@ -211,12 +215,13 @@ function blockColumns(objective: ResidualObjective): Map<number, string> {
  */
 function differingWords(functionName: string, entry: Entry): string[] {
   try {
-    const container = requireFunctionLocation(functionName).container;
+    const target = resolveFunctionTarget(functionName);
+    const container = target.coordinate.kind === "image" ? requireFunctionLocation(functionName).container : undefined;
     const oracle = compareFunction(functionName, {
-      objectPath: entry.provenance.value.object,
-      container,
+      objectPath: entry.provenance.value.object, ...(container ? { container } : {}),
     });
-    if (oracle.differing.length === 0) return [];
+    if (oracle.differing.length === 0) return oracle.verification && oracle.verification.verdict !== "match"
+      ? [`Owning TU: ${oracle.verification.verdict}`, ...oracle.verification.differences] : [];
     const rows: string[] = [];
     for (let index = 0; index < oracle.rows.length; index++) {
       const row = oracle.rows[index]!;
@@ -346,6 +351,7 @@ function render(functionName: string, entries: Entry[], block: number | undefine
     lines.push("       jump table is the usual cause (`deriveRodataSplits.ts --container <id>`).");
   }
   if (best.objective.degraded) lines.push(`DEGRADED: ${best.objective.reason}`);
+  else if (best.objective.reason) lines.push(best.objective.reason);
   lines.push("");
   lines.push(renderProvenance(entries.filter((entry) => !entry.stub)
     .map((entry) => ({ label: entry.label, ensured: entry.provenance }))));

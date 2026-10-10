@@ -45,20 +45,20 @@ import {
   configuredTool,
   runTool,
   loadFlagOverrides,
-  containerForSymbol,
-  configuredAsFlagsForContainer,
-  configuredCc1FlagsForContainer,
-  configuredCppFlags,
+  assembleTarget,
+  disassembleObject,
   configuredGccVersion,
-  configuredMaspsxFlags,
   configuredToolchainIdentity,
-  containerKindForSymbol,
   resolveAsmSource,
   sourcePathFor,
 } from "./decompToolchain.js";
 import { sha256, stableJson } from "./variant-lab/artifacts.js";
-import { containerTargetPath, vramToRom, type Container } from "../lib/container.js";
+import { type Container } from "../lib/container.js";
 import { addressEncodedInName, locateFunction } from "../lib/symbolIndex.js";
+import { resolveFunctionTarget, type FunctionTarget } from "../lib/targetAdapter.js";
+import { loadLibraryProject } from "../lib/project.js";
+import { targetWordsOf } from "../lib/functionOracle.js";
+import { configuredFlags } from "../lib/toolchain.js";
 
 // Probe rows compile through the same config service as the production build.
 
@@ -73,11 +73,8 @@ import { addressEncodedInName, locateFunction } from "../lib/symbolIndex.js";
  * columns cannot show.
  */
 function flagsFor(name: string): { cc1: string; as: string } {
-  const kind = containerKindForSymbol(name);
-  return {
-    cc1: configuredCc1FlagsForContainer(kind).join(" "),
-    as: configuredAsFlagsForContainer(kind).join(" "),
-  };
+  const target = resolveFunctionTarget(name);
+  return { cc1: configuredFlags("cc1", target.flags).join(" "), as: configuredFlags("as", target.flags).join(" ") };
 }
 
 export const BASELINE_LABEL = "baseline";
@@ -161,7 +158,13 @@ function run(cmd: string): string {
  * the project's containers, and the executable's own name and base are facts
  * about one game rather than about the platform.
  */
-export function getFuncInfo(name: string): { vram: number; size: number; container: Container } | null {
+type ProbeInfo = { vram: number; size: number; container?: Container; coordinate?: FunctionTarget["coordinate"] };
+export function getFuncInfo(name: string): ProbeInfo | null {
+  if (loadLibraryProject()) {
+    const target = resolveFunctionTarget(name);
+    if (target.coordinate.kind !== "section") return null;
+    return { vram: target.coordinate.offset, size: target.coordinate.size, coordinate: target.coordinate };
+  }
   const found = locateFunction(name);
   const location = found.length === 1 ? found[0] : found.find((entry) => entry.container.kind === "exe") ?? found[0];
   if (!location) return null;
@@ -172,15 +175,6 @@ function vramForStem(stem: string): number | null {
   const info = getFuncInfo(stem);
   if (info) return info.vram;
   return addressEncodedInName(stem);
-}
-
-/** Read the function's original words out of its own container's image. */
-function targetWords(info: { vram: number; size: number; container: Container }): number[] {
-  const image = readFileSync(containerTargetPath(info.container));
-  const off = vramToRom(info.container, info.vram);
-  const words: number[] = [];
-  for (let i = 0; i + 4 <= info.size; i += 4) words.push(image.readUInt32LE(off + i));
-  return words;
 }
 
 /* ---- structural fingerprints (pure MIPS-I word decoding) ---- */
@@ -266,22 +260,18 @@ function maskedInstrs(objdumpOut: string): string[] {
     });
 }
 
+function maskedDisassembly(insns: ReturnType<typeof disassembleObject>): string[] {
+  return maskedInstrs(insns.map(i => `  ${i.address.toString(16)}: ${i.mnemonic} ${i.operands.join(",")}${i.relocation ? ` [${i.relocation.type}:${i.relocation.symbol}]` : ""}`).join("\n"));
+}
+
 function targetAsmPath(name: string): string | null {
   const resolved = resolveAsmSource(name);
   return resolved ? resolved.slice(ROOT.length + 1) : null;
 }
 
 function assembleTargetInstrs(name: string): string[] | null {
-  const asmSrc = targetAsmPath(name);
-  if (!asmSrc) return null;
-  const dir = "build/flagProbe";
-  mkdirSync(join(ROOT, dir), { recursive: true });
-  const wrapper = `${dir}/${name}.target.s`;
-  writeFileSync(join(ROOT, wrapper),
-    `.include "include/macro.inc"\n.set noat\n.set noreorder\n.include "${asmSrc}"\n`);
-  const container = containerForSymbol(name);
-  runTool(configuredTool("as"), [...configuredAsFlagsForContainer(container?.kind ?? "exe", container?.id), wrapper, "-o", `${dir}/${name}.target.o`]);
-  return maskedInstrs(runTool(configuredTool("objdump"), ["-d", "--no-show-raw-insn", `${dir}/${name}.target.o`]));
+  try { return maskedDisassembly(disassembleObject(assembleTarget(name, "build/flagProbe"))); }
+  catch { return null; }
 }
 
 function compileRow(
@@ -306,7 +296,7 @@ function compileRow(
     row.error = "compile failed";
     return row;
   }
-  const got = maskedInstrs(runTool(configuredTool("objdump"), ["-d", "--no-show-raw-insn", `${dir}/${name}.c.o`]));
+  const got = maskedDisassembly(disassembleObject(join(ROOT, dir, `${name}.c.o`)));
   let matched = 0;
   const total = Math.max(target.length, got.length);
   for (let i = 0; i < total; i++) if (target[i] === got[i]) matched++;
@@ -427,10 +417,10 @@ export function nearbyOverrides(vram: number, container?: Container): string[] {
     const m = ["", stem, flags.join(" ")];
     const info = getFuncInfo(m[1]);
     const v = info ? info.vram : vramForStem(m[1]);
-    const sameContainer = !container || !info || info.container.id === container.id;
+    const sameContainer = !container || !info || info.container?.id === container.id;
     const dist = v !== null ? Math.abs(v - vram) : null;
     const tag = sameContainer && dist !== null && dist <= 0x8000 ? "  <-- NEARBY (possible same TU)" : "";
-    const where = info && container && info.container.id !== container.id ? ` [${info.container.id}]` : "";
+    const where = info?.container && container && info.container.id !== container.id ? ` [${info.container.id}]` : "";
     out.push(`  ${m[1]}${v !== null ? ` @0x${v.toString(16).toUpperCase()}` : ""}${where}: ${m[2].trim()}${tag}`);
   }
   return out;
@@ -456,7 +446,7 @@ export function targetHashOf(name: string): string | null {
 }
 
 export interface ProbeResult {
-  info: { vram: number; size: number; container: Container };
+  info: ProbeInfo;
   report: FlagProbeReport;
   nearby: string[];
   /** Set when no target assembly exists, so no matrix was scored. */
@@ -467,7 +457,7 @@ export function probe(name: string, extraSources: string[] = []): ProbeResult {
   const info = getFuncInfo(name);
   if (!info || !info.size) throw new Error(`${name} has no sized subsegment in any container's splat config`);
 
-  const words = targetWords(info);
+  const words = targetWordsOf(name).map(w => w.raw);
   const fingerprints = fingerprintsOf(words);
   const sourcePath = sourcePathFor(name);
   const sourceHash = existsSync(sourcePath) ? sha256(readFileSync(sourcePath, "utf-8")) : null;
@@ -508,7 +498,7 @@ export function probe(name: string, extraSources: string[] = []): ProbeResult {
     matrix,
     ...verdict,
   };
-  const result: ProbeResult = { info, report, nearby: nearbyOverrides(info.vram, info.container) };
+  const result: ProbeResult = { info, report, nearby: info.coordinate?.kind === "section" ? [...loadFlagOverrides()].map(([id, flags]) => `  ${id}: ${flags.join(" ")}`) : nearbyOverrides(info.vram, info.container) };
   if (matrixSkipped) result.matrixSkipped = matrixSkipped;
   return result;
 }
@@ -537,7 +527,7 @@ export function readReport(name: string): FlagProbeReport | null {
 export function renderProbe(result: ProbeResult): string {
   const { info, report, nearby } = result;
   const lines: string[] = [
-    `flagProbe ${report.function} @0x${info.vram.toString(16).toUpperCase()} (${info.size} bytes)`,
+    `flagProbe ${report.function} @${info.coordinate?.kind === "section" ? `${info.coordinate.section}+0x${info.vram.toString(16)}` : `0x${info.vram.toString(16).toUpperCase()}`} (${info.size} bytes)`,
     "",
     "Target structural fingerprints (from original bytes):",
   ];

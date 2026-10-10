@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadContainers } from "../lib/container.js";
+import { projectFixture, FIXTURE_BASE, FIXTURE_OVERLAY_BASE } from "../testing/projectFixture.js";
 import { loadMacroFunctions } from "./macroIdentity.js";
 import { buildChainCensus, scanChainFunction, chainRow } from "./nestedFunctionScan.js";
 import { assemble, type AsmLine } from "../agent/matching-reconstruction/fixture-asm.js";
@@ -52,26 +52,44 @@ test("pairing is container-qualified; same-address overlay children cannot licen
   assert.equal(chainRow(buildChainCensus([dead, caller]), "parent")!.calls[0]!.verdict, "confirmed-pair", "EXE call is separately resolvable");
 });
 
-test("original census settles known family, open rulings, and prototype false positives without symbol exceptions", () => {
-  const loaded = loadMacroFunctions(loadContainers());
-  assert.equal(loaded.findings.length, 0);
+test("fixture census settles forward families, ambiguous bodies and post-call false positives", (t) => {
+  const entry = (name: string, offset: number, lines: AsmLine[], base = FIXTURE_BASE) =>
+    ({ name, offset, words: assemble(lines, base + offset).map(w => w.raw) });
+  const child = FIXTURE_BASE, forward = FIXTURE_BASE + 0x20;
+  const spill: AsmLine[] = [["addiu", "sp", "sp", -8], ["sw", "v0", 0, "sp"], ["jr", "ra"], ["addiu", "sp", "sp", 8]];
+  const saved: AsmLine[] = [
+    ["addu", "s0", "v0", "zero"], ["jal", FIXTURE_BASE + 0x1000], ["nop"],
+    ["beq", "a0", "zero", "one"], ["addu", "v0", "s0", "zero"],
+    ["jal", child], ["nop"], ["j", "next"], ["nop"],
+    ["label", "one"], ["jal", child], ["nop"],
+    ["label", "next"], ["beq", "a1", "zero", "shared"], ["nop"],
+    ["addu", "v0", "s0", "zero"], ["j", "shared_call"], ["nop"],
+    ["label", "shared"], ["addu", "v0", "s0", "zero"],
+    ["label", "shared_call"], ["jal", child], ["nop"], ["jr", "ra"], ["nop"],
+  ];
+  const fixture = projectFixture(t, { exe: [
+    entry("chain_child", 0, spill), entry("chain_forward", 0x20, saved),
+    entry("chain_parent", 0x80, [["jal", forward], ["addiu", "v0", "sp", 16], ["jal", forward], ["addiu", "v0", "sp", 0], ["jr", "ra"], ["nop"]]),
+    entry("post_call_capture", 0xa0, [["jal", child], ["nop"], ["addu", "s0", "v0", "zero"], ["jr", "ra"], ["nop"]]),
+    entry("live_chain", 0xc0, [["lw", "a0", 0, "v0"], ["jr", "ra"], ["nop"]]),
+    entry("consumed_setup", 0xd0, [["addiu", "v0", "sp", 16], ["jal", child], ["addu", "a0", "v0", "zero"], ["jr", "ra"], ["nop"]]),
+  ], overlays: {
+    ovl_alpha: [entry("ovl_alpha_parent", 0, [["jal", forward], ["addiu", "v0", "sp", 12], ["jr", "ra"], ["nop"]], FIXTURE_OVERLAY_BASE)],
+    ovl_beta: [entry("ovl_beta_uncalled", 0, spill, FIXTURE_OVERLAY_BASE)],
+  } });
+  const loaded = loadMacroFunctions(fixture.containers());
+  assert.deepEqual(loaded.findings, []);
   const census = buildChainCensus(loaded.functions);
-  const calleeNames = ["func_8001E878", "func_8001E9F8", ...["800CFAD0", "800D0600", "800D1CD0", "800DD45C", "800F5108", "8010780C", "8011D438"].map(a => `ovl_11_func_${a}`), "ovl_19_func_800BB08C", "ovl_30_func_8012F030"];
-  for (const name of calleeNames) assert.notEqual(chainRow(census, name)!.callee!.form, "undetermined", name);
-  assert.equal(chainRow(census, "func_8001E9F8")!.callee!.form, "save-forward");
-  assert.equal(new Set(chainRow(census, "func_8001E9F8")!.callee!.forwards.map(c => c.call)).size, 3, "two degenerate arms share a physical jal");
-  assert.equal(new Set(chainRow(census, "func_8001E9F8")!.callee!.forwards.map(c => c.setup)).size, 4);
-  assert.equal(chainRow(census, "func_8001EAE4")!.calls.filter(c => c.verdict === "confirmed-pair").length, 8);
-  assert.equal(chainRow(census, "ovl_11_func_800D062C")!.calls.filter(c => c.verdict === "confirmed-pair").length, 2);
-  assert.equal(chainRow(census, "ovl_11_func_8011D438")!.verdict, "paired");
-  assert.equal(chainRow(census, "ovl_30_func_8012F030")!.verdict, "callee-only");
-  // This documented macro user captures a post-call return, NOT entry $2.
-  assert.equal(chainRow(census, "ovl_19_func_800B8E88"), null);
-  for (const name of ["func_8001E26C", "func_8001DCB0", "func_8001DE4C", "func_8001C37C", "func_80016C08", "func_80017F88"])
-    assert.ok(chainRow(census, name)!.calls.every(c => c.verdict === "rejected"), name);
-  for (const address of [0x800ee6f8, 0x800ee71c]) {
-    const site = census.rows.flatMap(r => r.calls).find(c => c.setup === address)!;
-    assert.equal(site.verdict, "rejected"); assert.match(site.reason, /call delay slot/);
-  }
-  assert.equal(chainRow(census, "ovl_11_func_8010EE5C")!.verdict, "undetermined", "live chain dereference has no fixed spill/forward recipe");
+  assert.equal(census.complete, true);
+  const savedRow = chainRow(census, "chain_forward")!;
+  assert.equal(savedRow.callee!.form, "save-forward");
+  assert.equal(new Set(savedRow.callee!.forwards.map(c => c.call)).size, 3, "distinct arms may share a physical call");
+  assert.equal(savedRow.callee!.forwards.length, 4, "one setup can reach both branch destinations");
+  assert.equal(chainRow(census, "chain_parent")!.calls.filter(c => c.verdict === "confirmed-pair").length, 2);
+  assert.equal(chainRow(census, "ovl_alpha_parent")!.calls[0]!.verdict, "confirmed-pair", "overlay can call the EXE family");
+  assert.equal(chainRow(census, "ovl_beta_uncalled")!.verdict, "callee-only");
+  assert.equal(chainRow(census, "post_call_capture"), null, "post-call return is not entry-$2");
+  const consumed = chainRow(census, "consumed_setup")!.calls[0]!;
+  assert.equal(consumed.verdict, "rejected"); assert.match(consumed.reason, /call delay slot/);
+  assert.equal(chainRow(census, "live_chain")!.verdict, "undetermined", "live dereference is not a dead-spill recipe");
 });

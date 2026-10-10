@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { recordedCommand, commandText } from "../../../../tools/lib/recordedCommand.ts";
 import { hashFile, hashText, packetIsFresh, stagePrepared } from "../../../../tools/agent/prepareFunction.ts";
 import { loadContainers } from "../../../../tools/lib/container.ts";
+import { libraryInputFiles, loadLibraryProject } from "../../../../tools/lib/project.js";
 import { configuredToolchainIdentity } from "../../../../tools/agent/decompToolchain.ts";
 import { packetOpening, packetEvidence, type PreparationPacket } from "../../../../tools/agent/campaign/packet.ts";
 
@@ -32,9 +33,15 @@ export function buildInputs(root: string): Record<string, string> {
     }
   };
   for (const dir of ["src", "include", "configs", "tools/agent", "tools/build", "tools/lib", ".pi/extensions/psx-decomp", ".pi/extensions/shared", "tools/vendor/m2c/m2c", "tools/vendor/m2c/m2c_pycparser", "tools/vendor/m2c-patches", "tools/vendor/maspsx/maspsx", "tools/vendor/tree-sitter-c"]) visit(join(root, dir));
-  const tools = configuredToolchainIdentity();
-  for (const file of [tools.compiler.path, tools.assemblerShim.path, "tools/vendor/m2c/m2c.py", ...loadContainers().map((c) => c.targetPath)]) inputs[file] = hashFile(join(root, file));
-  for (const file of ["toolchain.json", "package.json", ".pi/autoloop.json", "package-lock.json", "node_modules/web-tree-sitter/web-tree-sitter.js", "node_modules/web-tree-sitter/web-tree-sitter.wasm"]) inputs[file] = hashFile(join(root, file));
+  const tools = configuredToolchainIdentity(), library = loadLibraryProject(root);
+  if (library) {
+    for (const dir of [...library.headers.reference, ...library.headers.owned]) visit(resolve(root, dir));
+  }
+  const targets = library ? libraryInputFiles(library, root).map(i => i.path) : loadContainers(root).map(c => c.targetPath);
+  for (const file of [tools.compiler.path, tools.assemblerShim.path, ...(tools.cppFrontend ? [tools.cppFrontend.path] : []),
+    ...Object.values(tools.executables).flatMap(t => t.path ? [t.path] : []), "tools/vendor/m2c/m2c.py", ...targets])
+    inputs[relative(root, resolve(root, file))] = hashFile(resolve(root, file));
+  for (const file of ["project.json", "toolchain.json", "package.json", ".pi/autoloop.json", "package-lock.json", "node_modules/web-tree-sitter/web-tree-sitter.js", "node_modules/web-tree-sitter/web-tree-sitter.wasm"]) inputs[file] = hashFile(join(root, file));
   return inputs;
 }
 export const inputIdentity = (inputs: Record<string, string>) => hashText(JSON.stringify(Object.entries(inputs).sort(([a], [b]) => a.localeCompare(b))));

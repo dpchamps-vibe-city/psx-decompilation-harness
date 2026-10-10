@@ -33,11 +33,12 @@ import {
   ROOT,
   type DisassembledInstruction,
   assembleTarget,
-  disassembleObject,
+  disassembleFunctionObject,
   normalizeFunctionName,
   resolveAsmSource,
 } from "./decompToolchain.js";
 import { BRANCH_MNEMONICS, buildBlocks, defUse } from "./webAnalysis.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 
 const ARG_REGISTERS = ["a0", "a1", "a2", "a3"];
 
@@ -600,7 +601,7 @@ export function analyzeReturnValue(name: string, instructions: DisassembledInstr
   for (const caller of callers) {
     const path = resolveAsm(caller);
     if (!path) { unreadable.push(caller); continue; }
-    const verdicts = scanCallSites(name, readFileSync(path, "utf-8"));
+    const verdicts = scanCallSites(resolveFunctionTarget(name).symbol, readFileSync(path, "utf-8"));
     if (verdicts.length === 0) { unreadable.push(caller); continue; }
     /* One consuming site is enough to make the whole function non-void; short
      * of that, the least conclusive site is what this caller can support. */
@@ -768,7 +769,7 @@ function main(): void {
   const scratch = join(ROOT, "build/triage", `${name}-frame`);
   let instructions: DisassembledInstruction[];
   try {
-    instructions = disassembleObject(assembleTarget(name, scratch));
+    instructions = disassembleFunctionObject(assembleTarget(name, scratch), name);
   } catch (error) {
     console.error(`frameMap: ${(error as Error).message}`);
     process.exit(1);
@@ -776,6 +777,7 @@ function main(): void {
     rmSync(scratch, { recursive: true, force: true });
   }
 
+  const target = resolveFunctionTarget(name);
   const map = analyzeFrame(instructions);
   const returnValue = analyzeReturnValue(name, instructions);
   if (json) {
@@ -785,7 +787,8 @@ function main(): void {
       minimumArity: minimumArity(map),
       maximumArity: maximumArity(map),
       returnValue,
-      signature: renderSignature(name, map, returnValue),
+      signature: renderSignature(target.symbol, map, returnValue),
+      coordinate: target.coordinate,
     }, null, 2));
     return;
   }
@@ -795,7 +798,7 @@ function main(): void {
   console.log(`\nreturn value (${returnValue.basis}):`);
   for (const line of returnValue.evidence) console.log(`  ${line}`);
   console.log(`\nsignature (only what the binary establishes; see the caveats it carries):`);
-  console.log(`  ${renderSignature(name, map, returnValue)}`);
+  console.log(`  ${renderSignature(target.symbol, map, returnValue)}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();

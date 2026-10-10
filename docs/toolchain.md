@@ -23,13 +23,15 @@ preparation, compiler analysis, SDK integration and Pi verification share it.
 - `includeDirs`: shared cpp/GAS include search directories, anchored to the root.
 - `flags`: argument arrays for cpp, cc1, GAS, linker, maspsx, m2c and spimdisasm.
   Definitions belong in cpp arguments; assembler semantics in maspsx arguments.
-- `profiles`: named replacements for cc1/GAS/linker/maspsx arrays. Omitted arrays
-  inherit base; supplied arrays **replace**, not append. Preprocessing and include
-  search remain project-wide, so every diagnostic sees the same declarations.
-- `containerProfiles`: explicitly select a profile by exact container id, then
-  kind (`exe` or `overlay`). Unselected containers inherit base flags. There is
+- `profiles`: named replacements for any flag array (cpp/cc1/GAS/linker/maspsx/
+  m2c/spimdisasm) and `includeDirs`. Omitted values inherit base; supplied arrays
+  **replace**, not append. Production compilation selects the owner profile
+  before preprocessing, so its defines/includes travel with its compile flags.
+- `containerProfiles`: explicitly select a profile by exact owner id, then
+  kind (`exe`, `overlay` or `library`). Unselected owners inherit base flags. There is
   **no automatic `-G8` → `-G0` swap**. Measure each container's ABI first.
-- `fileFlags`: extra cc1 arguments keyed by source/function stem. These still
+- `fileFlags`: extra cc1 arguments keyed by source/function stem (member ID for
+  library TUs). These still
   require project evidence and policy allowlisting. Workers cannot edit the
   toolchain to manufacture a match; configuration changes require human review.
 - `sdk`: selected version, original LIB directory, converted object directory,
@@ -38,15 +40,19 @@ preparation, compiler analysis, SDK integration and Pi verification share it.
   own coherent inputs. `tools.psyq2elf` optionally supplies the converter.
 
 The shipped GCC 2.95.2 / ASPSX 2.80 / `-O2 -G8` choices are a **supported starting
-candidate**, not facts about a new game. Both container kinds inherit it until
+candidate**, not facts about a new target. Owners inherit it until
 explicitly configured. Do not copy BTN flags, addresses, SDK claims or approvals.
 Use `/skill:psx-identify-project` to identify assets and configure a new project.
 
-Target paths, basenames and segment metadata remain in splat/container project
-configuration, **not** in the toolchain JSON. Header roles and human evidence
-references live in `configs/project-info.json`. Root paths and the current
-one-EXE/paired-archive container model are still conventions; see the migration
-checklist for boundaries that need generalization.
+For linked images, target paths, basenames and segment metadata remain in
+splat/container configuration, **not** in the toolchain JSON. Header roles and
+human evidence references live in `configs/project-info.json`. Optional root
+`project.json` selects `relocatable-library` targets, input globs, immutable/owned
+header roles and member profiles; see [Library targets](library-targets.md).
+Target adapters expose the same source/assembly/flags/verification contract to
+matching tools and skills. Absent manifests or `linked-image` selection use the
+EXE/overlay layout. Root paths and the one-EXE/paired-archive container model are
+still conventions; see the generalization checklist.
 
 ## Commands
 
@@ -87,6 +93,14 @@ rodata rederive/re-split retry preserve the inherited convergence behavior.
 Unresolved code members are reported, **not** claimed verified. Per-function
 matches do not replace this final oracle.
 
+For ELF/ar targets, `split`/`split-all`/`disassemble` scaffold member TUs
+with INCLUDE_ASM; `build` compiles present TUs; `check`/`check-all` require every
+member to be clean C and whole-object matching. `progress` reports fresh member
+verification. Use `npm run library -- --help` for inventory, preparation and
+scoped member checks. Image-only SDK integration/config-check/wipe tasks are not
+library adapters. Plain `clean` removes build outputs, not original inputs/C.
+The linked-image incremental/link behavior described above remains unchanged.
+
 ## Fresh clones and exports
 
 A recursive clone supplies pinned vendors:
@@ -114,5 +128,7 @@ external m2c is used as an external tool and is not claimed to carry our patches
 
 No target assets are distributed. Without target/layout/splat inputs, `build`,
 `check`, `split`, and `progress` cannot establish a result. Help and the shallow
-identification report still work. The inherited test/typecheck suite has known
-project-dependent failures; scaffolding validation is deliberately narrow.
+identification report still work. `npm test` uses isolated synthetic projects for
+portable contracts; provisioned compiler/binutils/Python tools are still required.
+Historical original-asset tests remain optional, and strict TypeScript checking
+still has inherited errors. See [fixture scope](../test-fixtures/harness/README.md).

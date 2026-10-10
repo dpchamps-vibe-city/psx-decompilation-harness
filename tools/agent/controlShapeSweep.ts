@@ -3,6 +3,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ROOT, normalizeFunctionName, preprocessOnly, resolveSource, runTool } from "./decompToolchain.js";
+import { functionSymbol, resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { projectPath, sha256, toolchainHash, writeStableJson } from "./provenance.js";
 import { C_FRONTEND_IDENTITY, children, declaratorName, field, namedChildren, parseC, walk, type Node } from "./residual-source-search/tree-sitter-c.js";
 import { controlShapes, decisionTailSite } from "./control-shapes.js";
@@ -17,7 +18,7 @@ function tailTokens(source: string, functionName: string, startOrCount: { start:
   try {
     let body: Node | undefined;
     walk(tree.rootNode, node => {
-      if (node.type === "function_definition" && declaratorName(field(node, "declarator"))?.text === functionName) body = field(node, "body");
+      if (node.type === "function_definition" && declaratorName(field(node, "declarator"))?.text === functionSymbol(functionName)) body = field(node, "body");
       return node.type !== "function_definition";
     });
     if (!body) throw new Error("preprocessed/raw function body unavailable");
@@ -45,7 +46,7 @@ function validateResultType(cpp: string, functionName: string, variable: string)
     });
     walk(tree.rootNode, node => {
       if (node.type !== "function_definition") return true;
-      if (declaratorName(field(node, "declarator"))?.text === functionName) {
+      if (declaratorName(field(node, "declarator"))?.text === functionSymbol(functionName)) {
         for (const declaration of namedChildren(field(node, "body")!)) {
           if (declaration.type === "type_definition") addAlias(declaration);
           if (declaration.type === "declaration" && namedChildren(declaration).some(n => declaratorName(n)?.text === variable)) resultType = field(declaration, "type")?.text;
@@ -63,7 +64,7 @@ export function controlShapeSweep(functionName: string, sourceOverride: string, 
   const sourcePath = resolveSource(functionName, sourceOverride), source = readFileSync(sourcePath, "utf8"), sourceHash = sha256(source);
   const shapes = controlShapes(source, functionName, max);
   const contextDirectory = join(ROOT, "build/controlShapeSweep", functionName, "context", sourceHash.slice(0, 24));
-  const cpp = readFileSync(preprocessOnly(sourcePath, contextDirectory, "context"), "utf8"), contextHash = sha256(cpp);
+  const cpp = readFileSync(preprocessOnly(sourcePath, contextDirectory, "context", resolveFunctionTarget(functionName).flags), "utf8"), contextHash = sha256(cpp);
   const rawTail = tailTokens(source, functionName, { start: shapes.site.start });
   const expandedTail = tailTokens(cpp, functionName, { count: rawTail.count });
   if (JSON.stringify(rawTail.tokens) !== JSON.stringify(expandedTail.tokens)) throw new Error("raw/preprocessed tail tokens differ; a macro may hide effects or control flow, so this grammar cannot prove equivalence");

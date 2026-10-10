@@ -34,6 +34,8 @@ export interface OpaqueSource {
 export type ValueOp =
   /** A literal the instruction stream materialised. */
   | { kind: "const"; value: number }
+  /** An ET_REL operand, not an assigned link address. */
+  | { kind: "symbol"; reference: string; addend: number; part: "high" | "low" | "gp-relative" | "address" }
   /** A register's value on entry to the function: a parameter or a callee-saved. */
   | { kind: "entry"; register: string }
   /** A join: one input per predecessor of `block`, in the block's own order. */
@@ -91,6 +93,8 @@ export type EffectOp =
       kind: "call";
       /** Resolved target address for a direct call. */
       target?: number;
+      /** Symbolic direct call when no linked address exists. */
+      targetSymbol?: { reference: string; addend: number };
       /** The value jumped through, for an indirect call. */
       through?: ValueId;
       /** Argument registers a0..a3, then any outgoing-area slots written. */
@@ -143,6 +147,7 @@ export function renderValue(ir: MachineIr, id: ValueId): string {
   const op = value.op;
   switch (op.kind) {
     case "const": return `#${op.value >>> 0}`;
+    case "symbol": return `${op.part}(${op.reference}${op.addend ? `+${op.addend}` : ""})`;
     case "entry": return `@${REGISTER_OF(op)}`;
     case "phi": return `phi(B${op.block}; ${op.inputs.map((input) => `v${input}`).join(", ")})`;
     case "unary": return `${op.op}(v${op.operand})`;
@@ -164,7 +169,7 @@ export function renderIr(ir: MachineIr): string[] {
     const text = op.kind === "store"
       ? `store${op.width}(v${op.address}) = v${op.value}`
       : op.kind === "call"
-        ? `call ${op.target !== undefined ? `0x${op.target.toString(16)}` : `*v${op.through}`}(${op.args.map((arg) => (arg === null ? "-" : `v${arg}`)).join(", ")})`
+        ? `call ${op.targetSymbol ? `${op.targetSymbol.reference}+${op.targetSymbol.addend}` : op.target !== undefined ? `0x${op.target.toString(16)}` : `*v${op.through}`}(${op.args.map((arg) => (arg === null ? "-" : `v${arg}`)).join(", ")})`
         : `opaque:${op.source.op}`;
     lines.push(`  e${effect.id} @B${effect.block} 0x${effect.vram.toString(16)}: ${text}`);
   }

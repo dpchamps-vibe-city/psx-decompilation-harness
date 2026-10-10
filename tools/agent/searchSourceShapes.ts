@@ -11,9 +11,6 @@ import {
 } from "node:fs";
 import { join, relative } from "node:path";
 import {
-  configuredCc1FlagsForContainer,
-  containerForSymbol,
-  CPP_FLAGS,
   ROOT,
   assembleTarget,
   compileSourceAsync,
@@ -24,6 +21,8 @@ import {
   normalizeFunctionName,
   runToolAsync,
 } from "./decompToolchain.js";
+import { configuredFlags } from "../lib/toolchain.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { buildTraceReportFromArtifacts } from "./compilerTrace.js";
 import { assertTargetScheduleAnalysis, type TargetScheduleAnalysis } from "./target-schedule/types.js";
 import { analyzeTargetScheduleFromArtifacts } from "./target-schedule/analyze.js";
@@ -242,8 +241,8 @@ async function main(): Promise<void> {
   const targetObject = assembleTarget(options.functionName, runRoot);
   const target = normalizeDisassembly(disassembleObject(targetObject));
   const cacheRoot = join(ROOT, "build/sourceShapeSearch/cache");
-  const owner = containerForSymbol(options.functionName);
-  const compilerFlags = [...configuredCc1FlagsForContainer(owner?.kind ?? "exe", owner?.id), ...(loadFlagOverrides().get(options.functionName) || [])];
+  const targetOwner = resolveFunctionTarget(options.functionName);
+  const compilerFlags = [...configuredFlags("cc1", targetOwner.flags), ...(loadFlagOverrides().get(targetOwner.owner.kind === "library" ? targetOwner.owner.id : options.functionName) || [])];
   const abort = new AbortController();
   process.once("SIGINT", () => abort.abort());
   process.once("SIGTERM", () => abort.abort());
@@ -287,7 +286,7 @@ async function main(): Promise<void> {
     const directory = join(runRoot, "variants", variant.id);
     const output = join(directory, "source.i");
     try {
-      await runToolAsync(configuredTool("cpp"), [...CPP_FLAGS, variant.sourcePath, "-o", output], ROOT, abort.signal);
+      await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", targetOwner.flags), variant.sourcePath, "-o", output], ROOT, abort.signal);
       preprocessed.set(variant.id, { variant, hash: preprocessedSemanticHash(output) });
     } catch (error) {
       const result = emptyResult(variant, projectPath(directory), target.length);

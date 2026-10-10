@@ -31,7 +31,13 @@ import { loadFunctionSpans } from "../lib/symbolIndex.js";
 import { detectMacroIdentities } from "./macroIdentity.js";
 import { macroRouteSummary, type MacroRouteSummary } from "./macroTiler.js";
 
+import { loadLibraryProject } from "../lib/project.js";
+import { libraryProgress } from "../agent/libraryTarget.js";
 const args = process.argv.slice(2);
+if (loadLibraryProject()) {
+  if (args.some(a => !["--json", "--list", "--remaining", "--done", "--markdown"].includes(a))) throw new Error("Unsupported library progress option");
+  libraryProgress(args); process.exit(0);
+}
 const showList = args.includes("--list");
 const showRemaining = args.includes("--remaining");
 const showDone = args.includes("--done");

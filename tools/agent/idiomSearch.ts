@@ -34,12 +34,10 @@
  *   npx tsx tools/agent/idiomSearch.ts --benchmark
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { ROOT, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { targetWordsOf } from "../lib/functionOracle.js";
-import { requireFunctionLocation } from "../lib/symbolIndex.js";
-import { loadContainers } from "../lib/container.js";
 import { liftWords } from "./pipeline-reversal/lift.js";
 import { inverseAssembler } from "./pipeline-reversal/inverse-assembler.js";
 import { inverseDbr } from "./pipeline-reversal/inverse-dbr.js";
@@ -59,8 +57,7 @@ import { fingerprintOf } from "./idiom-corpus/fingerprint.js";
  */
 export function targetProgram(functionName: string): MirProgram | undefined {
   try {
-    const container = requireFunctionLocation(functionName).container;
-    const words = targetWordsOf(functionName, { container });
+    const words = targetWordsOf(functionName);
     if (words.length === 0) return undefined;
     const machine = liftWords({ functionName, words });
     return inverseDbr(inverseAssembler(machine).program).program;
@@ -70,11 +67,7 @@ export function targetProgram(functionName: string): MirProgram | undefined {
 }
 
 function sourcePathOf(functionName: string): string | undefined {
-  for (const container of loadContainers()) {
-    const path = join(ROOT, container.paths.srcDir, `${functionName}.c`);
-    if (existsSync(path)) return path;
-  }
-  return undefined;
+  try { return resolveSource(functionName); } catch { return undefined; }
 }
 
 /* --- rendering ----------------------------------------------------------- */

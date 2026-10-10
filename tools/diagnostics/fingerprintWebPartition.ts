@@ -8,7 +8,10 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { compileSource, resolveSource, ROOT, configuredCompilerPath } from "../agent/decompToolchain.js";
-import { compareFunction, type Verdict, type RenderedWord } from "../lib/functionOracle.js";
+import { compareFunction, targetWordsOf, renderedWordsEqual, type Verdict, type RenderedWord } from "../lib/functionOracle.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
+import { loadLibraryProject } from "../lib/project.js";
+import { libraryMembers, libraryTargetKey } from "../lib/libraryTargets.js";
 import { unpinDeclarations } from "./webPartitionAudit.js";
 import { matchingConstructs, type MatchingConstructs } from "../agent/cSourceGuard.js";
 import { requireFunctionLocation, loadSymbolIndex, loadFunctionSpans } from "../lib/symbolIndex.js";
@@ -42,12 +45,19 @@ export interface PinProbe {
   reason: string | null;
 }
 function context(name: string) {
+  const target = resolveFunctionTarget(name);
+  if (target.coordinate.kind === "section") return { container: undefined, span: { vram: target.coordinate.offset },
+    symbols: new Map<number, string>(), addresses: new Map<string, number>() };
   const location = requireFunctionLocation(name);
   const index = loadSymbolIndex(location.container);
   return { ...location, symbols: index.byAddress, addresses: new Map([...index.byAddress].map(([address, name]) => [name, address])) };
 }
 export function targetWebPartition(name: string): WebPartition {
   const ctx = context(name), { container, span } = ctx;
+  if (!container) {
+    const words = targetWordsOf(name), bytes = Buffer.alloc(words.length * 4); words.forEach((w, i) => bytes.writeUInt32LE(w.raw, i * 4));
+    return extractWebPartition({ functionName: name, bytes, vram: span.vram, symbolicRelocations: new Map(words.flatMap((w, i) => w.relocations?.[0] ? [[i, w.relocations[0]]] : [])) });
+  }
   const image = readFileSync(containerTargetPath(container)), rom = vramToRom(container, span.vram);
   if (rom < container.payloadOffset || rom + span.size > image.length || span.size <= 0 || span.size % 4) throw new Error("Invalid/truncated target function extent");
   const ranges = loadMacroTextRanges(container, false);
@@ -63,13 +73,13 @@ export function fingerprintWebPartition(name: string, options: { source?: string
   const directory = options.outputDirectory ?? join(ROOT, "build/webPartition", name, sourceHash.slice(0, 16));
   mkdirSync(directory, { recursive: true });
   const artifacts = compileSource(source, directory, name, { dumps: true, assemble: true });
-  const ctx = context(name), oracle = compareFunction(name, { objectPath: artifacts.object!, container: ctx.container });
+  const ctx = context(name), oracle = compareFunction(name, { objectPath: artifacts.object!, ...(ctx.container ? { container: ctx.container } : {}) });
   report.oracleVerdict = oracle.verdict;
   const length = Math.max(oracle.targetWords.length, oracle.candidateWords.length);
   report.oracleEvidence = { sameWords: oracle.same, totalWords: length, targetWords: oracle.targetWords.length, candidateWords: oracle.candidateWords.length, undeterminedWords: oracle.undetermined.length, differences: [] };
   for (let i = 0; i < length; i++) {
     const target = oracle.targetWords[i] ?? null, candidate = oracle.candidateWords[i] ?? null;
-    if (target && candidate && !candidate.undetermined && target.raw === candidate.raw) continue;
+    if (target && candidate && !candidate.undetermined && renderedWordsEqual(target, candidate)) continue;
     report.oracleEvidence.differences.push({ address: target?.vram ?? candidate!.vram, target, candidate });
   }
   report.provenance = { source, sourceHash, object: artifacts.object!, compilerHash: hash(readFileSync(configuredCompilerPath())), flags: artifacts.cc1Flags, dumpHashes: { preprocessed: hash(readFileSync(join(directory, `${name}.i`))) } };
@@ -79,7 +89,8 @@ export function fingerprintWebPartition(name: string, options: { source?: string
   } else {
     const buffer = Buffer.alloc(oracle.candidateWords.length * 4);
     oracle.candidateWords.forEach((w, i) => buffer.writeUInt32LE(w.raw >>> 0, i * 4));
-    const observed = extractWebPartition({ functionName: name, bytes: buffer, vram: ctx.span.vram, side: "candidate", gp: ctx.container.gpValue, symbols: ctx.symbols });
+    const observed = extractWebPartition({ functionName: name, bytes: buffer, vram: ctx.span.vram, side: "candidate", ...(ctx.container?.gpValue !== undefined ? { gp: ctx.container.gpValue } : {}), symbols: ctx.symbols,
+      symbolicRelocations: new Map(oracle.candidateWords.flatMap((w, i) => w.relocations?.[0] ? [[i, w.relocations[0]]] : [])) });
     const dumps = { rtl: "", lreg: "", greg: "" };
     for (const stage of ["rtl", "lreg", "greg"] as const) {
       dumps[stage] = readFileSync(join(directory, `${name}.i.${stage}`), "utf8"); report.provenance.dumpHashes[stage] = hash(dumps[stage]);
@@ -163,9 +174,9 @@ export function allocationDominant(o: ResidualObjective): boolean {
   return !o.exact && !o.degraded && o.undetermined === 0 && o.controlFlow === 0 && o.population === 0 && o.allocation > 0 && o.allocation > o.schedule;
 }
 export function pinAuditNames(config: { sourcePolicy?: { allowlist?: Record<string, string[]> } }): string[] {
-  const names = Object.keys(config.sourcePolicy?.allowlist ?? {}).filter(n => n.startsWith("ovl_11_") && config.sourcePolicy!.allowlist![n]!.includes("register-asm"));
-  names.push("func_80020e38", "func_80021820");
-  // Canonical address casing, then require the configured function extent.
+  const names = Object.keys(config.sourcePolicy?.allowlist ?? {}).filter(n => config.sourcePolicy!.allowlist![n]!.includes("register-asm"));
+  // Library policy is TU-scoped; inspect each function in that owner.
+  if (loadLibraryProject()) return libraryMembers().flatMap(m => names.includes(m.id) ? m.functions.map(f => libraryTargetKey(m, f.name)) : []).sort();
   return [...new Set(names)].map(n => requireFunctionLocation(n.replace(/[a-f0-9]{8}$/, s => s.toUpperCase())).span.name).sort();
 }
 function main(): void {
@@ -178,7 +189,7 @@ function main(): void {
     else if (a === "--probe-pins") probePins = true;
     else if (a === "--audit") audit = true;
     else if (a === "--src") { source = args[++i]; if (!source) throw new Error("--src needs a file"); }
-    else if (a === "--help") { console.log("Usage: npx tsx tools/diagnostics/fingerprintWebPartition.ts <function> [--src file.c] [--target-only] [--probe-pins] [--json]\n       Matched pinned live sources automatically get a local pin-removal probe.\n       --audit [--json] (configured ovl_11 pins plus two grandfathered EXE pins)"); return; }
+    else if (a === "--help") { console.log("Usage: npx tsx tools/diagnostics/fingerprintWebPartition.ts <function> [--src file.c] [--target-only] [--probe-pins] [--json]\n       Matched pinned live sources automatically get a local pin-removal probe.\n       --audit [--json] (configured register-asm policy owners)"); return; }
     else if (a.startsWith("--") || name) throw new Error(`Unexpected argument ${a}`);
     else name = a;
   }
@@ -214,14 +225,15 @@ function main(): void {
   }
   if (!name) throw new Error("Missing function (see --help)");
   if (targetOnly && probePins) throw new Error("--probe-pins requires a candidate, not --target-only");
-  try { requireFunctionLocation(name); }
+  try { resolveFunctionTarget(name); if (!loadLibraryProject()) requireFunctionLocation(name); }
   catch {
     const distance = (a: string, b: string): number => {
       let row = Array.from({ length: b.length + 1 }, (_, i) => i);
       for (let i = 0; i < a.length; i++) { const next = [i + 1]; for (let j = 0; j < b.length; j++) next.push(Math.min(next[j]! + 1, row[j + 1]! + 1, row[j]! + (a[i] === b[j] ? 0 : 1))); row = next; }
       return row[b.length]!;
     };
-    const near = loadContainers().flatMap(c => loadFunctionSpans(c).map(s => s.name)).map(n => ({ name: n, distance: distance(name!.toLowerCase(), n.toLowerCase()) })).filter(n => n.distance <= 2).sort((a,b) => a.distance - b.distance || a.name.localeCompare(b.name)).slice(0, 3);
+    const names = loadLibraryProject() ? libraryMembers().flatMap(m => m.functions.map(f => libraryTargetKey(m, f.name))) : loadContainers().flatMap(c => loadFunctionSpans(c).map(s => s.name));
+    const near = names.map(n => ({ name: n, distance: distance(name!.toLowerCase(), n.toLowerCase()) })).filter(n => n.distance <= 2).sort((a,b) => a.distance - b.distance || a.name.localeCompare(b.name)).slice(0, 3);
     throw new Error(`Unknown function: ${name}${near.length ? `. Did you mean ${near.map(n => n.name).join(", ")}?` : " (use the exact configured symbol)"}`);
   }
   const report = fingerprintWebPartition(name, { ...(source ? { source } : {}), targetOnly });

@@ -177,9 +177,9 @@ function parseHeaderSignature(
 
 /** Use the defining source, never a generated signature as a witness.
  * Full source types survive; unspecified/variadic contracts remain unknown. */
-function matchedDefinition(callee: string, _container: Container): SignatureResult | null {
+function matchedDefinition(callee: string, container: Container): SignatureResult | null {
   if (!warmContextAllowed()) return null;
-  const matched = definitionPrototype(callee);
+  const matched = definitionPrototype(callee, container.projectRoot ?? ROOT);
   if (!matched) return null;
   if (matched.parameters === null || matched.variadic || !matched.returnType || !matched.paramTypes)
     return { unknown: `incomplete source contract for ${callee}: ${matched.signature}` };
@@ -441,7 +441,7 @@ export function resolveSignature(
   /* The overlay's revision is part of the key: publishing a callee's recovered
    * C changes what this function answers, and a cache that outlived the
    * publication would keep serving the ABI bound it replaced. */
-  const cacheKey = `${contextMode()}|${overlayRevision()}|${container.id}|${name}|${address ?? ""}`;
+  const cacheKey = `${contextMode()}|${overlayRevision()}|${container.projectRoot ?? ROOT}|${container.id}|${name}|${address ?? ""}`;
   const cached = signatureCache.get(cacheKey);
   if (cached) return cached;
   const result = computeSignature(name, address, container);

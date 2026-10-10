@@ -73,7 +73,7 @@ function byGrouping(projectRoot: string, parked: string): string[] {
        marker in parentheses — `(m)`, `(s)`, `(?)`. Requiring the marker is what
        separates a member from the prose bullets that share the list, which
        otherwise contribute their first word as a function name. */
-    const bullet = line.match(/^-\s+([A-Za-z_]\w*)\b[^(\n]*\((?:m|s|\?)\b/);
+    const bullet = line.match(/^-\s+([A-Za-z_]\w*)\b[^(\n]*\((?:m|s|\?)\)/);
     if (bullet) members.push(bullet[1]!);
   }
   if (members && members.length > 0) groups.push(members);

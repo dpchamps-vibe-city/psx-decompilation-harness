@@ -77,12 +77,12 @@ export function memberId(index: number): string {
   return `ovl_${String(index).padStart(2, "0")}`;
 }
 
-export function manifestPath(): string {
-  return join(ROOT, MANIFEST_PATH);
+export function manifestPath(root = ROOT): string {
+  return join(root, MANIFEST_PATH);
 }
 
-export function loadManifest(): OverlayManifest | null {
-  const path = manifestPath();
+export function loadManifest(root = ROOT): OverlayManifest | null {
+  const path = manifestPath(root);
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, "utf-8")) as OverlayManifest;
 }
@@ -107,8 +107,8 @@ export function codeMembers(manifest: OverlayManifest): ManifestMember[] {
 }
 
 /** Where extractArchive.ts writes a member's bytes. */
-export function memberBinPath(member: ManifestMember): string {
-  return join(ROOT, "extracted/overlays", `${member.id}.bin`);
+export function memberBinPath(member: ManifestMember, root = ROOT): string {
+  return join(root, "extracted/overlays", `${member.id}.bin`);
 }
 
 /**

@@ -107,7 +107,7 @@ export function collectMacroCoverage(containers: readonly Container[], functions
 }): { coverage: MacroScanCoverage; presence: MacroPresence[] } {
   const coverage: MacroScanCoverage = { scope: options.scope, functionByteSource: options.scope === "injected-functions" ? "caller-supplied-bytes" : "original-target-bytes", sourceEligibility: options.scope === "injected-functions" ? "caller-supplied-functions" : options.scope === "selected-functions" ? "selected-function-extents-including-INCLUDE_ASM" : "all-function-extents-including-INCLUDE_ASM", containersScanned: [], containersSkipped: [], complete: findings.length === 0, caveats: ["Unscanned containers have unknown macro identity, not zero macros.", "Presence-only observations do not contribute to function counts, template coverage or mining."] };
   const presence: MacroPresence[] = [];
-  if (options.scope === "injected-functions") {
+  if (options.scope === "injected-functions" || functions.some(f => f.coordinate)) {
     for (const id of new Set(functions.map(f => f.container))) coverage.containersScanned.push({ container: id, targetPath: null, functionCount: functions.filter(f => f.container === id).length, textRanges: [] });
     return { coverage, presence };
   }

@@ -157,20 +157,21 @@ test("original callback data reaches m2c; incomplete and heterogeneous contracts
 test("known storage cannot acquire fictitious members; raw byte accesses compile under real headers", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "known-storage-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const asm = join(dir, "fixture.s"), headerInput = join(dir, "headers.c"), context = join(dir, "context.c");
-  writeFileSync(headerInput, '#include "common.h"\n');
+  writeFileSync(join(dir, "fixture_storage.h"), "extern unsigned char fixture_storage[0x4500];\n");
+  writeFileSync(headerInput, '#include "common.h"\n#include "fixture_storage.h"\n');
   const processed = preprocessOnly(headerInput, dir, "headers");
   writeFileSync(context, scopeFromPreprocessed(readFileSync(processed, "utf8")).source);
-  writeFileSync(asm, `.text\nglabel storage\nlui $v1, %hi(D_8006C838)\naddiu $v1, $v1, %lo(D_8006C838)\nlw $v0, 0x448C($v1)\nsw $v0, 0xC($v1)\njr $ra\nnop\n`);
+  writeFileSync(asm, `.text\nglabel storage\nlui $v1, %hi(fixture_storage)\naddiu $v1, $v1, %lo(fixture_storage)\nlw $v0, 0x448C($v1)\nsw $v0, 0xC($v1)\njr $ra\nnop\n`);
   const output = execFileSync("python3", [prepareM2c(ROOT).script, "--target", "mipsel-gcc-c", "--no-cache", "-f", "storage", "--context", context, asm], { cwd: ROOT, encoding: "utf8" });
-  assert.doesNotMatch(output, /unkC|unk448C|\?/); assert.match(output, /D_8006C838 \+ 0x448C/); assert.match(output, /D_8006C838 \+ 0xC/);
-  const candidate = join(dir, "candidate.c"); writeFileSync(candidate, '#include "common.h"\n' + output);
+  assert.doesNotMatch(output, /unkC|unk448C|\?/); assert.match(output, /fixture_storage \+ 0x448C/); assert.match(output, /fixture_storage \+ 0xC/);
+  const candidate = join(dir, "candidate.c"); writeFileSync(candidate, '#include "common.h"\n#include "fixture_storage.h"\n' + output);
   const object = compileSource(candidate, join(dir, "object"), "storage", { assemble: true, containerKind: "overlay" });
   const instructions = disassembleObject(object.object!);
   /* GCC shares the +12 base: 17536 + 12 == 0x448C. Check the
      actual addressing relation rather than demanding one displacement form. */
   assert.ok(instructions.some((i) => i.mnemonic === "addiu" && i.operands.join(",") === "v1,v0,12"));
   assert.ok(instructions.some((i) => i.mnemonic === "lw" && i.operands[1] === "17536(v1)"));
-  assert.ok(instructions.some((i) => i.mnemonic === "sw" && i.operands[1] === "12(v0)" && i.relocation?.symbol === "D_8006C838"));
+  assert.ok(instructions.some((i) => i.mnemonic === "sw" && i.operands[1] === "12(v0)" && i.relocation?.symbol === "fixture_storage"));
 });
 const lift = (lines: AsmLine[]) => buildMachineIrFrom("frozen", decodeFunction(assemble(lines, 0x80010000)));
 test("opaque address expressions break access proofs without discarding known surrounding accesses", () => {

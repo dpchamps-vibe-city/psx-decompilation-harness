@@ -174,6 +174,7 @@ function attributeSplitAddresses(
 
 /** Instruction index a local branch or jump reaches, when it stays inside. */
 function localTargetIndex(insn: MirInsn, byVram: Map<number, number>): number | undefined {
+  if (insn.symbol !== undefined) return undefined; // symbolic external/section relocation is not a jump to this function's entry
   if (!insn.isBranch && !insn.isJump) return undefined;
   if (insn.mnemonic === "jr" || insn.mnemonic === "jalr") return undefined;
   const last = insn.operands[insn.operands.length - 1];
@@ -278,7 +279,7 @@ function markDispatchTargets(insns: MirInsn[], blocks: MirBlock[]): void {
 }
 
 export function liftWords(options: LiftOptions): MirProgram {
-  const index = options.index ?? loadSymbolIndex();
+  const index = options.index ?? (options.words.some(word => word.coordinate?.kind === "section") ? { byAddress: new Map<number, string>(), addresses: [] } : loadSymbolIndex());
   const words = options.words;
   const caveats: string[] = [];
   const insns: MirInsn[] = [];
@@ -306,12 +307,18 @@ export function liftWords(options: LiftOptions): MirProgram {
       isNop: NOP_TEXTS.has(`${mnemonic}${operands.length ? ` ${operands.join(",")}` : ""}`),
       block: 0,
     };
+    if (word.relocations?.length) {
+      insn.symbol = word.relocations[0]!.reference.replace(/^(named|import):/, "");
+      insn.coordinate = word.coordinate;
+      const target = word.relocations[0]!.targetOffset;
+      if (target !== undefined) insn.branchTargetIndex = (target - words[0]!.vram) / 4;
+    }
     insns.push(insn);
     byVram.set(word.vram, position);
   });
 
   for (const insn of insns) {
-    const target = localTargetIndex(insn, byVram);
+    const target = insn.branchTargetIndex ?? localTargetIndex(insn, byVram);
     if (target !== undefined) insn.branchTargetIndex = target;
     else if ((insn.isBranch || insn.isJump) && insn.mnemonic !== "jr") {
       caveats.push(`branch at 0x${insn.vram?.toString(16)} leaves the function or could not be resolved`);
@@ -320,7 +327,7 @@ export function liftWords(options: LiftOptions): MirProgram {
 
   /* Symbols: gp-relative accesses carry the name already; split addresses are
    * recovered by pairing each HIGH with the LO_SUM that consumes it. */
-  attributeSplitAddresses(words, insns, index);
+  if (!words.some(word => word.coordinate?.kind === "section")) attributeSplitAddresses(words, insns, index);
   for (const insn of insns) {
     const gpRelative = insn.text.match(/%gp_rel\(([^)]+)\)/);
     if (gpRelative) {

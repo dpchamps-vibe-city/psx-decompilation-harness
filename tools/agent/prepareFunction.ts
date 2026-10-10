@@ -4,7 +4,7 @@ import { configuredTool, configuredFlags, executablePath, toolchainExecutables }
 import { prepareM2c } from "../build/prepareM2c.js";
 import { validateVariantSource } from "./variant-lab/manifest.js";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { recordedCommand, commandText, type CommandRecord } from "../lib/recordedCommand.js";
 import { requireFunctionLocation, loadSymbolIndex, withSymbolMetadata } from "../lib/symbolIndex.js";
 import { Timings, digest, snapshot, readCache, writeCache } from "../lib/contentCache.js";
@@ -30,6 +30,9 @@ import { originalAssembly } from "./type-propagation/assembly.js";
 import { projectParameters, layoutFields } from "./type-propagation/c-types.js";
 import { injectStaticChain, verifyChainInjection } from "./staticChainInjection.js";
 import type { ChainRow } from "../diagnostics/nestedFunctionScan.js";
+import { loadLibraryProject } from "../lib/project.js";
+import { prepareLibraryFunction } from "./libraryTarget.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 
 /** Do not invite call-site liveness to reinvent an unread trailing argument.
  * Interior holes stay: a later read proves their ABI slots exist. */
@@ -54,8 +57,8 @@ export function packetIsFresh(packet: PreparationPacket, root = ROOT): boolean {
   try {
     if (packet.schemaVersion !== 1) return false;
     return Object.entries(packet.identity.memberships ?? {}).every(([path, members]) =>
-      JSON.stringify(allFiles(join(root, path)).map((p) => relative(root, p)).sort()) === JSON.stringify(members)) &&
-      Object.entries(packet.identity.inputs).every(([path, hash]) => hashFile(join(root, path)) === hash) &&
+      JSON.stringify(allFiles(resolve(root, path)).filter(p => packet.identity.targetKind !== "relocatable-library" || (!p.includes("__pycache__") && !p.endsWith(".pyc"))).map((p) => relative(root, p)).sort()) === JSON.stringify(members)) &&
+      Object.entries(packet.identity.inputs).every(([path, hash]) => hashFile(resolve(root, path)) === hash) &&
       (!packet.primary || hashFile(join(root, packet.primary.path)) === packet.primary.sha256) &&
       JSON.stringify(packet.identity.tools) === JSON.stringify(configuredToolchainIdentity()) &&
       [packet.compilation.preprocessed, packet.compilation.assembly, packet.compilation.object].every((a) => !a || hashFile(join(root, a.path)) === a.sha256) &&
@@ -87,6 +90,7 @@ interface PreflightReport { macroIdentity: PreparationPacket["discovery"]["macro
 interface PreparationOptions { root?: string; signal?: AbortSignal; alternative?: boolean; contextFile?: string;
   inferenceView?: { withhold?: string[]; disableSeeds?: string[]; permittedSeeds?: string[]; disableTransfers?: boolean } }
 export function prepareFunction(functionName: string, options: PreparationOptions = {}): Promise<{ packet: PreparationPacket; path: string }> {
+  if (loadLibraryProject(options.root ?? ROOT)) return prepareLibraryFunction(functionName, options);
   return withSymbolMetadata(() => withPreprocessorMetadata(() => prepareFunctionInView(functionName, options)));
 }
 async function prepareFunctionInView(functionName: string, options: PreparationOptions): Promise<{ packet: PreparationPacket; path: string }> {
@@ -213,6 +217,7 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
       data: data.map((p) => relative(root, p)), inputs, memberships, fingerprint, tools, flags }, primary: existing && !options.alternative ? {
       origin: "existing-attempt", path: destination, sha256: hashText(source), text: source, declarationsRequired: [],
     } : null,
+    verification: resolveFunctionTarget(functionName, root).verification,
     context: { index: emptyDeclarationIndex(), projection: "", excluded: [], unknown: [], headers: ["common.h"] },
     generation: { status: "not-attempted" }, compilation: { status: "not-attempted", commands: [], diagnostics: "" },
     comparison: { status: "not-available" }, integration: { state: existing && !options.alternative ? "live" : "staged", changes: [destination], blockers: [], destinationHash: hashText(source) },
@@ -603,6 +608,17 @@ export function stagePrepared(packet: PreparationPacket, root = ROOT): { staged:
   const dirty = execFileSync("git", ["status", "--porcelain", "--", packet.identity.destination], { cwd: root, encoding: "utf8" });
   if (dirty.trim()) return { staged: false, reason: "destination contains existing uncommitted work" };
   const current = readFileSync(path, "utf8");
+  if (packet.identity.targetKind === "relocatable-library") {
+    // Only an unchanged TU consisting exclusively of reference INCLUDE_ASM
+    // stubs is eligible. Never replace neighboring C bodies or owned globals.
+    const guard = analyzeCSource(current);
+    const code = current.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*#include[^\n]*$/gm, "").replace(/^\s*INCLUDE_ASM\([^)]*\);\s*$/gm, "").trim();
+    if (!guard.parses || !guard.includeAsm.some(s => s.symbol === packet.identity.symbol) || code || !current.includes("Original TU:") || hashText(current) !== packet.integration.destinationHash)
+      return { staged: false, reason: "library TU is not an unchanged exclusive INCLUDE_ASM scaffold" };
+    writeFileSync(path, packet.primary.text);
+    packet.integration.state = "live"; packet.integration.stagedHash = packet.primary.sha256;
+    return { staged: true };
+  }
   const guard = analyzeCSource(current);
   if (!guard.parses || guard.includeAsm.length !== 1 || guard.includeAsm[0]?.symbol !== packet.identity.functionName || extractSignaturesFromSource(current).length)
     return { staged: false, reason: "destination is not an exclusive target stub" };

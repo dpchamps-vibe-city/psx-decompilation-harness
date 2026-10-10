@@ -35,6 +35,8 @@ import { loadFunctionSpans } from "../lib/symbolIndex.js";
 import { dependencyReadySmallFirstStrategy, rankWorklist } from "./callGraphStrategies.js";
 import { detectMacroIdentities } from "../diagnostics/macroIdentity.js";
 import { macroRouteSummary, type MacroRouteSummary } from "../diagnostics/macroTiler.js";
+import { loadLibraryProject } from "../lib/project.js";
+import { writeLibraryGraph } from "./libraryTarget.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "../..");
@@ -50,6 +52,12 @@ const onlyContainer = containerIdx >= 0 ? args[containerIdx + 1] : undefined;
 /* Containers, in build order: the PS-X EXE first, then each overlay member.
    --container still scopes a run; the worklist strategy decides ranking within
    the chosen set of containers. */
+if (loadLibraryProject()) {
+  if (onlyContainer) throw new Error("Library work queue uses member identities, not image containers");
+  const graph = writeLibraryGraph(ROOT);
+  console.log(`Library queue: ${graph.functions.length} functions; no game-liveness or SDK-name exclusions. build/callGraph.json`);
+  process.exit(0);
+}
 const containers: Container[] = onlyContainer
   ? [requireContainer(onlyContainer)]
   : loadContainers();

@@ -88,8 +88,8 @@ function namedToolchains(evidence: readonly ToolchainEvidence[]): string[] {
   return [...new Set(evidence.filter(e => e.source !== "project-config").map((e) => e.toolchain).filter((id): id is string => id !== undefined))];
 }
 
-function scanProjectConfig(): ToolchainEvidence | null {
-  const path = exeSplatYamlPath();
+function scanProjectConfig(root: string): ToolchainEvidence | null {
+  const path = exeSplatYamlPath(root);
   if (!existsSync(path)) return null;
   const compiler = readFileSync(path, "utf-8").match(/^\s*compiler:\s*(\S+)/m)?.[1];
   if (!compiler) return null;
@@ -129,21 +129,24 @@ export interface DetectOptions {
   deep?: boolean;
   /** Ignore any cached verdict. */
   refresh?: boolean;
+  /** Project whose authoritative image/config/cache to inspect. */
+  root?: string;
 }
 
 export function detectToolchain(options: DetectOptions = {}): ToolchainProfile {
-  const cachePath = join(ROOT, CACHE_PATH);
+  const root = options.root ?? ROOT;
+  const cachePath = join(root, CACHE_PATH);
   const evidence: ToolchainEvidence[] = [];
   let image: Buffer | null = null;
   try {
-    const exe = loadPsxExeInfo();
+    const exe = loadPsxExeInfo(root);
     image = readFileSync(exe.binaryPath);
   } catch {
     /* No binary is a reason to report undetermined, not to throw. */
   }
 
   const key = digest(JSON.stringify({ image: image ? digest(image) : "absent", deep: !!options.deep,
-    inputs: snapshot(ROOT, [exeSplatYamlPath(), "toolchain.json", "build/sdkVersion.json", "tools/lib/toolchainProfile.ts"]) }));
+    inputs: snapshot(root, [exeSplatYamlPath(root), "toolchain.json", "build/sdkVersion.json", "tools/lib/toolchainProfile.ts"]) }));
   const cached = !options.refresh && readCache<ToolchainProfile>(cachePath, key);
   if (cached) return cached;
   if (image) {
@@ -151,10 +154,10 @@ export function detectToolchain(options: DetectOptions = {}): ToolchainProfile {
     const hint = versionHintFromStrings(image);
     if (hint) evidence.push(hint);
   }
-  const config = scanProjectConfig();
+  const config = scanProjectConfig(root);
   if (config) evidence.push(config);
 
-  const version = options.deep && image ? detectSdkVersion(image) : null;
+  const version = options.deep && image ? detectSdkVersion(image, root) : null;
   if (version) evidence.push(version.evidence);
   const candidates = namedToolchains(evidence);
 
@@ -187,8 +190,8 @@ export function detectToolchain(options: DetectOptions = {}): ToolchainProfile {
  * Reads the report `tools/diagnostics/matchSignatures.ts` writes rather than
  * re-implementing the scan, so there is one signature matcher in the project.
  */
-function detectSdkVersion(image: Buffer): { version: string; evidence: ToolchainEvidence } | null {
-  const reportPath = join(ROOT, "build/sdkVersion.json");
+function detectSdkVersion(image: Buffer, root: string): { version: string; evidence: ToolchainEvidence } | null {
+  const reportPath = join(root, "build/sdkVersion.json");
   if (!existsSync(reportPath)) return null;
   const report = JSON.parse(readFileSync(reportPath, "utf-8")) as {
     binarySha256?: string;

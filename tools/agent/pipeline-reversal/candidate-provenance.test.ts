@@ -16,6 +16,7 @@ import { test } from "node:test";
 import { sourceDependencyFiles } from "../decompToolchain.js";
 import { computeProvenance } from "../provenance.js";
 import { candidateObjectInputs } from "./reverse.js";
+import { projectFixture } from "../../testing/projectFixture.js";
 
 const hasCpp = (() => {
   try {
@@ -55,7 +56,7 @@ test("transitive headers are cache inputs", { skip: !hasCpp }, () => {
   }
 });
 
-test("the flag-override table and the Makefile are cache inputs", { skip: !hasCpp }, () => {
+test("configured flag overrides and base flags are cache inputs", { skip: !hasCpp }, () => {
   const { directory, source } = fixtureSource();
   try {
     const inputs = candidateObjectInputs("provenance_fixture_fn", source);
@@ -63,23 +64,24 @@ test("the flag-override table and the Makefile are cache inputs", { skip: !hasCp
     assert.ok(files.some((file) => file.endsWith("toolchain.json")),
       "the override table decides per-function flags; its absence was the measured stale-cache failure");
     assert.ok(files.some((file) => file.endsWith("toolchain.json")),
-      "the Makefile owns every flag set the compile resolves");
+      "toolchain.json owns every flag set the compile resolves");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("effective flag sets are cache inputs, container kind included", { skip: !hasCpp }, () => {
+test("effective flag sets are cache inputs, container kind included", { skip: !hasCpp }, (t) => {
+  const { root } = projectFixture(t);
   const { directory, source } = fixtureSource();
   try {
-    const exeInputs = candidateObjectInputs("provenance_fixture_fn", source);
+    const exeInputs = candidateObjectInputs("provenance_fixture_fn", source, root);
     assert.ok(exeInputs.values && "cc1Flags" in exeInputs.values && "cppFlags" in exeInputs.values
       && "asFlags" in exeInputs.values && "maspsxFlags" in exeInputs.values,
       "the effective preprocessing/compiler/assembler arguments must be part of the key");
 
     /* An overlay symbol resolves the overlay flag set; the two keys differ
      * exactly in the container-derived values. */
-    const overlayInputs = candidateObjectInputs("ovl_11_provenance_fixture_fn", source);
+    const overlayInputs = candidateObjectInputs("ovl_fixture_provenance_fixture_fn", source, root);
     const exeStamp = computeProvenance("fn", { values: exeInputs.values });
     const overlayStamp = computeProvenance("fn", { values: overlayInputs.values });
     assert.notEqual(exeStamp.fingerprint, overlayStamp.fingerprint);

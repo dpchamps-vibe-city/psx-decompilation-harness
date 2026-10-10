@@ -51,6 +51,8 @@ import {
 } from "./symbolIndex.js";
 
 import { configuredTool } from "./toolchain.js";
+import { loadLibraryProject } from "./project.js";
+import { compareRelocatableFunction, targetRelocatableWords } from "./relocatableFunctionOracle.js";
 const OBJDUMP = "objdump";
 const OBJCOPY = "objcopy";
 
@@ -237,6 +239,8 @@ export interface RenderedWord {
   key: string;
   /** Set when a relocation on this word could not be resolved. */
   undetermined?: string;
+  coordinate?: { kind: "section"; section: string; offset: number };
+  relocations?: Array<{ type: string; reference: string; addend: number; targetOffset?: number }>;
 }
 
 export interface SymbolContext {
@@ -350,6 +354,7 @@ export function disassembleBytes(bytes: Buffer, baseVram: number): string[] {
  * at something that was never compiled here.
  */
 export function targetWordsOf(functionName: string, options: { container?: Container | string; index?: SymbolIndex } = {}): RenderedWord[] {
+  if (loadLibraryProject()) return targetRelocatableWords(functionName);
   const container =
     typeof options.container === "string"
       ? requireContainer(options.container)
@@ -454,6 +459,10 @@ export interface OracleComparison {
  * is what makes "the diff came out empty" a sound verdict rather than a second
  * opinion.
  */
+export function renderedWordsEqual(target: RenderedWord, candidate: RenderedWord): boolean {
+  return target.raw === candidate.raw && JSON.stringify(target.relocations ?? []) === JSON.stringify(candidate.relocations ?? []);
+}
+
 export function compareWords(target: RenderedWord[], candidate: RenderedWord[]): OracleComparison {
   const pairs = lcsPairs(target.map((word) => word.key), candidate.map((word) => word.key));
   const rows: DiffRow[] = [];
@@ -471,7 +480,7 @@ export function compareWords(target: RenderedWord[], candidate: RenderedWord[]):
       undetermined.push(candidateWord);
       return;
     }
-    if (targetWord.raw === candidateWord.raw) {
+    if (renderedWordsEqual(targetWord, candidateWord)) {
       rows.push({ kind: "same", target: targetWord, candidate: candidateWord });
       same++;
       return;
@@ -522,6 +531,7 @@ export interface OracleResult extends OracleComparison {
   candidateWords: RenderedWord[];
   /** Conditions the reader has to know about; never a substitute for a row. */
   notes: string[];
+  verification?: { scope: "translation-unit"; verdict: Verdict; differences: string[] };
 }
 
 export interface OracleOptions {
@@ -620,6 +630,10 @@ export function objectHandsSymbolToAssembler(objectPath: string, functionName: s
 }
 
 export function compareFunction(functionName: string, options: OracleOptions = {}): OracleResult {
+  if (loadLibraryProject()) {
+    if (!options.objectPath) throw new Error("Compile the owning TU and pass objectPath for a function diagnostic");
+    return compareRelocatableFunction(functionName, options.objectPath);
+  }
   const container =
     typeof options.container === "string"
       ? requireContainer(options.container)

@@ -29,9 +29,11 @@ export interface PreparationPacket {
   diagnosticsIdentity?: string;
   identity: {
     functionName: string; container: string; destination: string; assembly: string; data: string[];
+    targetKind?: "relocatable-library"; symbol?: string;
     inputs: Record<string, string>; fingerprint: string; tools: unknown; flags: string[];
     memberships?: Record<string, string[]>;
   };
+  verification?: { scope: "function" | "translation-unit"; mode: "linked-bytes" | "relocatable-object" };
   primary: PacketSource | null;
   context: { index: DeclarationIndex; projection: string; excluded: string[]; unknown: string[]; headers: string[] };
   generation: { status: "not-attempted" | "generated" | "failed" | "unsupported"; raw?: string; rawHash?: string; draftHash?: string; command?: CommandRecord };
@@ -76,10 +78,11 @@ export function packetOpening(packet: PreparationPacket, packetPath: string): st
     `Measured source: ${source?.path ?? "none — generation failed"}. Live destination: ${packet.identity.destination} (${packet.integration.state}).`,
     `Generation: ${packet.generation.status}; compilation: ${packet.compilation.status}; comparison: ${packet.comparison.status}; finalization: ${packet.finalization.status}.`,
     links,
-    macroOpening(packet),
-    chainOpening(packet),
+    ...(packet.verification ? [`Verification scope: ${packet.verification.scope}; oracle: ${packet.verification.mode}.`] : []),
+    ...(packet.discovery.macroIdentity ? [macroOpening(packet)] : []),
+    ...(packet.discovery.readBeforeDefinition ? [chainOpening(packet)] : []),
     ...(packet.discovery.propagation ? [`Type propagation: ${packet.discovery.propagation.convergence}, ${packet.discovery.propagation.visited} original functions; graph ${packet.discovery.propagation.graphComplete ? "closed" : "coverage incomplete"}. Constraints/provenance: ${packet.discovery.propagation.report}; actual m2c input: ${packet.discovery.propagation.input}.`] : []),
-    ...(packet.comparison.report ? [`Relocated-byte report: ${packet.comparison.report}. Compilation, exactness and finalization are separate claims.`] : []),
+    ...(packet.comparison.report ? [`Comparison report: ${packet.comparison.report}. Compilation, exactness and finalization are separate claims.`] : []),
     `Blockers: ${packet.integration.blockers.length}; unresolved facts: ${packet.discovery.unknowns.filter((u) => u.strength !== "witnessed").length}. See evidence.md for constraints, examined inputs and next evidence paths.`,
     ...packet.discovery.unknowns.filter((u) => u.strength !== "witnessed" && /contract|signature|conflict/.test(u.missing)).slice(0, 4)
       .map((u) => `${u.subject}: ${Buffer.byteLength(u.missing) <= 350 ? u.missing : "see evidence.md"}.`),

@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { interactiveDocumentation, interactivePreparationLifecycle, agentCompletion } from "./interactive-preparation.ts";
+import { seedProjectFixture } from "../../../../tools/testing/projectFixture.js";
 
 function fixture(t: { after: (f: () => void) => void }) {
   const root = mkdtempSync(join(tmpdir(), "interactive-documentation-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  seedProjectFixture(root);
   mkdirSync(join(root, "src")); writeFileSync(join(root, "src/f.c"), "void f(void) {}\n");
   const handlers = new Map<string, (event: any, ctx: any) => Promise<void> | void>();
   const messages: string[] = [];

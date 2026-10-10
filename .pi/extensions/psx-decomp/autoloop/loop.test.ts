@@ -9,6 +9,7 @@ import { createTurnGate } from "./turn-gate.ts";
 import { buildInputs, inputIdentity, type Completion } from "../tools/prepared-attempt.ts";
 import { configuredToolchainIdentity, ROOT } from "../../../../tools/agent/decompToolchain.ts";
 import { runCommand } from "../../shared/process.ts";
+import { seedProjectFixture } from "../../../../tools/testing/projectFixture.js";
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const result = await runCommand("git", args, { cwd, timeoutMs: 30_000 });
@@ -19,6 +20,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
 /** Commit the fixture as it stands, so the loop's changed-file reading has a HEAD
     and every default integration root exists for its pathspecs. */
 async function seedRepository(root: string): Promise<void> {
+  seedProjectFixture(root);
   for (const dir of ["src", "include", "configs"]) {
     mkdirSync(join(root, dir), { recursive: true });
     writeFileSync(join(root, dir, ".keep"), "");
@@ -36,6 +38,7 @@ async function seedRepository(root: string): Promise<void> {
 test("a prep-led run does not start with old documentation or static finalization", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "autoloop-startup-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  seedProjectFixture(root);
   for (const dir of [".pi", "src", "tools/agent", "build", "run_output"]) mkdirSync(join(root, dir), { recursive: true });
   symlinkSync(join(ROOT, "node_modules"), join(root, "node_modules"));
   const pending = "func_80012345", fresh = "func_80012380";

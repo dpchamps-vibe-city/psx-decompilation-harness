@@ -35,7 +35,7 @@ import {
   type DisassembledInstruction,
   assembleTarget,
   compileSource,
-  disassembleObject,
+  disassembleFunctionObject,
   normalizeFunctionName,
   resolveSource,
 } from "./decompToolchain.js";
@@ -224,9 +224,9 @@ function main(): void {
   const name = normalizeFunctionName(positional[0]);
   const scratch = join(ROOT, "build/triage", `${name}-inventory`);
   try {
-    const target = disassembleObject(assembleTarget(name, scratch));
+    const target = disassembleFunctionObject(assembleTarget(name, scratch), name);
     const artifacts = compileSource(resolveSource(name, srcOverride), scratch, name, { assemble: true });
-    const compiled = disassembleObject(artifacts.object!);
+    const compiled = disassembleFunctionObject(artifacts.object!, name);
     const report = compareInventories(target, compiled);
 
     if (json) {

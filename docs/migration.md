@@ -219,3 +219,17 @@ Usage is a cloned/exported project template, not a separately installed harness.
 Further compiler adapters, coherent alternate SDK inputs, container/ABI models,
 evidence isolation and inherited test cleanup remain documented in
 [game-agnosticity.md](game-agnosticity.md).
+
+## Portable fixture follow-up
+
+Previously failing game-dependent tests now use isolated synthetic projects,
+small borrowed control shapes and independently compiled references. Container,
+profile and header lookups accept project roots where those contracts need them;
+ROOT-bound integration modules run in a temporary harness tree. No game state
+was imported or new missing-asset skips added. See
+[test-fixtures/harness/README.md](../test-fixtures/harness/README.md).
+
+Full `npm test`: **1,202 passed, 0 failed, 112 existing optional cases skipped**
+(1,314 total, about 32 s). Those original-asset cases remain unconverted. Strict
+`tsc --noEmit` still fails on inherited errors; the two new fixture helpers report
+none. No game/SDK binary-identity result or commit is claimed.

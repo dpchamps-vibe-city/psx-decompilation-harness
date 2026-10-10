@@ -9,6 +9,8 @@ import { HARNESS_ROOT, configuredFlags, configuredFileFlags, configuredSdk, conf
 import { digest, fileDigest, filesUnder, readCache, snapshot, writeCache, writeIfChanged } from "../lib/contentCache.js";
 import { dependencyPaths } from "../agent/preprocessedCache.js";
 import { buildInputIdentity, refreshBuildInputs } from "./buildInputs.js";
+import { loadLibraryProject } from "../lib/project.js";
+import { runLibraryTask } from "../agent/libraryTarget.js";
 
 function command(tool: string, args: string[], root = HARNESS_ROOT, capture = false, env: NodeJS.ProcessEnv = process.env): string {
   const result = spawnSync(tool, args, { cwd: root, env, encoding: "utf8", stdio: capture ? "pipe" : "inherit", maxBuffer: 64 * 1024 * 1024 });
@@ -203,8 +205,13 @@ function selection(args: string[], all = false): Container[] {
 }
 export function runTask(task: string, args: string[]): void {
   if (args.includes("--help")) {
-    console.log(`npm run ${task} -- [--container ID | --all]\nTool paths, flags, SDK and profiles: toolchain.json. No Makefile is used.\nDisassemble: --archives opts into the paired-index archive discovery adapter.`);
+    console.log(loadLibraryProject() ? `npm run ${task} -- [--all]\nLibrary targets: project.json; toolchain: toolchain.json. npm run library -- --help for member tools.` :
+      `npm run ${task} -- [--container ID | --all]\nTool paths, flags, SDK and profiles: toolchain.json. No Makefile is used.\nDisassemble: --archives opts into the paired-index archive discovery adapter.`);
     return;
+  }
+  if (loadLibraryProject() && !["setup", "clean", "wipe"].includes(task)) {
+    if (args.some(a => a !== "--all")) throw new Error("Library npm tasks accept --all only; use npm run library -- check --member ID for a scoped check");
+    runLibraryTask(task, []); return;
   }
   const allowed = ["--container", "--all", ...(task === "disassemble" ? ["--archives"] : [])];
   for (let i = 0; i < args.length; i++) {
@@ -221,6 +228,7 @@ export function runTask(task: string, args: string[]): void {
   }
   if (task === "split-sdk-libs") { splitSdk(); return; }
   if (task === "clean") {
+    if (loadLibraryProject() && args.includes("--container")) throw new Error("Libraries have members, not image containers; npm run clean removes build/ only");
     if (!args.length || args.includes("--all")) rmSync(join(HARNESS_ROOT, "build"), { recursive: true, force: true });
     else for (const container of selection(args)) {
       if (container.kind === "exe") {
@@ -243,6 +251,7 @@ export function runTask(task: string, args: string[]): void {
     }
     return;
   }
+  if (loadLibraryProject()) throw new Error("Library wipe/container cleanup is unsupported; npm run clean removes generated build artifacts only");
   const containers = selection(args, ["check-all", "split-all", "config-check"].includes(task));
   if (["split", "split-all", "config-check"].includes(task)) {
     for (const container of containers) splitContainer(container);

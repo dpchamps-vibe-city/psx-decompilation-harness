@@ -33,6 +33,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "../decompToolchain.js";
+import { loadLibraryProject } from "../../lib/project.js";
+import { requireLibraryFunction } from "../../lib/libraryTargets.js";
+import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
+import { isLibraryMemberVerified } from "../libraryTarget.js";
 import { loadContainers, containerTargetPath } from "../../lib/container.js";
 import { requireFunctionLocation, withSymbolMetadata } from "../../lib/symbolIndex.js";
 import { digest, snapshot, readCache, writeCache } from "../../lib/contentCache.js";
@@ -283,9 +287,10 @@ export interface BuildOptions {
 export function corpusCandidates(): Array<{ functionName: string; sourcePath: string }> {
   const graph = loadCallGraph(ROOT);
   const out: Array<{ functionName: string; sourcePath: string }> = [];
-  const containers = loadContainers();
+  const containers = loadLibraryProject() ? [] : loadContainers();
   for (const entry of graph.functions) {
     if (entry.dead || entry.handwritten === "asm") continue;
+    if (loadLibraryProject() && !isLibraryMemberVerified(requireLibraryFunction(entry.name).member, ROOT)) continue;
     const relative = entry.source ?? `src/${entry.name}.c`;
     let path = join(ROOT, relative);
     if (!existsSync(path)) {
@@ -330,7 +335,7 @@ export function loadCorpus(
     const implementation = digest(JSON.stringify(snapshot(ROOT, ["tools/agent/idiom-corpus", "tools/agent/idiomSearch.ts",
       "tools/agent/pipeline-reversal", "tools/agent/webAnalysis.ts", "tools/lib", "tools/agent/decompToolchain.ts", "package-lock.json"],
       (p) => !p.endsWith(".test.ts"))));
-    const identities = new Map(loadContainers().map((c) => [c.id, digest(JSON.stringify(snapshot(ROOT, [
+    const identities = new Map((loadLibraryProject() ? [] : loadContainers()).map((c) => [c.id, digest(JSON.stringify(snapshot(ROOT, [
       containerTargetPath(c), c.paths.splat, c.paths.symbolAddrs, c.paths.undefinedFuncs, c.paths.undefinedSyms,
       c.paths.asmDir, c.paths.ldScript, "build/engine_syms.txt", "build/dep_syms.txt", "build/lib_bss_syms.txt",
     ], (p) => p.endsWith(".s"))))]));
@@ -344,9 +349,11 @@ export function loadCorpus(
          original-code lift, and an excluded query never poisons other queries. */
       const reason = excludedReason(readFileSync(candidate.sourcePath, "utf8"));
       if (reason) { corpus.excluded.push({ functionName: candidate.functionName, reason }); return; }
-      const location = requireFunctionLocation(candidate.functionName);
-      const key = digest(JSON.stringify([tier, implementation, identities.get(location.container.id), location.span]));
-      const path = join(ROOT, "build/idiomCorpus/regions", location.container.id, `tier${tier}`, `${candidate.functionName}.json`);
+      const target = resolveFunctionTarget(candidate.functionName);
+      const location = target.coordinate.kind === "image" ? requireFunctionLocation(candidate.functionName) : undefined;
+      const originalIdentity = location ? identities.get(location.container.id) : requireLibraryFunction(candidate.functionName).member.sha256;
+      const key = digest(JSON.stringify([tier, implementation, originalIdentity, location?.span ?? target.coordinate]));
+      const path = join(ROOT, "build/idiomCorpus/regions", target.owner.id, `tier${tier}`, `${candidate.functionName}.json`);
       let regions = readCache<Region[]>(path, key);
       if (regions) hits++;
       else {

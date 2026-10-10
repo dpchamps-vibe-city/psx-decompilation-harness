@@ -16,7 +16,7 @@ import {
   type DisassembledInstruction,
   assembleTarget,
   compileSource,
-  disassembleObject,
+  disassembleFunctionObject,
   normalizeFunctionName,
   resolveSource,
 } from "./decompToolchain.js";
@@ -1033,10 +1033,10 @@ if (isCLI) {
         useOverrides: !args.includes("--no-overrides"),
       });
       const targetObject = assembleTarget(funcName, outputDirectory);
-      const targetInstructions = disassembleObject(targetObject);
+      const targetInstructions = disassembleFunctionObject(targetObject, funcName);
       const report = analyzeInstructionSets(
         targetInstructions,
-        disassembleObject(compiled.object!),
+        disassembleFunctionObject(compiled.object!, funcName),
       );
       const sdkBoundary = sdkOperationBoundary(targetInstructions, readFileSync(source, "utf-8"), report);
       if (args.includes("--json")) {

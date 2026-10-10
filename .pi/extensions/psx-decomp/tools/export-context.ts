@@ -20,7 +20,8 @@ export function registerExportContextTool(pi: ExtensionAPI): void {
       });
 
       const args = ["tsx", "tools/agent/contextExport.ts", params.functionName ?? "--all"];
-      const target = resolve(ctx.cwd, "include", "functions.h");
+      // Publication may write shared types and more than one owner header.
+      const target = resolve(ctx.cwd, "build", "context-publication.lock");
       return withFileMutationQueue(target, () =>
         runProjectCommand(pi, ctx.cwd, "npx", args, signal, 30_000),
       );

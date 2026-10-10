@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadFunctionSpans, loadSubsegments, loadSymbolIndex, loadSymbolAddresses, locateFunction, withSymbolMetadata } from "./symbolIndex.js";
-import { loadContainers } from "./container.js";
+import { projectFixture } from "../testing/projectFixture.js";
 
-test("request metadata agrees with uncached container indexes and cannot leak mutable views", () => {
-  const containers = loadContainers(), chosen = [containers[0]!, containers.find((c) => c.kind === "overlay")!];
+test("request metadata agrees with uncached container indexes and cannot leak mutable views", (t) => {
+  const containers = projectFixture(t).containers(), chosen = [containers[0]!, containers.find((c) => c.kind === "overlay")!];
   for (const container of chosen) {
     const original = { spans: loadFunctionSpans(container), segments: loadSubsegments(container), address: loadSymbolIndex(container), names: loadSymbolAddresses(container) };
     withSymbolMetadata(() => {
@@ -18,8 +18,8 @@ test("request metadata agrees with uncached container indexes and cannot leak mu
     assert.deepEqual(loadSymbolIndex(container), original.address);
   }
 });
-test("shared RAM slots and ambiguous names remain container-qualified", () => {
-  const exe = loadContainers()[0]!, name = loadFunctionSpans(exe)[0]!.name;
+test("shared RAM slots and ambiguous names remain container-qualified", (t) => {
+  const exe = projectFixture(t).containers()[0]!, name = loadFunctionSpans(exe)[0]!.name;
   const duplicate = { ...exe, id: "ambiguous-fixture" };
   assert.equal(withSymbolMetadata(() => locateFunction(name, [exe, duplicate])).length, 2);
 });

@@ -4,6 +4,7 @@
 import { parseRtlInstructions, FIRST_PSEUDO_REGISTER, hardRegisterName } from "../agent/compiler-trace/rtl-parser.js";
 import { analyzeAllocation } from "../agent/compiler-trace/local-allocation.js";
 import { expressionIdentity, type ValueIdentity, type WebPartition } from "./webPartition.js";
+import { functionSymbol } from "../lib/targetAdapter.js";
 import type { LifetimeRange, QuantitySummary, ConflictSummary } from "../agent/compiler-trace/types.js";
 import { reconstructHardRegisterLifetimes } from "../agent/allocator-counterfactual/analyze.js";
 import type { HardRegisterLifetime } from "../agent/allocator-counterfactual/types.js";
@@ -86,7 +87,7 @@ function quotedString(s: S): string | null {
 export function extractCandidatePartition(observed: WebPartition, dumps: DumpInputs, symbols: ReadonlyMap<string, number> = new Map()): CandidatePartition {
   const names = [dumps.rtl, dumps.lreg, dumps.greg].map(d => /^;; Function (\S+)/m.exec(d)?.[1]);
   if (names.some(n => !n)) throw new Error("Unknown RTL dump format: missing Function header");
-  if (names.some(n => n !== observed.functionName)) throw new Error("RTL dumps do not belong to the observed function");
+  if (names.some(n => n !== functionSymbol(observed.functionName))) throw new Error("RTL dumps do not belong to the observed function");
   const lreg = parseRtlInstructions(dumps.lreg, "lreg"), rtl = parseRtlInstructions(dumps.rtl, "rtl");
   const allocation = analyzeAllocation(dumps.lreg, dumps.greg, lreg);
   const defs = new Map<number, Array<{ source: S; uid: number; order: number; block: number | undefined }>>();

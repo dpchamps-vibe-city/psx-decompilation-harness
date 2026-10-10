@@ -2239,7 +2239,13 @@ test("axis-effect names an inert axis and says whether the sample proves it", ()
 /* Base pointers                                                       */
 /* ------------------------------------------------------------------ */
 
+const basePointerTypes = symbolTypes([join(ROOT, "test-fixtures/harness/include")]);
+const basePointerSource = (source: string) => source
+  .replaceAll("D_80049370", "fixture_values").replaceAll("D_8005E57C", "fixture_result")
+  .replaceAll("func_80021604", "fixture_observe").replaceAll("func_80014988", "fixture_combine");
+
 function sitesOf(source: string) {
+  source = basePointerSource(source);
   const graph = graphOf(source);
   const view = analyzeWebs(graph);
   const flow = buildFlow(graph);
@@ -2252,17 +2258,17 @@ function sitesOf(source: string) {
       closureNodes: new Set(graph.nodes.map((node) => node.id)),
       flowOrder: flow.order,
       reserved: new Set(graph.variables.map((variable) => variable.name)),
+      symbolTypes: basePointerTypes,
     }),
   };
 }
 
 test("base-pointer: element types come from the include path, never from the use", () => {
-  const types = symbolTypes();
+  const types = basePointerTypes;
   /* An array declaration gives its element type directly. */
-  assert.equal(types.arrays.get("D_80049370"), "s32");
-  /* The generated header spells a run of s32 as a scalar macro over a cast;
-     `(&D_8006BF48)[i]` is only an s32 because that cast says so. */
-  assert.equal(types.scalars.get("D_8006BF48"), "s32");
+  assert.equal(types.arrays.get("fixture_values"), "s32");
+  /* A scalar macro over a cast declares the run's element type too. */
+  assert.equal(types.scalars.get("fixture_run"), "s32");
   assert.equal(types.arrays.get("no_such_symbol_anywhere"), undefined);
 });
 
@@ -2281,7 +2287,7 @@ test("base-pointer: subscripts sharing an index become one ranked site", () => {
   const { sites, refusals } = sitesOf(source);
   assert.equal(sites.length, 1, refusals.join("; "));
   const site = sites[0]!;
-  assert.equal(site.symbol, "D_80049370");
+  assert.equal(site.symbol, "fixture_values");
   assert.equal(site.indexText, "i");
   assert.equal(site.elementType, "s32");
   assert.deepEqual(site.uses.map((use) => use.offset).sort((l, r) => l - r), [0, 1, 2]);
@@ -2289,7 +2295,7 @@ test("base-pointer: subscripts sharing an index become one ranked site", () => {
   /* Declared at the block top, assigned once the index is ready. */
   const { declaration, assignment, useText } = basePointerText(site);
   assert.equal(declaration, `s32 *${site.variable};`);
-  assert.equal(assignment, `${site.variable} = &D_80049370[i];`);
+  assert.equal(assignment, `${site.variable} = &fixture_values[i];`);
   assert.equal(useText(0), `*${site.variable}`);
   assert.equal(useText(2), `${site.variable}[2]`);
 });
@@ -2381,7 +2387,7 @@ test("base-pointer: a single use is not a shared base", () => {
   assert.deepEqual(sitesOf(source).sites, []);
 });
 
-test("base-pointer: the lifted candidate compiles and the baseline is unchanged", async () => {
+test("base-pointer: the lifted candidate preserves the baseline and renders typed C", async () => {
   const source = [
     "int fixture(int n) {",
     "    int i;",
@@ -2393,26 +2399,27 @@ test("base-pointer: the lifted candidate compiles and the baseline is unchanged"
     "}",
     "",
   ].join("\n");
-  const graph = graphOf(source);
+  const fixtureSource = basePointerSource(source);
+  const graph = graphOf(fixtureSource);
   const view = analyzeWebs(graph);
-  const derived = deriveGrammar({ graph, view, closure: allNodesClosure(graph, view.webs), source, registry });
+  const derived = deriveGrammar({ graph, view, closure: allNodesClosure(graph, view.webs), source: fixtureSource, registry, symbolTypes: basePointerTypes });
   assert.equal(derived.basePointers.length, 1);
   const domain = buildDomain({ graph, view, derived });
 
   /* Rank 0 is still the input, byte for byte. */
-  assert.equal(renderCandidate(source, graph, view, candidateAt(domain, 0n)), source);
+  assert.equal(renderCandidate(fixtureSource, graph, view, candidateAt(domain, 0n)), fixtureSource);
 
   /* Some coordinate lifts the pointer, and what it renders is the split form. */
   const lifted = [...Array(Number(domain.total)).keys()]
-    .map((rank) => renderCandidate(source, graph, view, candidateAt(domain, BigInt(rank))))
+    .map((rank) => renderCandidate(fixtureSource, graph, view, candidateAt(domain, BigInt(rank))))
     .find((text) => /\*p0/.test(text));
   assert.notEqual(lifted, undefined);
   assert.match(lifted!, /s32 \*p0;/);
-  assert.match(lifted!, /p0 = &D_80049370\[i\];/);
+  assert.match(lifted!, /p0 = &fixture_values\[i\];/);
   assert.match(lifted!, /\*p0/);
   assert.match(lifted!, /p0\[2\]/);
   /* The index moved into the assignment, so no subscript of the array is left. */
-  assert.equal(/D_80049370\[i/.test(lifted!.replace(/p0 = &D_80049370\[i\];/, "")), false);
+  assert.equal(/fixture_values\[i/.test(lifted!.replace(/p0 = &fixture_values\[i\];/, "")), false);
 });
 
 /* ------------------------------------------------------------------ */

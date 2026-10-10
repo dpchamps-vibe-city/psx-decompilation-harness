@@ -1,7 +1,8 @@
 export type HandwrittenKind = false | "asm" | "gte";
 
 /**
- * `<container>:<VRAM>` — the identity of one function in the work queue.
+ * `<container>:<VRAM>` for images, `<member>:symbol:<name>` for libraries.
+ * Library coordinates are symbolic identities, never fabricated RAM addresses.
  *
  * A VRAM address alone is not an identity here. Overlays that share a RAM slot
  * hold different functions at the same address and are never resident together,
@@ -13,8 +14,10 @@ export type FunctionKey = string;
 
 export interface CallGraphEntry {
   name: string;
-  /** The container whose image defines this function. */
+  /** Image container or original library member id. */
   container: string;
+  /** Actual ELF symbol; library entry.name is the qualified member::symbol key. */
+  symbol?: string;
   /** Project-relative C file that defines it, whether or not it exists yet. */
   source?: string;
   /** First argument of its `INCLUDE_ASM` stub: `<asmDir>/nonmatchings/<name>`. */
@@ -33,6 +36,8 @@ export interface CallGraphEntry {
 }
 
 export interface CallGraph {
+  targetKind?: "relocatable-library";
+  identityKind?: "member-symbol";
   functions: CallGraphEntry[];
   stats?: Record<string, number>;
 }

@@ -3,11 +3,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CallGraph, CallGraphEntry, ControllerState, FunctionKey, FunctionState } from "./types.ts";
 import { runCommand } from "./process.ts";
+import { resolveFunctionTarget } from "../../../tools/lib/targetAdapter.js";
 
 /** The container a call graph entry belongs to when the graph does not say. */
 export const DEFAULT_CONTAINER = "exe";
 
 export function normalizeVram(value: string): string {
+  // Library queue coordinates are symbolic, never fabricated RAM addresses.
+  // Keep the legacy field for controller-state compatibility, with an explicit tag.
+  if (/^symbol:[A-Za-z_]\w*$/.test(value)) return value;
   const parsed = Number.parseInt(value, 16);
   if (!Number.isFinite(parsed)) throw new Error(`Invalid VRAM address: ${value}`);
   return `0x${parsed.toString(16).toUpperCase().padStart(8, "0")}`;
@@ -67,19 +71,8 @@ export function functionPaths(projectRoot: string, name: string): {
   source: string;
   includeAsmPath: string;
 } {
-  try {
-    const entry = loadCallGraph(projectRoot).functions.find((candidate) => candidate.name === name);
-    if (entry?.source && entry.includeAsmPath) {
-      return { container: entry.container, source: entry.source, includeAsmPath: entry.includeAsmPath };
-    }
-  } catch {
-    /* No call graph in this tree yet. */
-  }
-  return {
-    container: DEFAULT_CONTAINER,
-    source: `src/${name}.c`,
-    includeAsmPath: `build/asm/nonmatchings/${name}`,
-  };
+  const target = resolveFunctionTarget(name, projectRoot);
+  return { container: target.owner.id, source: target.source, includeAsmPath: target.includeAsm.folder };
 }
 
 export async function rebuildCallGraph(projectRoot: string, timeoutMs = 120_000): Promise<CallGraph> {

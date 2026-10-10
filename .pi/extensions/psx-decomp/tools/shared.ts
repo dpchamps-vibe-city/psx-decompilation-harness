@@ -28,7 +28,7 @@ function truncateTail(output: string): string {
 }
 
 export function validateFunctionName(name: string): void {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+  if (!/^(?:lib_[a-f0-9]{16}_\d+::)?[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
     throw new Error(`Invalid function name: ${name}`);
   }
 }

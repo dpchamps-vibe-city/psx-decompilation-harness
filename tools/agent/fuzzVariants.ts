@@ -10,8 +10,6 @@
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { basename, isAbsolute, join, relative } from "node:path";
 import {
-  configuredCc1FlagsForContainer,
-  containerForSymbol,
   ROOT,
   assembleTarget,
   configuredToolchainIdentity,
@@ -21,6 +19,8 @@ import {
   resolveSource,
   type DisassembledInstruction,
 } from "./decompToolchain.js";
+import { configuredFlags } from "../lib/toolchain.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { analyzeInstructionSets } from "./explainDiff.js";
 import { summarizeObjective } from "./pipeline-reversal/objective.js";
 import { reversePipeline } from "./pipeline-reversal/reverse.js";
@@ -535,8 +535,8 @@ function main(): void {
     ...configuredToolchainIdentity(),
     variantLab: { schemaVersion: 1 as const, sha256: variantLabImplementationHash() },
   };
-  const owner = containerForSymbol(options.functionName);
-  const compilerFlags = [...configuredCc1FlagsForContainer(owner?.kind ?? "exe", owner?.id), ...(loadFlagOverrides().get(options.functionName) || [])];
+  const targetOwner = resolveFunctionTarget(options.functionName);
+  const compilerFlags = [...configuredFlags("cc1", targetOwner.flags), ...(loadFlagOverrides().get(targetOwner.owner.kind === "library" ? targetOwner.owner.id : options.functionName) || [])];
   if (options.tracePasses) compilerFlags.push("-da");
   const runId = deterministicRunId({
     functionName: options.functionName,

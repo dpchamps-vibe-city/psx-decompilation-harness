@@ -2,7 +2,7 @@
  * stay under build/preparation/. --write is a guarded handoff, never overwrite. */
 import { prepareFunction, stagePrepared } from "./prepareFunction.js";
 import { packetOpening } from "./campaign/packet.js";
-import { ROOT } from "./decompToolchain.js";
+import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
 
 export { prepareFunction, stagePrepared } from "./prepareFunction.js";
 
@@ -22,8 +22,8 @@ if (process.argv[1]?.endsWith("m2cFunc.ts")) {
   const contextIdx = args.indexOf("--context");
   const contextFile = contextIdx >= 0 ? args[contextIdx + 1] : undefined;
   const fn = args.find((a, i) => !a.startsWith("--") && i !== (contextIdx >= 0 ? contextIdx + 1 : -1));
-  if (!fn || !/^[A-Za-z_]\w*$/.test(fn)) throw new Error("Usage: m2cFunc.ts <function> [--json] [--write] [--alternative] [--context <file>]");
-  const result = await prepareFunction(fn, { alternative: args.includes("--alternative"), ...(contextFile ? { contextFile } : {}) });
+  if (!fn) throw new Error("Usage: m2cFunc.ts <function> [--json] [--write] [--alternative] [--context <file>]");
+  const result = await prepareFunction(normalizeFunctionName(fn), { alternative: args.includes("--alternative"), ...(contextFile ? { contextFile } : {}) });
   /* Legacy --write now refuses an existing attempt and dirty/concurrent work. */
   if (args.includes("--write")) stagePrepared(result.packet);
   const handoff = packetOpening(result.packet, result.path);

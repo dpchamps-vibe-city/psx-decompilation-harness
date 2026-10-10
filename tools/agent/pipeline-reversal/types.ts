@@ -56,7 +56,9 @@ export interface MirInsn {
   /** Stable identity across waypoints — assigned at lift time, preserved by
    *  every g_k so a reordering pass can be described as a permutation. */
   id: number;
+  /** Legacy numeric position; section offsets for relocatable targets, not RAM. */
   vram?: number;
+  coordinate?: { kind: "section"; section: string; offset: number };
   word?: number;
   mnemonic: string;
   operands: string[];
@@ -209,6 +211,7 @@ export interface ReversalReport {
   functionName: string;
   /** Whether the candidate object already reproduces the target bytes. */
   exact: boolean;
+  verification?: { scope: "translation-unit"; verdict: string; differences: string[] };
   matchedWords: number;
   totalWords: number;
   /** Waypoint ladder, newest first, with target/candidate agreement. */

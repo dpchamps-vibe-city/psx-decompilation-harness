@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { UNKNOWN_TOOLCHAIN, detectToolchain, profileMatches } from "./toolchainProfile.ts";
+import { projectFixture, SDK_BANNER } from "../testing/projectFixture.js";
 
 test("a strategy declared for any toolchain matches every profile", () => {
   assert.equal(profileMatches(UNKNOWN_TOOLCHAIN, ["*"]), true);
@@ -19,8 +20,9 @@ test("an undetected profile matches no toolchain-specific strategy", () => {
   assert.equal(profileMatches(UNKNOWN_TOOLCHAIN, ["psyq", "sn64"]), false);
 });
 
-test("this project detects its toolchain, and every observation names its source", () => {
-  const profile = detectToolchain({ refresh: true });
+test("a fixture image detects its toolchain, and every observation names its source", (t) => {
+  const { root } = projectFixture(t, { vendorString: SDK_BANNER + "\n$Id: sys.c,v 1.2 1997/08/01 $" });
+  const profile = detectToolchain({ root, refresh: true });
   assert.equal(profile.verdict, "detected");
   assert.ok(profile.evidence.length > 0);
   for (const item of profile.evidence) {
@@ -32,10 +34,17 @@ test("this project detects its toolchain, and every observation names its source
   }
 });
 
-test("at least one observation is a vendor string from the image itself", () => {
-  const profile = detectToolchain({ refresh: true });
+test("vendor evidence comes from image bytes, not the configured compiler", (t) => {
+  const { root, put } = projectFixture(t, { vendorString: SDK_BANNER });
+  const profile = detectToolchain({ root, refresh: true });
   assert.ok(
     profile.evidence.some((e) => e.source === "vendor-string" && e.toolchain !== undefined),
     "the binary must supply its own evidence, not only the project config"
   );
+  // Same configured compiler, different bytes: config alone cannot identify it.
+  const unknown = projectFixture(t);
+  assert.equal(detectToolchain({ root: unknown.root, refresh: true }).verdict, "undetermined");
+  // Cached detection must notice authoritative image changes too.
+  put("extracted/FIXTURE.EXE", Buffer.alloc(0x800));
+  assert.equal(detectToolchain({ root }).verdict, "undetermined");
 });

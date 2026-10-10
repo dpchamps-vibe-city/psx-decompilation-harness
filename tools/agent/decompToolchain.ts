@@ -1,18 +1,28 @@
 import { execFileSync, spawn, spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { fileURLToPath } from "url";
-import {
-  EXE_CONTAINER_ID,
-  containerOfSymbol,
-  loadContainers,
-  symbolPrefix,
-  type Container,
-} from "../lib/container.js";
+import type { Container } from "../lib/container.js";
+import { imageContainerFor, resolveFunctionTarget, requireTargetCapability, sourceFlagContext } from "../lib/targetAdapter.js";
+import { objectFunctions, readRelocatableObject } from "../lib/relocatableObject.js";
 
 import { configuredFlags, configuredTool, executablePath, loadToolchain, requireCompilerCapability, toolchainDigest, toolchainExecutables } from "../lib/toolchain.js";
 export { configuredTool } from "../lib/toolchain.js";
+import { loadLibraryProject, libraryContext } from "../lib/project.js";
+import { requireLibraryFunction } from "../lib/libraryTargets.js";
+import { compilerAssemblyOrigin, objectFunctionView, projectCompilerArtifacts, resetCompilerArtifacts, writeObjectFunctionView } from "../lib/compilerArtifacts.js";
+import type { FlagContext } from "../lib/toolchain.js";
+function compilationContext(stem: string, kind?: FlagContext["kind"], id?: string): FlagContext {
+  if (kind === "library") return libraryContext(id ?? "");
+  if (kind) return { kind, ...(id ? { id } : {}) };
+  if (!stem && !loadLibraryProject()) return { kind: kind ?? "exe", id: "exe" };
+  const scoped = stem.match(/^(lib_[a-f0-9]{16}_\d+::[A-Za-z_]\w*)(?:\.|$)/);
+  return resolveFunctionTarget(scoped?.[1] ?? stem).flags;
+}
+function overrideKey(stem: string, context: FlagContext): string {
+  return context.kind === "library" ? context.id! : stem;
+}
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -25,11 +35,11 @@ export function configuredGccVersion(): string {
 export function configuredCompilerPath(): string { return configuredTool("cc1"); }
 export function configuredCppFlags(): string[] { return configuredFlags("cpp"); }
 export function configuredCc1Flags(): string[] { return configuredFlags("cc1"); }
-export function configuredCc1FlagsForContainer(kind: "exe" | "overlay", id?: string): string[] {
-  return configuredFlags("cc1", { kind, id });
+export function configuredCc1FlagsForContainer(kind: FlagContext["kind"], id?: string): string[] {
+  return configuredFlags("cc1", kind === "library" ? libraryContext(id ?? "") : { kind, ...(id ? { id } : {}) });
 }
-export function configuredAsFlagsForContainer(kind: "exe" | "overlay", id?: string): string[] {
-  return configuredFlags("as", { kind, id });
+export function configuredAsFlagsForContainer(kind: FlagContext["kind"], id?: string): string[] {
+  return configuredFlags("as", kind === "library" ? libraryContext(id ?? "") : { kind, ...(id ? { id } : {}) });
 }
 export function configuredAsFlags(): string[] { return configuredFlags("as"); }
 
@@ -56,27 +66,18 @@ export const CPP_FLAGS = liveFlags(configuredCppFlags);
  * all (an unconfigured tree, a fixture), so callers fall back to the
  * single-binary layout rather than failing.
  */
-export function containerForSymbol(name: string): Container | null {
-  try {
-    const containers = loadContainers();
-    return (
-      containerOfSymbol(name, containers) ??
-      containers.find((container) => container.id === EXE_CONTAINER_ID) ??
-      null
-    );
-  } catch {
-    return null;
-  }
+export function containerForSymbol(name: string, root = ROOT): Container | null {
+  return loadLibraryProject(root) ? null : imageContainerFor(name, root);
 }
 
 /** Container kind for a symbol; `exe` whenever the name does not say otherwise. */
-export function containerKindForSymbol(name: string): "exe" | "overlay" {
-  return containerForSymbol(name)?.kind ?? "exe";
+export function containerKindForSymbol(name: string, root = ROOT): "exe" | "overlay" {
+  return containerForSymbol(name, root)?.kind ?? "exe";
 }
 
 /** The directory a symbol's translation unit belongs in. */
-export function sourceDirFor(name: string): string {
-  return join(ROOT, containerForSymbol(name)?.paths.srcDir ?? "src");
+export function sourceDirFor(name: string, root = ROOT): string {
+  return dirname(sourcePathFor(name, root));
 }
 
 /**
@@ -86,11 +87,11 @@ export function sourceDirFor(name: string): string {
  * the callers that have to decide whether it exists at all — a stub check, an
  * m2c first pass, a policy sweep.
  */
-export function sourcePathFor(name: string): string {
-  return join(sourceDirFor(name), `${name}.c`);
+export function sourcePathFor(name: string, root = ROOT): string {
+  return join(root, resolveFunctionTarget(name, root).source);
 }
 
-export function configuredMaspsxFlags(container?: Pick<Container, "kind" | "id">): string[] {
+export function configuredMaspsxFlags(container?: FlagContext): string[] {
   return configuredFlags("maspsx", container);
 }
 
@@ -104,6 +105,8 @@ export interface CompileArtifacts {
   assembly: string;
   object?: string;
   outputDir: string;
+  /** Full production assembly when assembly is a function-local diagnostic view. */
+  translationUnitAssembly?: string;
   stem: string;
   cc1Flags: string[];
   /**
@@ -244,12 +247,11 @@ function relativePath(path: string): string {
 }
 
 export function normalizeFunctionName(value: string): string {
-  return basename(value).replace(/\.c$/, "");
+  return resolveFunctionTarget(value).key;
 }
 
 export function resolveSource(funcName: string, requested?: string): string {
-  const container = containerForSymbol(funcName);
-  const source = requested || join(container?.paths.srcDir ?? "src", `${funcName}.c`);
+  const source = requested || resolveFunctionTarget(funcName).source;
   const absolute = isAbsolute(source) ? source : join(ROOT, source);
   if (!existsSync(absolute)) throw new Error(`Source file not found: ${source}`);
   return absolute;
@@ -330,17 +332,20 @@ export function loadFlagOverrides(): Map<string, string[]> {
 export function assembleCompilerOutput(
   assembly: string,
   object: string,
-  kind: "exe" | "overlay" = "exe",
+  kind: FlagContext["kind"] = "exe",
   containerId?: string,
 ): string {
+  const origin = compilerAssemblyOrigin(assembly);
+  const context = origin?.context ?? compilationContext(containerId ?? "", kind, containerId);
   runTool(configuredTool("python"), [
     configuredTool("maspsx"),
-    ...configuredMaspsxFlags({ kind, id: containerId ?? kind }),
+    ...configuredMaspsxFlags(context),
     "--gnu-as-path", configuredTool("as"),
     "-o", object,
-    ...configuredAsFlagsForContainer(kind, containerId),
-    assembly,
+    ...configuredFlags("as", context),
+    origin?.assembly ?? assembly,
   ]);
+  if (origin) writeObjectFunctionView(object, origin.symbol);
   return object;
 }
 
@@ -362,10 +367,10 @@ export function parseImplicitDeclarationWarnings(stderr: string): string[] {
  */
 export function detectImplicitDeclarations(preprocessed: string, stem: string): string[] {
   requireCompilerCapability("gcc-implicit-declarations");
-  const container = containerForSymbol(stem);
+  const context = compilationContext(stem);
   const flags = [
-    ...configuredCc1FlagsForContainer(container?.kind ?? "exe", container?.id),
-    ...(loadFlagOverrides().get(stem) || []),
+    ...configuredFlags("cc1", context),
+    ...(loadFlagOverrides().get(overrideKey(stem, context)) || []),
     "-Wimplicit",
   ];
   const result = spawnSync(configuredTool("cc1"), [...flags, preprocessed, "-o", "/dev/null"], {
@@ -388,16 +393,16 @@ export function detectImplicitDeclarations(preprocessed: string, stem: string): 
  * any header it read changed, and a dependency list that omits headers is a
  * staleness hole (the Phase A1 failure in plans/automatic-matching-reconstruction.md).
  */
-export function sourceDependencyFiles(source: string): string[] {
-  const absoluteSource = isAbsolute(source) ? source : join(ROOT, source);
-  const output = runTool(configuredTool("cpp"), [...configuredCppFlags(), "-MM", "-MG", absoluteSource]);
+export function sourceDependencyFiles(source: string, context?: FlagContext, root = ROOT): string[] {
+  const absoluteSource = isAbsolute(source) ? source : join(root, source);
+  const output = runTool(configuredTool("cpp", root), [...configuredFlags("cpp", context ?? sourceFlagContext(absoluteSource, root), root), "-MM", "-MG", absoluteSource], root);
   const files: string[] = [];
   const text = output.replace(/\\\n/g, " ");
   const colon = text.indexOf(":");
   if (colon < 0) return [absoluteSource];
   for (const token of text.slice(colon + 1).trim().split(/\s+/)) {
     if (!token) continue;
-    files.push(isAbsolute(token) ? token : join(ROOT, token));
+    files.push(isAbsolute(token) ? token : join(root, token));
   }
   if (!files.includes(absoluteSource)) files.unshift(absoluteSource);
   return files;
@@ -415,12 +420,12 @@ export function sourceDependencyFiles(source: string): string[] {
  * spelling of the preprocessor invocation is a second thing to keep in step
  * with the project configuration, and it would drift silently.
  */
-export function preprocessOnly(source: string, outputDir: string, stem: string): string {
+export function preprocessOnly(source: string, outputDir: string, stem: string, context?: FlagContext): string {
   const absoluteSource = isAbsolute(source) ? source : join(ROOT, source);
   const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(ROOT, outputDir);
   mkdirSync(absoluteOutput, { recursive: true });
   const preprocessed = join(absoluteOutput, `${stem}.i`);
-  runTool(configuredTool("cpp"), [...configuredCppFlags(), absoluteSource, "-o", preprocessed]);
+  runTool(configuredTool("cpp"), [...configuredFlags("cpp", context ?? sourceFlagContext(absoluteSource) ?? compilationContext(stem)), absoluteSource, "-o", preprocessed]);
   return preprocessed;
 }
 
@@ -449,7 +454,7 @@ export function compileSource(
      * knowing containers exist. Pass it only when the stem is not the
      * function's own name.
      */
-    containerKind?: "exe" | "overlay";
+    containerKind?: FlagContext["kind"];
     containerId?: string;
   } = {},
 ): CompileArtifacts {
@@ -461,23 +466,22 @@ export function compileSource(
   const assembly = join(absoluteOutput, `${stem}.s`);
   const object = join(absoluteOutput, `${stem}.c.o`);
 
+  const context = compilationContext(stem, options.containerKind, options.containerId);
+  resetCompilerArtifacts(absoluteOutput, stem);
   if (options.preprocessedText !== undefined) writeFileSync(preprocessed, options.preprocessedText);
-  else runTool(configuredTool("cpp"), [...configuredCppFlags(), absoluteSource, "-o", preprocessed]);
+  else runTool(configuredTool("cpp"), [...configuredFlags("cpp", context), absoluteSource, "-o", preprocessed]);
 
   const overrides = options.useOverrides === false
     ? []
-    : (loadFlagOverrides().get(stem) || []);
-  const container = containerForSymbol(stem);
-  const kind = options.containerKind ?? container?.kind ?? "exe";
-  const id = options.containerId ?? container?.id;
-  const cc1Flags = [...configuredCc1FlagsForContainer(kind, id), ...overrides, ...(options.extraCc1Flags || [])];
+    : (loadFlagOverrides().get(overrideKey(stem, context)) || []);
+  const cc1Flags = [...configuredFlags("cc1", context), ...overrides, ...(options.extraCc1Flags || [])];
   if (options.dumps) { requireCompilerCapability("gcc-rtl-dumps"); cc1Flags.push("-da"); }
   if (options.emissionAttribution) { requireCompilerCapability("gcc-emission-attribution"); cc1Flags.push("-dp"); }
 
   /* Running cc1 in the artifact directory keeps all -da files together. */
   const front = runToolCapturing(configuredTool("cc1"), [...cc1Flags, basename(preprocessed), "-o", basename(assembly)], absoluteOutput);
 
-  if (options.assemble) assembleCompilerOutput(assembly, object, kind, id);
+  if (options.assemble) assembleCompilerOutput(assembly, object, context.kind, context.id);
 
   const result: CompileArtifacts = {
     source: absoluteSource,
@@ -489,7 +493,18 @@ export function compileSource(
     diagnostics: front.stderr,
   };
   if (options.assemble) result.object = object;
+  projectDiagnosticArtifacts(result, context);
   return result;
+}
+
+/** Production compile stays whole-TU; only diagnostic consumers see projections. */
+function projectDiagnosticArtifacts(artifacts: CompileArtifacts, context: FlagContext): void {
+  let symbol: string;
+  try { symbol = resolveFunctionTarget(artifacts.stem).symbol; } catch { return; } // owner build, not a function diagnostic
+  const compiledBody = new RegExp(`^\\s*\\.ent\\s+${symbol}(?:\\s|$)`, "m").test(readFileSync(artifacts.assembly, "utf8"));
+  if (artifacts.object && (compiledBody || context.kind === "library")) writeObjectFunctionView(artifacts.object, symbol);
+  if (!compiledBody) return; // selected stub or helper whose artifact stem is not a C symbol
+  artifacts.translationUnitAssembly = projectCompilerArtifacts(artifacts.outputDir, artifacts.stem, symbol, context);
 }
 
 export async function compileSourceAsync(
@@ -501,7 +516,7 @@ export async function compileSourceAsync(
     assemble?: boolean;
     useOverrides?: boolean;
     signal?: AbortSignal;
-    containerKind?: "exe" | "overlay";
+    containerKind?: FlagContext["kind"];
     containerId?: string;
   } = {},
 ): Promise<CompileArtifacts> {
@@ -511,62 +526,48 @@ export async function compileSourceAsync(
   const preprocessed = join(absoluteOutput, `${stem}.i`);
   const assembly = join(absoluteOutput, `${stem}.s`);
   const object = join(absoluteOutput, `${stem}.c.o`);
-  await runToolAsync(configuredTool("cpp"), [...configuredCppFlags(), absoluteSource, "-o", preprocessed], ROOT, options.signal);
-  const overrides = options.useOverrides === false ? [] : (loadFlagOverrides().get(stem) || []);
-  const container = containerForSymbol(stem);
-  const kind = options.containerKind ?? container?.kind ?? "exe";
-  const id = options.containerId ?? container?.id;
-  const cc1Flags = [...configuredCc1FlagsForContainer(kind, id), ...overrides];
+  const context = compilationContext(stem, options.containerKind, options.containerId);
+  resetCompilerArtifacts(absoluteOutput, stem);
+  await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", context), absoluteSource, "-o", preprocessed], ROOT, options.signal);
+  const overrides = options.useOverrides === false ? [] : (loadFlagOverrides().get(overrideKey(stem, context)) || []);
+  const cc1Flags = [...configuredFlags("cc1", context), ...overrides];
   if (options.dumps) { requireCompilerCapability("gcc-rtl-dumps"); cc1Flags.push("-da"); }
   const diagnostics = await runToolAsyncCapturingStderr(
     configuredTool("cc1"), [...cc1Flags, basename(preprocessed), "-o", basename(assembly)], absoluteOutput, options.signal);
   if (options.assemble) {
     await runToolAsync(configuredTool("python"), [
-      configuredTool("maspsx"), ...configuredMaspsxFlags({ kind, id: id ?? kind }),
-      "--gnu-as-path", configuredTool("as"), "-o", object, ...configuredAsFlagsForContainer(kind, id), assembly,
+      configuredTool("maspsx"), ...configuredMaspsxFlags(context),
+      "--gnu-as-path", configuredTool("as"), "-o", object, ...configuredFlags("as", context), assembly,
     ], ROOT, options.signal);
   }
   const result: CompileArtifacts = {
     source: absoluteSource, preprocessed, assembly, outputDir: absoluteOutput, stem, cc1Flags, diagnostics,
   };
   if (options.assemble) result.object = object;
+  projectDiagnosticArtifacts(result, context);
   return result;
 }
 
-export function resolveAsmSource(funcName: string): string | null {
-  const container = containerForSymbol(funcName);
-  const asmDir = join(ROOT, container?.paths.asmDir ?? "build/asm");
-  const disasmDir = join(ROOT, container?.paths.disasmDir ?? "build");
-
-  const directory = join(asmDir, "nonmatchings", funcName);
-  const expected = join(directory, `${funcName}.s`);
-  if (existsSync(expected)) return expected;
-  if (existsSync(directory)) {
-    const files = readdirSync(directory).filter((file) => file.endsWith(".s"));
-    if (files.length === 1) return join(directory, files[0]);
-  }
-
-  /* The disassembler keeps originals here even after splat promotes a function
-     to C. It names each file as it found the function — before the project
-     prefixes an overlay's symbols with its container — so both spellings are
-     tried rather than the archive being declared missing for every overlay. */
-  const prefix = container ? symbolPrefix(container) : "";
-  const stems = prefix && funcName.startsWith(prefix)
-    ? [funcName, funcName.slice(prefix.length)]
-    : [funcName];
-  for (const stem of stems) {
-    const archived = join(disasmDir, "functions", `${stem}.s`);
-    if (existsSync(archived)) return archived;
-  }
-  return null;
+export function resolveAsmSource(funcName: string, root = ROOT): string | null {
+  const path = join(root, resolveFunctionTarget(funcName, root).assembly.function);
+  return existsSync(path) ? path : null;
 }
 
 export function assembleTarget(funcName: string, outputDir: string): string {
+  if (loadLibraryProject()) {
+    const { member, fn, key } = requireLibraryFunction(funcName);
+    const directory = resolve(ROOT, outputDir); mkdirSync(directory, { recursive: true });
+    const object = join(directory, `${key}.target.o`);
+    const temporary = `${object}.${process.pid}.${assembleTargetSequence++}`;
+    writeFileSync(temporary, member.bytes); renameSync(temporary, object);
+    writeObjectFunctionView(object, fn.name);
+    return object;
+  }
   const asmSource = resolveAsmSource(funcName);
   if (!asmSource) {
     const container = containerForSymbol(funcName);
     const where = container ? containerPathHint(container) : "build/functions";
-    throw new Error(`Original assembly not found for ${funcName}; run make disassemble to populate ${where}`);
+    throw new Error(`Original assembly not found for ${funcName}; run npm run disassemble to populate ${where}`);
   }
   /* The small-data threshold is a per-container fact, and it reaches the
      assembler as well as the compiler. Assembling an overlay's target under the
@@ -653,8 +654,14 @@ export function splitOperands(text: string): string[] {
   return result;
 }
 
-export function disassembleObject(object: string): DisassembledInstruction[] {
-  const dump = runTool(configuredTool("objdump"), ["-dr", "--no-show-raw-insn", object]);
+export function disassembleObject(object: string, span?: { section: string; offset: number; size: number }): DisassembledInstruction[] {
+  const symbol = objectFunctionView(object);
+  if (!span && symbol) {
+    span = objectFunctions(readRelocatableObject(readFileSync(object))).find(fn => fn.name === symbol);
+    if (!span) throw new Error(`Object does not define ${symbol}: ${object}`);
+  }
+  const dump = runTool(configuredTool("objdump"), ["-dr", "--no-show-raw-insn", ...(span ? ["-j", span.section,
+    `--start-address=${span.offset}`, `--stop-address=${span.offset + span.size}`] : []), object]);
   const instructions: DisassembledInstruction[] = [];
   const byAddress = new Map<number, DisassembledInstruction>();
 
@@ -682,4 +689,13 @@ export function disassembleObject(object: string): DisassembledInstruction[] {
     byAddress.set(address, instruction);
   }
   return instructions;
+}
+
+/** Function-local diagnostic view; acceptance still uses the target's full scope. */
+export function disassembleFunctionObject(object: string, name: string): DisassembledInstruction[] {
+  const target = requireTargetCapability(name, "functionInstructionView");
+  if (target.coordinate.kind === "image") return disassembleObject(object);
+  const fn = objectFunctions(readRelocatableObject(readFileSync(object))).find(f => f.name === target.symbol);
+  if (!fn) throw new Error(`Object does not define ${target.symbol}: ${object}`);
+  return disassembleObject(object, fn);
 }

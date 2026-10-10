@@ -1,0 +1,19 @@
+{
+  "$schema": "../../tools/lib/project.schema.json",
+  "schemaVersion": 1,
+  "target": {
+    "kind": "relocatable-library",
+    "format": "elf-ar",
+    "archives": ["lib/*.a"],
+    "standaloneObjects": ["lib/*.o"]
+  },
+  "headers": {
+    "reference": ["include/psyq"],
+    "owned": ["include/library"],
+    "context": ["common.h", "libcd.h"]
+  },
+  "selection": { "scope": "all-code-members" },
+  "verification": { "mode": "relocatable-object" },
+  "output": { "sourceDir": "src/libraries" },
+  "memberProfiles": {}
+}

@@ -5,6 +5,9 @@ import { runCommand } from "../../shared/process.ts";
 import type { AutodecompConfig, GateResult } from "../../shared/types.ts";
 import { Timings } from "../../../../tools/lib/contentCache.js";
 import { CONTEXT_EXPORT_STATUS, type ExportResult } from "../../../../tools/agent/contextExport.js";
+import { loadLibraryProject } from "../../../../tools/lib/project.js";
+import { libraryMembers, libraryTargetKey } from "../../../../tools/lib/libraryTargets.js";
+import { libraryBuildIdentity } from "../../../../tools/agent/libraryTarget.js";
 import { compilerInputs, consumeReceipt, contextIsCompilerIndependent, publishReceipt, verificationOutputs } from "./verification-receipt.ts";
 
 /** One authoritative route. Machine work can be reused only across unchanged
@@ -19,6 +22,31 @@ export async function finalizeWorkspace(options: {
   let contextPublication: GateResult["contextPublication"];
   const done = (gate: GateResult): GateResult => ({ ...gate, ...(contextPublication ? { contextPublication } : {}), finalizationGates: gates,
     timings: { phases: timings.phases, totalMs: timings.totalMs } });
+  if (loadLibraryProject(options.projectRoot)) {
+    const members = libraryMembers(options.projectRoot);
+    const sources = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.source])));
+    const containers = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.id])));
+    const identity = () => JSON.stringify(members.map(m => [m.id, libraryBuildIdentity(m, options.projectRoot)]));
+    const before = identity();
+    const gate = await timings.measure("library-gate", () => runGate({ ...options, mode: "match", runBuild: true,
+      functionSources: sources, functionContainers: containers, functionContainer: containers[options.functionName] }));
+    gates.push(gate);
+    if (gate.pass && before !== identity()) { gate.pass = false; gate.failures.push("Library inputs changed during finalization; rerun the member gate"); }
+    if (!gate.pass) return done(gate);
+    const publication = await timings.measure("context-export", () => runCommand("npx", ["tsx", "tools/agent/contextExport.ts", options.functionName], {
+      cwd: options.projectRoot, signal: options.signal, timeoutMs: 120_000,
+    }));
+    const status = publication.stdout.split("\n").find(line => line.startsWith(CONTEXT_EXPORT_STATUS));
+    try {
+      const result = JSON.parse(status?.slice(CONTEXT_EXPORT_STATUS.length) ?? "null") as ExportResult | null;
+      if (result?.status === "published" && result.signatureMatches) contextPublication = { ...result, command: publication };
+    } catch { /* No publication outcome is not a pass. */ }
+    if (publication.code !== 0 || !contextPublication || options.signal?.aborted || before !== identity()) {
+      gate.pass = false; gate.failures.push(`Context export failed, was cancelled or inputs changed; rerun finalization.\n${publication.stdout}\n${publication.stderr}`);
+    }
+    // Relocatable verification cannot consume a linked-image receipt.
+    return done(gate);
+  }
   const graph = loadCallGraph(options.projectRoot);
   const entry = graph.functions.find((f) => f.name === options.functionName);
   const gateOptions = {
@@ -89,5 +117,6 @@ export async function finalizeWorkspace(options: {
 /** The loop may skip its preliminary diff only when this process owns a fresh
  * successful finalization. finalizeWorkspace still rechecks scope and policy. */
 export function finalizedDiff(projectRoot: string, functionName: string, config: AutodecompConfig) {
+  if (loadLibraryProject(projectRoot)) return undefined;
   return consumeReceipt(projectRoot, functionName, config).gate?.diff;
 }

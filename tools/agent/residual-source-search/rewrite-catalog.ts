@@ -1,5 +1,5 @@
 import { splitComponents, type MacroRegistry } from "./macro-forms.js";
-import { basePointerSites } from "./base-pointer.js";
+import { basePointerSites, type SymbolTypes } from "./base-pointer.js";
 import { blockIsFrozen, buildFlow, classifySyntheticStatement, splitTopLevel, stripComments } from "./semantic-graph.js";
 import { memoryEffectsConflict, parseMemoryToken, MAX_REGION_NODES } from "./topological-orders.js";
 import { baselinePartition, enumeratePartitions, nameGroups, websCompatible, type WebView } from "./web-partitions.js";
@@ -274,6 +274,8 @@ export interface DeriveGrammarOptions {
   witness?: DiscoveredWitness;
   partitionCap?: number;
   maxBirthPerRegion?: number;
+  /** Data declarations from the selected context, rather than a process-wide header set. */
+  symbolTypes?: SymbolTypes;
 }
 
 export function deriveGrammar(options: DeriveGrammarOptions): DerivedGrammar {
@@ -822,6 +824,7 @@ export function deriveGrammar(options: DeriveGrammarOptions): DerivedGrammar {
   const basePointers = basePointerSites({
     graph,
     source,
+    ...(options.symbolTypes ? { symbolTypes: options.symbolTypes } : {}),
     closureNodes,
     flowOrder: flow.order,
     reserved: new Set([...graph.variables.map((variable) => variable.name), ...partitions.flatMap((partition) =>

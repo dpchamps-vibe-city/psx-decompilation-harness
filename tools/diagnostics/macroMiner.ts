@@ -2,7 +2,7 @@
  * Tier A requires asm-like evidence; Tier B only claims a shared source shape.
  * Identical whole-function bytes are reported separately, including pairs. */
 import { createHash } from "node:crypto";
-import { decodeMacroBytes, instructionKey, isCop2, type MacroInstruction } from "./macroInstructions.js";
+import { decodeMacroFunction, instructionKey, isCop2, type MacroInstruction } from "./macroInstructions.js";
 import type { MacroFunction, MacroFunctionReport } from "./macroTiler.js";
 import { mineCompiledEffects } from "./macroEffects.js";
 
@@ -89,7 +89,7 @@ export function mineMacroCandidates(functions: readonly MacroFunction[], known: 
   for (const fn of functions) {
     const digest = hash(fn.bytes);
     if (fn.bytes.length >= 8) twins.set(digest, [...(twins.get(digest) ?? []), fn]);
-    const insns = decodeMacroBytes(fn.bytes, fn.vram);
+    const insns = decodeMacroFunction(fn);
     const knownAddresses = covered.get(`${fn.container}:${fn.name}`) ?? new Set<number>();
     for (const tier of tiers) {
       for (let start = 0; start < insns.length; start++) {

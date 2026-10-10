@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { CPP_FLAGS } from "../decompToolchain.js";
+import { functionSymbol } from "../../lib/targetAdapter.js";
 import { sha256 } from "../variant-lab/artifacts.js";
 import type { MacroRegistry } from "./macro-forms.js";
 import {
@@ -1382,7 +1383,7 @@ export function buildSemanticGraph(
   registry: MacroRegistry,
 ): SemanticGraph {
   const tree = parseC(source);
-  const definition = findFunctionDefinition(tree.rootNode, functionName);
+  const definition = findFunctionDefinition(tree.rootNode, functionSymbol(functionName));
   if (!definition) throw new Error(`function definition ${functionName} was not found in ${sourcePath}`);
   const declarator = field(definition, "declarator");
   const nameNode = declaratorName(declarator)!;

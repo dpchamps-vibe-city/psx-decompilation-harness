@@ -6,9 +6,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadContainers, unresolvedCodeMembers } from "../lib/container.js";
+import { loadLibraryProject } from "../lib/project.js";
 import { ROOT } from "../agent/decompToolchain.js";
 import { loadMacroFunctions, type MacroFunction, type CensusFinding } from "./macroIdentity.js";
-import { decodeMacroBytes, hex, REGISTER_NAMES, type MacroInstruction } from "./macroInstructions.js";
+import { decodeMacroFunction, hex, REGISTER_NAMES, type MacroInstruction } from "./macroInstructions.js";
 
 export type ChainForm = "dead-spill" | "save-forward" | "undetermined";
 export interface ChainCall {
@@ -87,7 +88,7 @@ function callAfter(insns: MacroInstruction[], n: number, offset: number | null, 
   const targetCall = reached.index === null ? null : insns[reached.index]!;
   return { setup: insns[n]!.vram, call: targetCall?.vram ?? insns[n]!.vram, target: targetCall?.target ?? null,
     offset, placement, verdict: reached.verdict === "accepted" ? "caller-candidate" : reached.verdict,
-    callee: null, reason: reached.reason, targetCallCount: targetCall ? insns.filter(i => call(i) && i.target === targetCall.target).length : 0 };
+    callee: targetCall?.callee ?? null, reason: reached.reason, targetCallCount: targetCall ? insns.filter(i => call(i) && (targetCall.callee ? i.callee === targetCall.callee : targetCall.target !== null ? i.target === targetCall.target : i === targetCall)).length : 0 };
 }
 
 /** Chain/other may-origin lattice. Delay slots are executed on their owner's
@@ -138,7 +139,7 @@ function incomingOrigins(insns: MacroInstruction[]): Array<number[] | null> {
 }
 
 export function scanChainFunction(fn: MacroFunction): { callee: ChainCallee | null; calls: ChainCall[] } {
-  const insns = decodeMacroBytes(fn.bytes, fn.vram);
+  const insns = decodeMacroFunction(fn);
   const origins = incomingOrigins(insns);
   const reads = insns.filter((i, n) => i.reads.includes(2) && origins[n]?.[2] === 1);
   const calls = insns.flatMap((i, n) => {
@@ -178,7 +179,7 @@ export function scanChainFunction(fn: MacroFunction): { callee: ChainCallee | nu
       if (call(prev) && !prev.reads.includes(2)) destinations.add(n - 1);
     } else visit(n + 1);
     return [...destinations].map(k => ({ setup: i.vram, call: insns[k]!.vram, target: insns[k]!.target,
-      offset: null, placement: "forward" as const, verdict: "caller-candidate" as const, callee: null,
+      offset: null, placement: "forward" as const, verdict: "caller-candidate" as const, callee: insns[k]!.callee ?? null,
       reason: "saved entry-$2 web re-installed and reaches sibling call without a read/definition",
       targetCallCount: insns.filter(x => call(x) && x.target === insns[k]!.target).length }));
   });
@@ -214,9 +215,10 @@ export function buildChainCensus(functions: readonly MacroFunction[], findings: 
   const rows: ChainRow[] = functions.map(fn => ({ id: `${fn.container}:${fn.name}`, function: fn.name, container: fn.container, start: fn.vram,
     ...scanChainFunction(fn), callers: [], verdict: "undetermined" }));
   const index = new Map(rows.map(r => [`${r.container}:${r.start}`, r]));
+  const byName = new Map(rows.map(r => [r.function, r]));
   for (const row of rows) for (const c of [...row.calls, ...row.callee?.forwards ?? []]) {
     if (c.verdict !== "caller-candidate") continue;
-    const target = index.get(`${row.container}:${c.target}`) ?? (row.container !== "exe" ? index.get(`exe:${c.target}`) : undefined);
+    const target = c.callee ? byName.get(c.callee) : c.target === null ? undefined : index.get(`${row.container}:${c.target}`) ?? (row.container !== "exe" ? index.get(`exe:${c.target}`) : undefined);
     c.callee = target?.function ?? null;
     if (target?.callee && target.callee.form !== "undetermined") {
       c.verdict = "confirmed-pair"; target.callers.push(row.id);
@@ -234,8 +236,9 @@ export function buildChainCensus(functions: readonly MacroFunction[], findings: 
     rows: rows.filter(r => r.callee || r.calls.length) };
 }
 export function nestedFunctionCensus(): ChainCensus {
-  const loaded = loadMacroFunctions(loadContainers());
-  const findings = [...loaded.findings, ...unresolvedCodeMembers().map(m => ({ container: m.id, function: null, reason: "Unresolved code container; not scanned" }))];
+  const library = loadLibraryProject();
+  const loaded = loadMacroFunctions(library ? [] : loadContainers());
+  const findings = [...loaded.findings, ...(library ? [] : unresolvedCodeMembers()).map(m => ({ container: m.id, function: null, reason: "Unresolved code container; not scanned" }))];
   return buildChainCensus(loaded.functions, findings);
 }
 export function chainRow(census: ChainCensus, name: string): ChainRow | null {

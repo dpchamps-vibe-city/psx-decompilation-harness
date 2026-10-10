@@ -8,6 +8,7 @@ import {
   type LedgerEntry,
 } from "../../../../tools/agent/experimentLedger.ts";
 import { sha256 } from "../../../../tools/agent/provenance.ts";
+import { loadLibraryProject } from "../../../../tools/lib/project.js";
 
 /**
  * Which program a park should preserve.
@@ -62,6 +63,8 @@ export function chooseParkAttempt(
   functionName: string,
   onDiskText: string,
 ): ParkAttempt {
+  if (loadLibraryProject(projectRoot)) return { text: onDiskText, origin: "on-disk",
+    note: "library measurements have no staged ranking; kept the current complete TU, including neighboring functions/data" };
   const entries = readLedger(functionName);
   if (entries.length === 0) {
     return { text: onDiskText, origin: "on-disk", note: "no measured history; preserved the source on disk" };

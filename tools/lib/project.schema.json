@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PSX harness target selection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "target"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "linked-image" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "format"],
+          "properties": {
+            "kind": { "const": "relocatable-library" },
+            "format": { "const": "elf-ar" },
+            "archives": { "$ref": "#/$defs/paths" },
+            "standaloneObjects": { "$ref": "#/$defs/paths" }
+          },
+          "anyOf": [
+            { "required": ["archives"], "properties": { "archives": { "minItems": 1 } } },
+            { "required": ["standaloneObjects"], "properties": { "standaloneObjects": { "minItems": 1 } } }
+          ]
+        }
+      ]
+    },
+    "headers": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "reference": { "$ref": "#/$defs/paths", "description": "Immutable reference header directories; must not overlap owned directories." },
+        "owned": { "$ref": "#/$defs/paths", "description": "Project-owned declaration/type directories." },
+        "context": { "$ref": "#/$defs/paths", "description": "Include spellings for source scaffolds and m2c context, resolved through toolchain includeDirs." }
+      }
+    },
+    "selection": {
+      "type": "object", "additionalProperties": false, "required": ["scope"],
+      "properties": { "scope": { "const": "all-code-members" } }
+    },
+    "verification": {
+      "type": "object", "additionalProperties": false, "required": ["mode"],
+      "properties": { "mode": { "const": "relocatable-object" } }
+    },
+    "output": {
+      "type": "object", "additionalProperties": false, "required": ["sourceDir"],
+      "properties": { "sourceDir": { "$ref": "#/$defs/path", "pattern": "^src/", "default": "src/libraries" } }
+    },
+    "toolchainProfile": { "type": "string", "minLength": 1, "description": "Default named profile in toolchain.json." },
+    "memberProfiles": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 }, "description": "Exact member ID to named toolchain profile; overrides toolchainProfile." }
+  },
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "description": "Safe root-relative path; runtime rejects absolute paths, NUL and parent traversal." },
+    "paths": { "type": "array", "items": { "$ref": "#/$defs/path" } }
+  }
+}

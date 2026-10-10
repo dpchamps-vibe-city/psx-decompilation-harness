@@ -1,0 +1,312 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { deriveAllocationRequirements } from "./allocation-requirements.js";
+import { analyzeDelaySlots } from "./delay-slot.js";
+import { alignFinalRtlToMachine, isBlockMode, rtlCanonical } from "./emission-alignment.js";
+import { analyzeTargetOrderReplay } from "./counterfactual-replay.js";
+import { alignMachineInstructions, machineRefs } from "./machine-alignment.js";
+import { replayScheduler } from "./scheduler-replay.js";
+import { parseRtlInstructions } from "../compiler-trace/rtl-parser.js";
+import { parseEmissionAttribution } from "../compiler-trace/emission-attribution.js";
+import type { SchedulerStage } from "../compiler-trace/types.js";
+import { assertTargetScheduleAnalysis, TARGET_SCHEDULE_SCHEMA_VERSION } from "./types.js";
+import { compareScheduleMechanismProfiles } from "./compare-profiles.js";
+import type { ScheduleMechanismProfile } from "./profile-types.js";
+
+const instruction = (mnemonic: string, operands: string[]) => ({ mnemonic, operands, canonical: `${mnemonic} ${operands.join(",")}` });
+
+function profile(status: ScheduleMechanismProfile["targetOrder"][number]["status"], trace = "trace-a"): ScheduleMechanismProfile {
+  const targetOrder: ScheduleMechanismProfile["targetOrder"][number] = {
+    targetIndexes: [1, 2, 3],
+    stage: "sched",
+    block: 0,
+    legality: status === "unsupported" ? "unsupported" : "legal-under-candidate-dag",
+    status,
+    unsupportedOutcomes: status === "unsupported" ? ["resource-blocked"] : [],
+    interventionKinds: status === "reproducible-with-interventions" ? ["priority-relation"] : [],
+    confidence: "exact",
+  };
+  if (status === "reproducible-with-interventions") targetOrder.bestSupportedInterventionCount = 7;
+  return {
+    schemaVersion: 1,
+    function: "func_test",
+    variantId: trace,
+    sourceHash: trace,
+    assemblyHash: "same-assembly",
+    traceBundleHash: trace,
+    baselineReplay: [{ stage: "sched", block: 0, status: "exact", confidence: "exact" }],
+    targetOrder: [targetOrder],
+    allocationRoles: [],
+    delaySlots: [],
+    preservationRanges: [{ start: 4, end: 20, exact: true }],
+    caveats: [],
+  };
+}
+
+test("migrates schema-v1 analyses with explicit empty replay fields", () => {
+  const analysis = assertTargetScheduleAnalysis({
+    schemaVersion: 1,
+    function: "func_test",
+    target: [],
+    candidate: [],
+    requirements: [],
+  });
+  assert.equal(analysis.schemaVersion, TARGET_SCHEDULE_SCHEMA_VERSION);
+  assert.deepEqual(analysis.emissionAlignment, []);
+  assert.deepEqual(analysis.targetOrderReplays, []);
+});
+
+test("maps emitted UIDs through a proven zero-width memory barrier", () => {
+  const machine = machineRefs([
+    instruction("move", ["t0", "a1"]),
+    instruction("li", ["v0", "4"]),
+  ]);
+  const rtl = parseRtlInstructions(`
+(insn 10 0 11 (set (reg:SI 8 t0) (reg:SI 5 a1)) 1 (nil) (nil))
+(insn 11 10 12 (parallel[ (asm_operands/v ("") ("") 0[ ] [ ] ("fixture.c") 1) (clobber (mem:BLK (scratch) 0)) ]) -1 (nil) (nil))
+(insn 12 11 0 (set (reg:SI 2 v0) (const_int 4)) 1 (nil) (nil))
+`, "mach");
+  const aligned = alignFinalRtlToMachine(machine, rtl);
+  assert.equal(aligned.alignment.filter((item) => item.kind === "zero-width").length, 1);
+  assert.deepEqual(aligned.links.map((link) => link.uid), [10, 12]);
+  assert.deepEqual(machine.map((item) => item.uid), [10, 12]);
+});
+
+/* func_800140C8's block move. A BLKmode set has no single mnemonic: the
+ * backend's output routine decides both the mnemonics and how many there are.
+ * Naming it `sw` from the mode used to let it bind to an unrelated store as an
+ * exact anchor and carry a wrong UID into delay-slot and scheduler reasoning,
+ * so the correct answer here is no canonical at all. */
+test("a BLKmode block move yields no canonical and binds to no store", () => {
+  const rtl = parseRtlInstructions(`
+(insn 16 14 18 (parallel[ (set (mem/s:BLK (plus:SI (reg:SI 29 sp) (const_int 16 [0x10])) 0) (mem/s:BLK (lo_sum:SI (reg:SI 2 v0) (symbol_ref:SI ("D_8005E2AC"))) 0)) (clobber (reg:SI 3 v1)) (clobber (reg:SI 5 a1)) (clobber (reg:SI 6 a2)) (clobber (reg:SI 7 a3)) (use (const_int 2 [0x2])) (use (const_int 1 [0x1])) (use (const_int 0 [0x0])) ]) 293 {movstrsi_internal} (nil) (nil))
+`, "mach");
+
+  assert.equal(rtl.length, 1);
+  assert.ok(isBlockMode(rtl[0]!), "the parallel carries BLKmode memory operands");
+  assert.equal(rtlCanonical(rtl[0]!), undefined, "no mnemonic may be invented for a block move");
+
+  /* An unrelated word store must not be claimed by it. */
+  const machine = machineRefs([instruction("sw", ["v1", "16(sp)"])]);
+  const aligned = alignFinalRtlToMachine(machine, rtl);
+  assert.notEqual(
+    aligned.links.find((link) => link.machineIndex === 0)?.confidence,
+    "exact",
+    "a block move must never anchor a store as an exact match",
+  );
+});
+
+/* With -dp available, five machine instructions share the one UID that emitted
+ * them instead of being guessed at one-to-one. This is the link that stops a
+ * scheduler search from trying to reorder members of a single instruction. */
+test("cc1 -dp attribution links a block-move span to one UID", () => {
+  const attribution = parseEmissionAttribution([
+    "\tsubu\t$sp,$sp,32\t # 43\tsubsi3_internal\t[length = 1]",
+    "\taddiu\t$7,$2,%lo(g)\t # 16\tmovstrsi_internal\t[length = 20]",
+    "\tlb\t$3,0($7)",
+    "\tlb\t$5,1($7)",
+    "\tsb\t$3,16($sp)",
+    "\tsb\t$5,17($sp)",
+  ].join("\n"));
+
+  const machine = machineRefs([
+    instruction("subu", ["sp", "sp", "32"]),
+    instruction("addiu", ["a3", "v0", "%lo(g)"]),
+    instruction("lb", ["v1", "0(a3)"]),
+    instruction("lb", ["a1", "1(a3)"]),
+    instruction("sb", ["v1", "16(sp)"]),
+    instruction("sb", ["a1", "17(sp)"]),
+  ]);
+
+  const aligned = alignFinalRtlToMachine(machine, [], attribution);
+  assert.deepEqual(machine.map((item) => item.uid), [43, 16, 16, 16, 16, 16]);
+  assert.equal(aligned.exactCount, true);
+  assert.ok(
+    aligned.caveats.some((caveat) => caveat.includes("movstrsi_internal") && caveat.includes("5 machine")),
+    "the packet's span must be stated, not just linked",
+  );
+});
+
+/* If the annotated line count and the machine stream disagree, attribution is
+ * about a different stream and must not be forced onto this one. */
+test("cc1 -dp attribution is refused when it does not cover the stream", () => {
+  const attribution = parseEmissionAttribution(
+    "\tsubu\t$sp,$sp,32\t # 43\tsubsi3_internal\t[length = 1]",
+  );
+  const machine = machineRefs([
+    instruction("subu", ["sp", "sp", "32"]),
+    instruction("nop", []),
+  ]);
+  const aligned = alignFinalRtlToMachine(machine, [], attribution);
+  assert.ok(
+    !aligned.caveats.some((caveat) => caveat.includes("cc1 -dp")),
+    "a partial attribution must fall back rather than mislabel",
+  );
+});
+
+test("recomputes readiness for a bounded target-order counterfactual", () => {
+  const target = machineRefs([
+    instruction("li", ["v1", "2"]),
+    instruction("li", ["v0", "1"]),
+    instruction("move", ["t0", "a0"]),
+  ]);
+  const candidate = machineRefs([
+    instruction("li", ["v0", "1"]),
+    instruction("li", ["v1", "2"]),
+    instruction("move", ["t0", "a0"]),
+  ]);
+  candidate.forEach((item, index) => { item.uid = 10 + index * 2; item.block = 0; });
+  const correspondence = [
+    { targetIndex: 0, candidateIndex: 1, candidateUid: 12, confidence: "exact" as const, evidence: [] },
+    { targetIndex: 1, candidateIndex: 0, candidateUid: 10, confidence: "exact" as const, evidence: [] },
+    { targetIndex: 2, candidateIndex: 2, candidateUid: 14, confidence: "exact" as const, evidence: [] },
+  ];
+  const ready = (uids: number[]) => uids.map((uid, rank) => ({ uid, displayedPriority: 1, rawPriority: "1", rank }));
+  const decisions = [
+    { block: 0, cycle: 1, ready: ready([10, 12, 14]), comparatorRanked: [14, 12, 10], ranked: [14, 12, 10], selectedUid: 14, selectedRank: 0, birthPriorityAdjusted: false, reason: "luid-or-list-order" as const, reasonConfidence: "reconstructed" as const, events: [] },
+    { block: 0, cycle: 2, ready: ready([10, 12]), comparatorRanked: [12, 10], ranked: [12, 10], selectedUid: 12, selectedRank: 0, birthPriorityAdjusted: false, reason: "luid-or-list-order" as const, reasonConfidence: "reconstructed" as const, events: [] },
+    { block: 0, cycle: 3, ready: ready([10]), comparatorRanked: [10], ranked: [10], selectedUid: 10, selectedRank: 0, birthPriorityAdjusted: false, reason: "sole" as const, reasonConfidence: "exact" as const, events: [] },
+  ];
+  const scheduler: SchedulerStage = {
+    stage: "sched", instructionPriorities: { "10": { priority: 1, refCount: 0 }, "12": { priority: 1, refCount: 0 }, "14": { priority: 1, refCount: 0 } },
+    decisions, selectionExplanations: [], luidByUid: { "10": 0, "12": 1, "14": 2 }, dependencies: [],
+    sourceOrder: [10, 12, 14], forwardOrder: [10, 12, 14], backwardSelectionOrder: [14, 12, 10], lifetimeChanges: [], caveats: [],
+  };
+  const result = analyzeTargetOrderReplay({
+    target, candidate, correspondence, scheduler,
+    baseline: [{ stage: "sched", block: 0, status: "exact", matchedSelections: 3, totalSelections: 3, matchedReadySets: 3, unsupportedFeatures: [], confidence: "exact", evidence: [] }],
+    maxInterventions: 3,
+  });
+  assert.equal(result.replays[0]?.legality, "legal-under-candidate-dag");
+  assert.equal(result.replays[0]?.status, "reproducible-with-interventions");
+  assert.equal(result.interventionSets[0]?.interventions[0]?.kind, "luid-order");
+  assert.deepEqual(result.interventionSets[0]?.interventions[0]?.uids, [10, 12]);
+});
+
+test("aligns a scheduling window and a consistent hard-register role swap", () => {
+  const target = machineRefs([
+    instruction("andi", ["t6", "a2", "15"]),
+    instruction("srl", ["a2", "a2", "4"]),
+    instruction("lw", ["t7", "36(sp)"]),
+  ]);
+  const candidate = machineRefs([
+    instruction("srl", ["a2", "a2", "4"]),
+    instruction("andi", ["t7", "a2", "15"]),
+    instruction("lw", ["t6", "36(sp)"]),
+  ]);
+  const aligned = alignMachineInstructions(target, candidate);
+  assert.equal(aligned.correspondence[1]?.candidateIndex, 0);
+  assert.equal(aligned.registerRoles.some((role) => role.targetRegister === "t6" && role.candidateRegister === "t7"), true);
+  assert.equal(aligned.registerRoles.some((role) => role.targetRegister === "t7" && role.candidateRegister === "t6"), true);
+});
+
+test("does not hide duplicate-instruction ambiguity", () => {
+  const target = machineRefs([instruction("move", ["t0", "a0"])]);
+  const candidate = machineRefs([
+    instruction("nop", []),
+    instruction("move", ["t0", "a0"]),
+    instruction("nop", []),
+    instruction("move", ["t0", "a0"]),
+  ]);
+  const aligned = alignMachineInstructions(target, candidate);
+  assert.ok(aligned.correspondence[0]?.candidateIndex !== undefined);
+  assert.equal(aligned.correspondence[0]?.confidence, "inferred");
+  assert.match(aligned.correspondence[0]?.evidence.join(" ") || "", /duplicated/);
+});
+
+test("marks an unresolved scheduler tie observational-only", () => {
+  const scheduler: SchedulerStage = {
+    stage: "sched",
+    instructionPriorities: {},
+    decisions: [{
+      block: 0,
+      cycle: 1,
+      ready: [
+        { uid: 10, displayedPriority: 1, rawPriority: "1", rank: 0 },
+        { uid: 12, displayedPriority: 1, rawPriority: "1", rank: 1 },
+      ],
+      comparatorRanked: [10, 12],
+      ranked: [10, 12],
+      selectedUid: 10,
+      selectedRank: 0,
+      birthPriorityAdjusted: false,
+      reason: "luid-or-list-order",
+      reasonConfidence: "inferred",
+      events: [],
+    }],
+    selectionExplanations: [{
+      stage: "sched", block: 0, cycle: 1, selectedUid: 10,
+      orderKeys: [], comparisons: [{ winnerUid: 10, loserUid: 12, criterion: "unresolved", confidence: "inferred", evidence: [] }],
+      confidence: "inferred", caveats: [],
+    }],
+    luidByUid: { "10": 0, "12": 0 },
+    dependencies: [],
+    sourceOrder: [10, 12],
+    forwardOrder: [10, 12],
+    backwardSelectionOrder: [10],
+    lifetimeChanges: [],
+    caveats: [],
+  };
+  const replay = replayScheduler(scheduler)[0]!;
+  assert.equal(replay.reproduced, true);
+  assert.equal(replay.counterfactualEligible, false);
+});
+
+test("derives a pairwise allocno reversal only for conflicting swapped roles", () => {
+  const roles = [
+    { targetRegister: "t6", candidateRegister: "t7", targetIndexes: [1], candidateIndexes: [1], pseudos: [105], confidence: "reconstructed" as const, evidence: [] },
+    { targetRegister: "t7", candidateRegister: "t6", targetIndexes: [2], candidateIndexes: [2], pseudos: [102], confidence: "reconstructed" as const, evidence: [] },
+  ];
+  const pseudos = [
+    { pseudo: 105, conflicts: [{ register: 102, kind: "pseudo", confidence: "exact" }], preferences: [], stages: [], transitions: [], lifetimes: [], modes: [], userVariable: false, pointer: false, attributes: [], firstStage: "rtl", lastStage: "greg" },
+    { pseudo: 102, conflicts: [{ register: 105, kind: "pseudo", confidence: "exact" }], preferences: [], stages: [], transitions: [], lifetimes: [], modes: [], userVariable: false, pointer: false, attributes: [], firstStage: "rtl", lastStage: "greg" },
+  ] as any;
+  const derived = deriveAllocationRequirements(roles, pseudos, [
+    { pseudo: 102, rank: 0, assignedRegister: "t6" },
+    { pseudo: 105, rank: 1, assignedRegister: "t7" },
+  ]);
+  assert.equal(derived.allocation.length, 1);
+  assert.deepEqual(derived.allocation[0]?.desiredOrder, [105, 102]);
+});
+
+test("classifies assembly-equivalent supported-to-resource-blocked replay as regressed", () => {
+  const baseline = profile("reproducible-with-interventions", "baseline-trace");
+  const variant = profile("unsupported", "variant-trace");
+  variant.targetOrder[0]!.confidence = "inferred";
+  const delta = compareScheduleMechanismProfiles(baseline, variant);
+  assert.equal(delta.finalAssemblyEquivalent, true);
+  assert.equal(delta.verdict, "regressed");
+  assert.match(delta.replayChanges.join("\n"), /replay regressed/);
+  assert.match(delta.reasons.join("\n"), /trace bundles differ/);
+});
+
+test("does not reward a smaller intervention set when replay is unsupported", () => {
+  const baseline = profile("reproducible-with-interventions", "baseline-trace");
+  const variant = profile("unsupported", "variant-trace");
+  variant.targetOrder[0]!.bestSupportedInterventionCount = 1;
+  const delta = compareScheduleMechanismProfiles(baseline, variant);
+  assert.equal(delta.verdict, "regressed");
+});
+
+test("reports the wrong own-block branch delay candidate and desired UID", () => {
+  const target = machineRefs([
+    instruction("srl", ["a2", "a2", "4"]),
+    instruction("bnez", ["v0", "<branch-target>"]),
+    instruction("srl", ["a2", "a2", "4"]),
+  ]);
+  const candidate = machineRefs([
+    instruction("srl", ["a2", "a2", "4"]),
+    instruction("bnez", ["v0", "<branch-target>"]),
+    instruction("move", ["t3", "a0"]),
+  ]);
+  candidate.forEach((item, index) => { item.uid = 10 + index; });
+  const correspondence = [
+    { targetIndex: 0, candidateIndex: 0, candidateUid: 10, confidence: "exact" as const, evidence: [] },
+    { targetIndex: 1, candidateIndex: 1, candidateUid: 11, confidence: "exact" as const, evidence: [] },
+    { targetIndex: 2, candidateIndex: 0, candidateUid: 10, confidence: "reconstructed" as const, evidence: [] },
+  ];
+  const delay = analyzeDelaySlots(target, candidate, correspondence);
+  assert.equal(delay.analyses[0]?.candidateDelayUid, 12);
+  assert.equal(delay.analyses[0]?.desiredCandidateUid, 10);
+  assert.equal(delay.requirements.length, 1);
+});

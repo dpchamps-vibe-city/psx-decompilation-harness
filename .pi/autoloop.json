@@ -1,0 +1,16 @@
+{
+  "commitOnMatch": false,
+  "commitOnPark": false,
+  "runtimeDir": "run_output/autoloop",
+  "approvalsDir": "notes/human-needed-approvals",
+  "integration": {
+    "mode": "patch",
+    "allowCommits": false,
+    "allowedRoots": ["src", "include", "configs", "notes", "plans"]
+  },
+  "sourcePolicy": {
+    "allowEmptyMemoryBarrier": true,
+    "allowStackPointerSwitch": true,
+    "allowlist": {}
+  }
+}

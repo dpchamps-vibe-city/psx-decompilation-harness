@@ -1,0 +1,387 @@
+---
+name: psx-decompile-function
+description: Decompile or repair one function in a PlayStation matching-decompilation project by running a measured experiment loop against the staged residual, using the pipeline reversal to locate the owning compiler pass and the reference sheets for the mechanism that pass obeys.
+---
+
+# PlayStation function decompilation
+
+Work on exactly the target named in the invocation. Derive every game,
+compiler, assembler, SDK, build, and layout fact from the current project, not
+from memory. Do not commit or create a worktree unless asked.
+
+A project builds more than one binary. The target's **container** — which binary
+holds it — decides its source path, its original assembly, its compiler flags
+and its symbol map, and every tool here derives that from the function's name.
+So you do not name a container, look one up, or reconstruct a path from one: ask
+for the function by name and use the path the tool answers with. Two things
+follow and both matter. A path you assemble yourself (`src/<name>.c`) names a
+file that may not exist, and a tool reading a file that is not there reports a
+clean function it never opened. And an address is not an identity: containers
+share RAM, so two functions can sit at one address, and only the name or an
+explicit `<container>:<address>` key tells them apart.
+
+## The one rule
+
+**You do not stop until the function is byte-exact.**
+
+One *experiment* is one edit and one measurement. A session runs experiments
+back to back — ten, thirty, as many as it takes — and does not pause between
+them to summarise, check in, or report. There is no per-response budget of one
+experiment, and there is no such thing as a good stopping point that is not a
+match.
+
+Two things end the work, and only two:
+
+- `psx_finalize_function` passes; or
+- you hit something only a human can decide — an allowlist entry, a policy
+  exception. Say which, and say it in one paragraph.
+
+"I classified the residual and identified the next experiment" is not a result.
+If you can name the next experiment, **you have time to run it**: the compile is
+under a second. Never write "next experiment, when resuming" — run it, measure
+it, and keep going.
+
+The single experiment is small for one reason only: attribution. Two edits and
+one measurement attribute to neither. That is a rule about *pairing*, never
+about pace.
+
+## Open the session — once
+
+The controller supplies a compact **prepared first-pass handoff** before the
+first solver turn. Read its measured source and selected `context.c`, then the
+relevant facts in `evidence.md` and diagnostic links. `packet.json` is an internal
+freshness manifest, not an ordinary startup reading task: do not load its complete
+provenance or declaration catalogue. Fresh equivalent evidence in the handoff
+satisfies the corresponding startup checks; do not regenerate material already
+supplied.
+
+If no handoff was supplied, call **psx_m2c** first. It prepares faithful target
+context and measurements under `build/preparation/`, without replacing live
+work. Inspect its diagnostics and evidence-backed unknowns before editing.
+Preserve unresolved types and signatures until evidence establishes them.
+
+- **Fresh stub:** the primary is the raw, mechanically wrapped m2c draft. A
+  noncompiling draft stays under `build/`; edit/measure that actual source and
+  integrate only after it compiles and passes AST/policy/scope checks. Never
+  report a build of the untouched assembly stub as verification of the draft.
+- **Resume:** the existing clean-C attempt stays primary. Refresh its context
+  and measurements. A new m2c draft is an explicitly requested alternative,
+  never an automatic replacement, even when the attempt currently fails.
+- **Exact:** safe integration followed by the authoritative full finalization
+  gate is required. A scratch byte match is not completion. The controller can
+  finalize static exact candidates without a solver turn.
+- **Generation failure:** inspect the preserved input/context and full streams.
+  The absence of C is legitimate evidence, not a request for invented C.
+
+**The m2c draft is a transcription of the compiled code, not its source.** m2c
+writes the optimizer's work as if a programmer had typed it. Two common cases:
+- an accumulator stepped by a shifted constant, where the loop pass reduced a
+  plain increment;
+- a chain of temporaries and separate statements, where the programmer wrote
+  one expression.
+
+Before measuring, rewrite each derived form into the operation a programmer
+would have written. Keep the draft's form only where a measurement shows the
+natural one standing further away. Reasoning about what the compiler "would
+emit" for the natural form is not that measurement. A line-by-line
+transcription can byte-match its own block while fixing the state the earlier
+passes see, so no later edit escapes it. `psx_reference population`, section 2,
+gives the mechanism.
+
+Read `psx_experiment_ledger` for prior measurements and their premises unless
+fresh handoff evidence already includes it. Run `psx_triage` and
+`psx_callee_truth` for the actual source being authored when their equivalent
+fresh reports are absent. A blocker must be resolved before allocation or
+scheduling work. Run `psx_reverse_pipeline` once a compiling non-exact source
+has a residual. Never fabricate a residual for a failed compile or relocation.
+
+Reconstruction, family transfer, idiom retrieval and deeper diagnostics remain
+available **on demand**, not as prerequisites to m2c or as a competing automatic
+seed priority. Preserve declarations requiring publication in the evidence and
+integrate them explicitly into the designated headers.
+
+**This is the only classification pass you get.** The residual is now
+classified. From here, every diagnostic you run must be followed by an edit and
+a measurement before you run another one. A second and third read of the same
+report is not evidence-gathering, it is avoidance — the most common way this
+work fails is a beautifully argued classification with one measurement under it.
+Reading the rule a report points at is part of that report, not another
+diagnostic; OBSERVE, below, says how far that goes.
+
+## The experiment
+
+Repeat continuously. There is no give-up condition: when an axis runs out, the
+next section says what to reach for instead.
+
+### 1. OBSERVE — one tool
+
+Run one tool. Write **at most three bullets**, each a fact the tool printed. No
+inference, no consequences, no plan. If you catch yourself writing "which
+means", you have left this step.
+
+You may not run a second diagnostic without an intervening measurement. If the
+report you have does not name an edit, guess from the best evidence in it and
+measure the guess — a measured wrong guess is worth more than a fourth reading.
+
+Reading the rule behind the report is part of this step, not a second
+diagnostic: the mechanism sheet the tool names, or the compiler function that
+makes the decision it reports. Read it once, then hypothesise. Another tool run,
+or a second pass over the same rule, is the reading this step forbids.
+
+### 2. HYPOTHESISE — one sentence
+
+Fill in every slot from step 1's bullets:
+
+> `<edit>` should lower **`<term>`** in **block `<n>`**, because `<mechanism the
+> tool named>`.
+
+The terms are the staged residual's, in pass order: control flow, population,
+schedule, allocation. A hypothesis that names no term and no block is not
+testable and does not count.
+
+If a slot will not fill, take the best-supported guess and measure it anyway, or
+go to "When it stalls" for a heavier tool. Do not edit on a feeling and
+reverse-engineer the reason afterwards, and do not stop.
+
+Use only the reference sheet for the owning pass; do not reread one already
+loaded in OBSERVE:
+`psx_reference population | loop | schedule | allocation | declarations | flags | sdk`.
+
+### 3. ACT — one edit
+
+Make the edit in the hypothesis. Nothing else — not a rename you noticed, not a
+comment, not a second idea that arrived while typing.
+
+### 4. MEASURE — `psx_residual_objective`
+
+No exceptions, including for edits you are sure about. Read the verdict, never
+the word count:
+
+| verdict | meaning | what to do |
+|---|---|---|
+| `better` | an earlier term fell | keep it; this is the new baseline |
+| `worse` | an earlier term rose | revert, and start the next experiment |
+| `traded` | lost an earlier term, won a later one | keep as a branch, not as the baseline |
+| `identical` | same compiled words | not an experiment; change axis, not spelling |
+| `EXACT` | bytes match | go to Finish |
+
+`ALREADY MEASURED` means a previous session ran this experiment. Believe it and
+move on.
+
+**Then immediately begin the next experiment.** The ledger appends by itself;
+there is nothing to write up. Do not narrate the result, do not restate the
+residual, do not plan two moves ahead — pick the next hypothesis and run it.
+
+## When it stalls, go deeper — do not stop
+
+Three consecutive measurements with no `better` and no `traded` means the *axis*
+is exhausted, not the function. A respelling does not count toward that three:
+a source that reaches a program the ledger has already measured is the same
+program arrived at again, not a measurement that failed to move. That is worth
+knowing — it is how an idea is shown to have been tried — but it is not
+progress and it is not a stall either, so do not report one as a finding. Every function here has clean C that matches it
+100%; a residual that survives hand-authored variants is a signal to bring
+heavier evidence, not to give up.
+
+**Exhausting a spelling family is a positive result, not a failure.** A dozen
+genuinely different sources that all leave the residual where it was have
+proved something: the answer is not a spelling. Firing more variation at the
+same declarations, over the same semantic program, will keep confirming it.
+Change the class of evidence instead — and note that a search, a solver and a
+pass reading all answer the same question, *is this source's output reachable*.
+None of them can tell you the source is wrong about the *program*. The two
+steps that can are first for that reason.
+
+1. **Audit the premises before you model anything.** Every instrument below
+   takes the declarations, the operation boundaries and the symbol boundary as
+   given, so a wrong one is invisible to all of them at once and makes each
+   failed experiment read as evidence that the residual is hard.
+   `psx_callee_truth` confronts every callee declaration in scope with the
+   vendored SDK headers, the callees' own matched definitions and the callees'
+   own compiled code; a proven contradiction invalidates every measurement
+   taken under it. `psx_sdk_idioms` does the same for operation boundaries.
+   `psx_reference stuck` lists the rest — the symbol boundary, the declarations
+   in scope, the predicate, the idiom frame. Each has cost this project a full
+   session while presenting as a codegen impossibility, because from inside the
+   function that is exactly what it looks like.
+
+   A prototype you wrote is a claim, not a fact, and a comment in your own file
+   explaining why the vendored header is wrong is the shape this failure takes
+   from the inside. When your reconstruction and the vendor disagree, the
+   vendor is right.
+
+2. **Read what the author wrote before you model what the compiler did.** The
+   compiler-side tools can only tell you whether the current source's output is
+   reachable; they cannot tell you what the original source was. Two things in
+   this repository can. The vendored SDK headers give the real signature and
+   the real operation for anything the SDK provides. The already-matched
+   functions in this target's file group are the only record of how this author
+   actually wrote code — which locals they kept live, how they walked an array,
+   what they hoisted out of a loop, how they spelled a guard. Byte-exact
+   neighbours are the idiom dictionary; `notes/file-groupings.md` names the
+   group, and reading three of its members is cheaper than one pass reading.
+
+   `psx_idiom_search` answers this without you having to guess which neighbours
+   to read: query with the target's own assembly — a block, or the whole
+   function — and it returns the matched functions whose original code carries
+   the same shapes, with the C that produced them. It reports an alignment
+   ("14 of its 17 shapes align in order"), which you can check against the two
+   listings, and it says what the toolchain distance permits the hit to claim.
+   `psx_residual_signatures` is the same question keyed on the residual: if
+   another function carried this block's exact residual shape and closed it,
+   the tool prints the diff of the edit that did.
+
+   A group lives inside one container, so read neighbours from the target's own
+   container. Another binary's code is a different build with its own flags and
+   possibly a different author, and its idioms are a claim about it, not about
+   this target.
+
+   A neighbour's **attempt** is evidence too, and of a different kind. Its
+   preserved source may be wrong about the function and still be right about the
+   compiler: run `psx_loop_trace` on it and its trace says which mechanisms are
+   reachable in this cluster — which givs reduce, which hoists happen in which
+   pass — measured, for one compile. Two functions of one cluster once sat
+   parked as complementary halves, each one's trace demonstrating the mechanism
+   the other lacked, because both sessions read the sibling only as something a
+   future fix would also close. `psx_triage`'s `cluster-donor` finding does this
+   comparison for you and names the sibling.
+
+   A residual that survives every rewrite of your own idiom is usually somebody
+   else's idiom.
+
+3. **Read the pass that decides it.** Once a residual has survived several
+   spellings, read the rule before generating more of them. The mechanism sheet
+   for the pass is the short form. `psx_compiler_source` searches the configured
+   compiler source; for a supported, verified compiler build it is the authority
+   where no sheet covers the decision. One read of the function that makes the
+   choice can name the source change outright, or end a search: a proof that a
+   form is unreachable is worth more than any number of failed experiments, and
+   it is the only evidence that converts "we could not find it" into "it is not
+   there". A default compiler profile alone does not establish that premise.
+
+4. **Generate shapes from the target instead of guessing at them.**
+   `psx_search_source_shapes` and `psx_synthesize_source_shapes` generate and
+   score shapes from the target's own requirements rather than from a hunch.
+   Read a search result as a **direction**, not a score. Population is the
+   worst axis and allocation the mildest: a candidate that buys register
+   matches with new population differences has gone backwards, however many
+   more words it matches. Take the next experiment from the axis that moved,
+   not from the match count.
+
+5. **Solve for the compiler state, do not model it.**
+   `psx_solve_local_allocation` solves for the local-alloc quantity priorities
+   and lifetimes that would reproduce the target's assignment, and reports
+   `UNSAT_WITHIN_BOUNDS` when none exists inside the bound — which is a real
+   result that closes a direction. `psx_search_scheduler_state` does the same
+   for the ready-list order. `psx_allocator_counterfactual` names which
+   conflicting pseudo won a register and what would have had to differ.
+   `psx_minimize_local_allocation` narrows a broad successful probe to the
+   smallest region that still produces the effect.
+
+   A solution is a **specification for a source shape**, never a solution by
+   itself, and a solver witness is never promoted directly.
+
+6. **Test the flag hypothesis.** `psx_flag_probe`. A per-file override needs the
+   evidence bar in `psx_reference flags`. A matrix showing baseline equal to the
+   delta kills the hypothesis cheaply, which is itself worth knowing. Never use a
+   flag to switch off an optimization the target shows signs of using.
+
+Record what each of these closed with `psx_record_closed`, **and record the
+premise with the closure**. Every impossibility is conditional on its inputs —
+the compiler state you measured it under, the origin you assumed, the threshold
+you had at the time — and a row that does not say so is read by the next session
+as unconditional and never re-opened. Two such rows closed one function for six
+sessions; both proofs were sound and both premises were false. `--conditional-on`
+is where the premise goes, and a later session's job is to attack the premise
+rather than to re-run the proof.
+
+Read that record before running one — an `UNSAT` another session already bought
+costs minutes to buy again. An axis proved empty is progress: the record is printed above the
+measurements in `psx_experiment_ledger` and carried into every escalation, so
+the next session starts from it instead of re-deriving it. Park a function only
+when a human decision is required — an allowlist entry, a policy exception —
+never merely because it is hard.
+
+## What wastes the session
+
+- **Batching.** Two edits, one diff. Both are now unattributable.
+- **Predicting instead of compiling.** Emission order, delay-slot occupancy and
+  register assignment are decided by passes you cannot read off the source.
+- **Chaining unmeasured steps.** "Move this store up, the load follows, which
+  frees the temp, so then…" — everything past the first unmeasured step is
+  fiction.
+- **Reporting a number you did not just measure.**
+- **Stopping to report progress.** A status summary mid-search costs a
+  measurement and buys nothing; the ledger already has the history.
+- **Deferring a named experiment to a later session.** If you can describe
+  it, you can run it.
+- **Steering by the word count.** An edit that fixes a cause rotates everything
+  downstream and can match fewer words while standing closer.
+- **Proving something unreachable without re-deriving what it was proved
+  under.** An impossibility result is conditioned on its inputs. A capable,
+  internally consistent proof aimed at a fabricated premise emits no signal
+  that it is aimed wrong — it just gets more convincing the longer you work.
+  Before writing "blocked", say what the block is conditional on, and check
+  that.
+
+## Before you write source
+
+Read `AGENTS.md` and `configs/project-profile.md`. The profile's header table
+says which file each kind of declaration belongs in and which files are
+generated outputs that must never be hand-edited.
+
+Two things are worth checking once, up front, because getting them wrong
+poisons every later reading:
+
+- **Callee prototypes.** Run `psx_callee_truth`. A wrong prototype adds
+  call-setup moves and corrupts every web and allocation analysis downstream,
+  and nothing else in the stack can see it — the residual, the reversal and the
+  solvers all take the declarations as given. Do not author a signature the
+  tool then has to refute: take it from the vendored header or the callee's own
+  matched definition. For an indirect call, which no declaration scan can
+  reach, inspect the plausible table members before accepting a callback
+  signature; values left in `$a1`–`$a3` at a `jalr` may be dead
+  address-generation state, not arguments.
+- **SDK operation boundaries.** Run `psx_sdk_idioms`. Hand-rolled bitfield
+  arithmetic where the SDK has a macro is a reconstruction error, not a style
+  choice. Restore the operation boundary before reading allocation or
+  scheduling at all — see `psx_reference sdk`.
+
+## Finish
+
+`psx_finalize_function` is the terminal gate: the exact diff, the linked build,
+the scope check and the clean-source check together. A pre-link byte comparison
+is not a finish line. Its build step compares every container the project
+builds, not only the one you edited — an edit to a shared symbol relinks the
+others, and a gate scoped to one binary would pass while another one changed.
+
+Embedded assembly, hard-register pinning and new assembly stubs are not
+decompilation solutions. Where the target genuinely requires one, it needs an
+allowlist entry, and that is a human decision — file it, do not grant it.
+
+## Reporting
+
+There is no progress report. The ledger holds every measurement with its
+residual key, so a written summary of where things stand duplicates it and costs
+an experiment.
+
+You write exactly one of two things, at the end:
+
+- **A match.** What `psx_finalize_function` verified.
+- **A human decision.** The one thing that needs deciding — an allowlist entry,
+  a policy exception — in a paragraph, with the residual key and the axes the
+  ledger shows as closed.
+
+Anything else means you stopped early. A classification with one measurement
+under it is not a result no matter how well argued; if the analysis is good
+enough to write down, it was good enough to test.
+
+## Going deeper
+
+- `psx_reference <topic>` — the mechanism sheets, loaded one at a time
+- `tools/agent/pipeline-reversal/README.md` — what each inverse pass proves and
+  where the chain reports itself unreliable
+- `notes/research/` — one case study per diagnosed phenomenon
+- `notes/retros/` — solved-function post-mortems, including what was tried and
+  did not work
+- `notes/file-groupings.md` — translation-unit membership

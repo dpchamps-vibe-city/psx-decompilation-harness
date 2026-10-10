@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/psx-decompilation-harness/toolchain.schema.json",
+  "title": "PSX decompilation harness toolchain",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "compiler", "tools", "includeDirs", "flags", "profiles", "containerProfiles", "fileFlags", "sdk"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "compiler": {
+      "type": "object", "additionalProperties": false,
+      "required": ["family", "version", "capabilities"],
+      "properties": {
+        "family": { "$ref": "#/$defs/string" },
+        "version": { "$ref": "#/$defs/string" },
+        "source": { "$ref": "#/$defs/string" },
+        "capabilities": { "$ref": "#/$defs/args" }
+      }
+    },
+    "tools": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cc1", "cpp", "as", "ld", "objcopy", "objdump", "nm", "readelf", "python", "splat", "spimdisasm", "maspsx", "m2c"],
+      "properties": {
+        "cc1": { "$ref": "#/$defs/string" }, "cpp": { "$ref": "#/$defs/string" },
+        "as": { "$ref": "#/$defs/string" }, "ld": { "$ref": "#/$defs/string" },
+        "objcopy": { "$ref": "#/$defs/string" }, "objdump": { "$ref": "#/$defs/string" },
+        "nm": { "$ref": "#/$defs/string" }, "readelf": { "$ref": "#/$defs/string" },
+        "python": { "$ref": "#/$defs/string" }, "splat": { "$ref": "#/$defs/string" },
+        "spimdisasm": { "$ref": "#/$defs/string" }, "maspsx": { "$ref": "#/$defs/string" },
+        "m2c": { "$ref": "#/$defs/string" }, "psyq2elf": { "$ref": "#/$defs/string" }
+      }
+    },
+    "includeDirs": { "$ref": "#/$defs/args" },
+    "flags": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cpp", "cc1", "as", "ld", "maspsx", "m2c", "spimdisasm"],
+      "properties": {
+        "cpp": { "$ref": "#/$defs/args" }, "cc1": { "$ref": "#/$defs/args" },
+        "as": { "$ref": "#/$defs/args" }, "ld": { "$ref": "#/$defs/args" },
+        "maspsx": { "$ref": "#/$defs/args" }, "m2c": { "$ref": "#/$defs/args" },
+        "spimdisasm": { "$ref": "#/$defs/args" }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "cc1": { "$ref": "#/$defs/args" }, "as": { "$ref": "#/$defs/args" },
+          "ld": { "$ref": "#/$defs/args" }, "maspsx": { "$ref": "#/$defs/args" }
+        }
+      }
+    },
+    "containerProfiles": { "type": "object", "additionalProperties": { "$ref": "#/$defs/string" } },
+    "fileFlags": { "type": "object", "additionalProperties": { "$ref": "#/$defs/args" } },
+    "sdk": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "convertedDir", "originalDir", "signatures"],
+      "properties": {
+        "version": { "$ref": "#/$defs/string" }, "convertedDir": { "$ref": "#/$defs/string" },
+        "originalDir": { "$ref": "#/$defs/string" }, "signatures": { "$ref": "#/$defs/string" }
+      }
+    }
+  },
+  "$defs": {
+    "string": { "type": "string", "minLength": 1 },
+    "args": { "type": "array", "items": { "$ref": "#/$defs/string" } }
+  }
+}

@@ -1,0 +1,34 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { HARNESS_ROOT } from "../lib/toolchain.js";
+import { compileObject } from "./pipeline.js";
+import { refreshBuildInputs } from "./buildInputs.js";
+import type { Container } from "../lib/container.js";
+
+test("npm build tracks headers, JSON flags, tools and new include members", t => {
+  const root = mkdtempSync(join(tmpdir(), "npm-dependencies-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const dir of ["src", "include", "bin"]) mkdirSync(join(root, dir));
+  const compiler = join(root, "bin/compiler.mjs"), assembler = join(root, "bin/assembler.mjs");
+  writeFileSync(compiler, `#!${process.execPath}\nimport fs from 'node:fs';const a=process.argv.slice(2),i=a.indexOf('-o');fs.appendFileSync('events','compile\\n');fs.writeFileSync(a[i+1],fs.readFileSync(a[i-1]));\n`, { mode: 0o755 });
+  writeFileSync(assembler, `import fs from 'node:fs';const a=process.argv.slice(2);fs.writeFileSync(a[a.indexOf('-o')+1],fs.readFileSync(a.at(-1)));\n`);
+  const config = JSON.parse(readFileSync(join(HARNESS_ROOT, "toolchain.json"), "utf8"));
+  config.compiler.family = "fixture"; config.tools.cc1 = compiler; config.tools.python = process.execPath; config.tools.maspsx = assembler;
+  config.includeDirs = ["include"]; config.flags.cpp = ["-undef"];
+  const save = () => writeFileSync(join(root, "toolchain.json"), JSON.stringify(config)); save();
+  const container = { id: "exe", kind: "exe", paths: { objDir: "build/src", srcDir: "src", asmDir: "build/asm" } } as Container;
+  writeFileSync(join(root, "include/value.h"), "#define VALUE 1\n");
+  writeFileSync(join(root, "src/f.c"), '#include "value.h"\nint f(void) {return VALUE;}\n');
+  const run = () => { refreshBuildInputs(root); compileObject(container, "src/f.c", root); };
+  const count = () => readFileSync(join(root, "events"), "utf8").trim().split("\n").length;
+  run(); assert.equal(count(), 1); assert.match(readFileSync(join(root, "build/src/f.c.o.d"), "utf8"), /include\/value.h/);
+  const time = statSync(join(root, "build/toolchain-inputs.stamp")).mtimeMs;
+  run(); assert.equal(count(), 1); assert.equal(statSync(join(root, "build/toolchain-inputs.stamp")).mtimeMs, time);
+  writeFileSync(join(root, "include/value.h"), "#define VALUE 2\n"); run(); assert.equal(count(), 2);
+  assert.match(readFileSync(join(root, "build/src/f.c.o"), "utf8"), /return 2/);
+  config.fileFlags.f = ["-O1"]; save(); run(); assert.equal(count(), 3);
+  writeFileSync(compiler, readFileSync(compiler, "utf8") + "/* compiler changed */\n"); run(); assert.equal(count(), 4);
+  writeFileSync(join(root, "include/new.h"), "/* new member */\n"); run(); assert.equal(count(), 5);
+});

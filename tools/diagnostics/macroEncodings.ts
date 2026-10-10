@@ -6,7 +6,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { compileSource, configuredAsFlagsForContainer, configuredCppFlags, configuredMaspsxFlags, configuredToolchainIdentity, ROOT } from "../agent/decompToolchain.js";
+import { compileSource, configuredMaspsxFlags, configuredToolchainIdentity, ROOT } from "../agent/decompToolchain.js";
+import { configuredFlags, type FlagContext } from "../lib/toolchain.js";
+import { libraryContext } from "../lib/project.js";
 import { elf32SectionSizes } from "../lib/elfSections.js";
 import type { CommandEncodingEvidence, MacroTemplate, TemplateLibrary } from "./macroTemplates.js";
 
@@ -14,7 +16,8 @@ const digest = (bytes: string | Buffer): string => createHash("sha256").update(b
 const projectPath = (path: string): string => relative(ROOT, path).split("\\").join("/");
 export interface GasMacroDefinition { header: string; headerSha256: string; line: number; macro: string; parameters: string[] }
 export interface RepoEncodingReport {
-  containerKind: "exe" | "overlay";
+  containerKind: FlagContext["kind"];
+  containerId?: string;
   toolchain: ReturnType<typeof configuredToolchainIdentity>;
   cppFlags: string[];
   cc1Flags: string[];
@@ -133,15 +136,17 @@ function substitutionLiteral(template: MacroTemplate, statement: string): string
 /** Pure transforms are intentionally insufficient here: command encodings must
  * have passed the actual project compiler/assembler path for this flag column.
  * Artifacts land only under build/. Failure is fatal, never a foreign fallback. */
-export function deriveRepoMacroEncodings(library: TemplateLibrary, containerKind: "exe" | "overlay" = "exe"): { library: TemplateLibrary; report: RepoEncodingReport } {
+export function deriveRepoMacroEncodings(library: TemplateLibrary, containerKind: FlagContext["kind"] = "exe", containerId?: string): { library: TemplateLibrary; report: RepoEncodingReport } {
   if (library.templates.some(t => t.encodingEvidence.length)) throw new Error("Production encoding derivation requires raw header templates, not previously translated libraries");
-  const base = join(ROOT, "build/macroIdentity/repo-encodings", containerKind);
+  const flagContext: FlagContext = containerKind === "library" ? libraryContext(containerId!) : { kind: containerKind, ...(containerId ? { id: containerId } : {}) };
+  const ownerOptions = { containerKind, ...(containerId ? { containerId } : {}) };
+  const base = join(ROOT, "build/macroIdentity/repo-encodings", containerKind, containerId ?? "default");
   mkdirSync(base, { recursive: true });
   const dir = mkdtempSync(join(base, "probe-"));
   const contextSource = join(dir, "context.c");
   writeFileSync(contextSource, '#include "common.h"\n');
-  const context = compileSource(contextSource, dir, "context", { assemble: false, useOverrides: false, containerKind });
-  const asFlags = configuredAsFlagsForContainer(containerKind);
+  const context = compileSource(contextSource, dir, "context", { assemble: false, useOverrides: false, ...ownerOptions });
+  const asFlags = configuredFlags("as", flagContext);
   const includes = includeClosure(readFileSync(context.assembly, "utf8"), asFlags);
   const gasDefs = includes.flatMap(input => parseGasMacroDefinitions(input.source, projectPath(input.path)));
   const available = new Map<string, GasMacroDefinition[]>();
@@ -160,7 +165,7 @@ export function deriveRepoMacroEncodings(library: TemplateLibrary, containerKind
   // nothing here directly injects a replacement header into that environment.
   const assembly = '.section .macro_identity_probe,"ax",@progbits\n.set noreorder\n' + statements.join("\n") + '\n.set reorder\n.text\n';
   writeFileSync(probeSource, `#include "common.h"\n__asm__(${JSON.stringify(assembly)});\n`);
-  const probe = compileSource(probeSource, dir, "commands", { assemble: true, useOverrides: false, containerKind });
+  const probe = compileSource(probeSource, dir, "commands", { assemble: true, useOverrides: false, ...ownerOptions });
   const object = readFileSync(probe.object!), objectSha256 = digest(object), code = readEncodingProbeSection(object);
   if (code.length !== statements.length * 4) throw new Error("Production GAS command expansions are not exactly one word each; refusing positional mapping");
   const commands = statements.map((statement, index) => ({ statement, word: code.readUInt32LE(index * 4), offset: index * 4 }));
@@ -201,7 +206,7 @@ export function deriveRepoMacroEncodings(library: TemplateLibrary, containerKind
     writeFileSync(path, `/* Generated diagnostic GAS substitutions; include after ${vintage}. */\n${definitions}`);
     reconstructionHeaders.push({ vintage, path: projectPath(path), sha256: digest(readFileSync(path)) });
   }
-  const report: RepoEncodingReport = { containerKind, toolchain: configuredToolchainIdentity(), cppFlags: configuredCppFlags(), cc1Flags: probe.cc1Flags, maspsxFlags: configuredMaspsxFlags(), asFlags, includes: includes.map(input => ({ path: projectPath(input.path), sha256: digest(input.source) })), probeSource: projectPath(probeSource), probeAssembly: projectPath(probe.assembly), probeObject: projectPath(probe.object!), probeObjectSha256: objectSha256, commands, reconstructionHeaders };
+  const report: RepoEncodingReport = { containerKind, ...(containerId ? { containerId } : {}), toolchain: configuredToolchainIdentity(), cppFlags: configuredFlags("cpp", flagContext), cc1Flags: probe.cc1Flags, maspsxFlags: configuredMaspsxFlags(flagContext), asFlags, includes: includes.map(input => ({ path: projectPath(input.path), sha256: digest(input.source) })), probeSource: projectPath(probeSource), probeAssembly: projectPath(probe.assembly), probeObject: projectPath(probe.object!), probeObjectSha256: objectSha256, commands, reconstructionHeaders };
   writeFileSync(join(dir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
   return { library: { templates, diagnostics: diagnostics.filter(d => !d.reason.startsWith("DMPSX sentinel") || templates.some(t => t.header === d.header && t.macro === d.macro && t.blocks.some(b => b.instructions.some(p => p.op === "literal-word")))) }, report };
 }

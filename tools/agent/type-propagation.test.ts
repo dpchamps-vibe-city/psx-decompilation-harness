@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -180,13 +181,37 @@ test("open callback formals do not acquire a supplied member's narrow whole sign
   const inspect = (source: string) => { const tree = parseC(source); try { return tree.rootNode.descendantsOfType("parameter_declaration").flatMap((p) => p.descendantsOfType("type_identifier").map((n) => n.text)); } finally { tree.delete(); } };
   assert.ok(inspect(closed).includes("s16")); assert.ok(!inspect(open).includes("s16"));
 });
-test("configured originals retain matched incoming/cross-container calls and table entries without worklist pruning", () => {
-  const graph = buildEvidenceGraph("ovl_25_func_800B7EB4", { bounds: { functions: 32 } });
-  const root = graph.nodes.find((n) => n.id === graph.root)!;
-  const dispatch = root.calls.find((c) => c.kind === "indirect")!;
-  assert.deepEqual(dispatch.targets.map((t) => t.split(":")[1]), ["ovl_25_func_800B7F3C", "ovl_25_func_800B80A4", "ovl_25_func_800B813C", "ovl_25_func_800B81B4", "ovl_25_func_800B81F4"]);
+test("fixture originals retain incoming/cross-container calls and table entries without worklist pruning", async (t) => {
+  const { harnessFixture } = await import("../testing/harnessFixture.js");
+  const { FIXTURE_BASE, FIXTURE_OVERLAY_BASE: base } = await import("../testing/projectFixture.js");
+  const fixture = harnessFixture(t), table = base + 0xa0;
+  const entry = (name: string, offset: number, lines: AsmLine[]) => ({ name, offset, words: assemble(lines, base + offset).map(w => w.raw) });
+  await fixture.install([{ name: "fixture_engine", offset: 0, words: [0x03e00008, 0] }], { ovl_fixture: [
+    entry("ovl_fixture_dispatch", 0, [["lui", "v0", table >>> 16], ["addiu", "v0", "v0", table & 65535],
+      ["sll", "a0", "a0", 2], ["addu", "v0", "v0", "a0"], ["lw", "v0", 0, "v0"], ["nop"], ["jalr", "v0"], ["nop"], ["jr", "ra"], ["nop"]]),
+    entry("ovl_fixture_one", 0x40, [["jr", "ra"], ["nop"]]),
+    entry("ovl_fixture_two", 0x50, [["jal", FIXTURE_BASE], ["nop"], ["jr", "ra"], ["nop"]]),
+    entry("ovl_fixture_incoming", 0x90, [["jal", base], ["nop"], ["jr", "ra"], ["nop"]]),
+  ] });
+  const imagePath = join(fixture.root, "extracted/overlays/ovl_fixture.bin"), image = readFileSync(imagePath);
+  image.writeUInt32LE(base + 0x40, 0xa0); image.writeUInt32LE(base + 0x50, 0xa4); writeFileSync(imagePath, image);
+  const manifest = JSON.parse(readFileSync(join(fixture.root, "configs/overlays.json"), "utf8"));
+  manifest.members.find((member: { id: string }) => member.id === "ovl_fixture").sha256 = createHash("sha256").update(image).digest("hex");
+  fixture.put("configs/overlays.json", JSON.stringify(manifest));
+  const { resetContainerCache } = await fixture.load<typeof import("../lib/container.js")>("tools/lib/container.ts");
+  resetContainerCache();
+  fixture.put("build/ovl_fixture/asm/data/callbacks.s", ".data\ndlabel fixture_callbacks\n.word ovl_fixture_one, ovl_fixture_two\nenddlabel fixture_callbacks\n");
+  const symbols = "configs/symbols/ovl_fixture.txt";
+  fixture.put(symbols, readFileSync(join(fixture.root, symbols), "utf8") + `fixture_callbacks = 0x${table.toString(16)};\n`);
+  // Even a graph which prunes every work item cannot prune original evidence.
+  fixture.put("build/callGraph.json", JSON.stringify({ functions: [{ name: "ovl_fixture_dispatch", dead: true, decompiled: true }] }));
+  const { buildEvidenceGraph } = await fixture.load<typeof import("./type-propagation/graph.js")>("tools/agent/type-propagation/graph.ts");
+  const graph = buildEvidenceGraph("ovl_fixture_dispatch", { bounds: { functions: 32 } });
+  const root = graph.nodes.find(n => n.id === graph.root)!;
+  const dispatch = root.calls.find(c => c.kind === "indirect")!;
+  assert.deepEqual(dispatch.targets, ["ovl_fixture:ovl_fixture_one", "ovl_fixture:ovl_fixture_two"]);
   assert.equal(dispatch.closed, false); assert.ok(dispatch.remainder.length);
-  assert.ok(graph.nodes.some((n) => n.name === "ovl_25_func_800B81B4"));
-  assert.ok(graph.nodes.some((n) => n.calls.some((c) => c.targets.includes("exe:func_80013328"))));
+  assert.ok(graph.nodes.some(n => n.name === "ovl_fixture_incoming"), "original incoming callers survive worklist pruning");
+  assert.ok(graph.nodes.some(n => n.calls.some(c => c.targets.includes("exe:fixture_engine"))));
   assert.ok(graph.frontier.length > 0); assert.ok(graph.consumed.functions <= 32);
 });

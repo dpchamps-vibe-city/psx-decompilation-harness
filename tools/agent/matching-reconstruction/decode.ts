@@ -8,6 +8,8 @@
  * case, never as a skippable line.
  */
 
+import type { RenderedWord } from "../../lib/functionOracle.js";
+
 export const REGISTER_NAMES = [
   "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
   "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
@@ -52,6 +54,25 @@ export interface DecodedInsn {
   target?: number;
   /** The 20-bit code field of a `break`. */
   code?: number;
+  coordinate?: RenderedWord["coordinate"];
+  relocations?: RenderedWord["relocations"];
+}
+
+/** Decode the common oracle view without pretending ET_REL fields are linked. */
+export function decodeFunctionWords(words: RenderedWord[]): DecodedInsn[] {
+  return words.map(word => {
+    const insn = decodeWord(word.raw, word.vram);
+    if (word.coordinate) insn.coordinate = word.coordinate;
+    if (word.relocations?.length) {
+      insn.relocations = word.relocations;
+      const transfer = word.relocations.find(r => ["R_MIPS_26", "R_MIPS_PC16"].includes(r.type));
+      if (transfer) {
+        if (transfer.targetOffset === undefined) delete insn.target;
+        else insn.target = transfer.targetOffset;
+      }
+    }
+    return insn;
+  });
 }
 
 const LOAD_OPS = new Set<DecodedOp>(["lb", "lbu", "lh", "lhu", "lw"]);

@@ -90,6 +90,7 @@ export interface LiftResult extends MachineIr {
 function keyOf(op: ValueOp): string {
   switch (op.kind) {
     case "const": return `c${op.value >>> 0}`;
+    case "symbol": return `symbol:${op.part}:${op.reference}:${op.addend}`;
     case "entry": return `e${op.register}`;
     case "phi": return `p${op.block}:${op.inputs.join(",")}`;
     case "unary": return `u${op.op}:${op.operand}`;
@@ -469,6 +470,22 @@ function applyInstruction(
   const rt = registers[insn.rt]!;
   const constant = (value: number): ValueId => constantOf(builder, value, block);
   const bin = (op: BinaryOp, left: ValueId, right: ValueId): ValueId => binary(builder, op, left, right, block, insn.vram);
+  const relocation = insn.relocations?.[0];
+  const symbolic = (part: Extract<ValueOp, { kind: "symbol" }>["part"]): ValueId => intern(builder,
+    { kind: "symbol", reference: relocation!.reference, addend: relocation!.addend, part }, block, insn.vram);
+  // A relocation field is never an ordinary literal. Fold a HI/LO pair only
+  // when its base proves the same high; otherwise retain the base expression.
+  let relocatedAddress: ValueId | undefined;
+  if (relocation?.type === "R_MIPS_HI16" && insn.op === "lui") {
+    set(insn.rt, symbolic("high")); return { memory };
+  }
+  if (relocation && ["R_MIPS_LO16", "R_MIPS_GPREL16"].includes(relocation.type)) {
+    const base = builder.values[rs]?.op;
+    const sameHigh = base?.kind === "symbol" && base.part === "high" && base.reference === relocation.reference && base.addend === relocation.addend;
+    const originalGp = relocation.type === "R_MIPS_GPREL16" && base?.kind === "entry" && base.register === "gp";
+    relocatedAddress = sameHigh || originalGp ? symbolic("address") : bin("add", rs, symbolic(relocation.type === "R_MIPS_LO16" ? "low" : "gp-relative"));
+    if (["addiu", "addi", "ori"].includes(insn.op)) { set(insn.rt, relocatedAddress); return { memory }; }
+  }
 
   switch (insn.op) {
     case "nop": return { memory };
@@ -506,14 +523,14 @@ function applyInstruction(
     case "mfhi": set(insn.rd, registers[HI]!); return { memory };
     case "mflo": set(insn.rd, registers[LO]!); return { memory };
     case "lb": case "lbu": case "lh": case "lhu": case "lw": {
-      const address = bin("add", rs, constant(insn.simm));
+      const address = relocatedAddress ?? bin("add", rs, constant(insn.simm));
       set(insn.rt, intern(builder, {
         kind: "load", address, width: loadWidth(insn.op), signed: loadSigned(insn.op), memory,
       }, block, insn.vram));
       return { memory };
     }
     case "sb": case "sh": case "sw": {
-      const address = bin("add", rs, constant(insn.simm));
+      const address = relocatedAddress ?? bin("add", rs, constant(insn.simm));
       const width: 1 | 2 | 4 = insn.op === "sw" ? 4 : insn.op === "sh" ? 2 : 1;
       const effect = pushEffect(builder, { kind: "store", address, value: rt, width }, block, insn.vram, nextOrder());
       return { memory: pushMemory(builder, { kind: "store", effect, from: memory }, block) };
@@ -522,14 +539,14 @@ function applyInstruction(
       /* Half of an unaligned word access. The value it produces depends on the
        * register's previous contents as well as memory, so both are operands —
        * which is exactly what makes it opaque rather than a load. */
-      const address = bin("add", rs, constant(insn.simm));
+      const address = relocatedAddress ?? bin("add", rs, constant(insn.simm));
       const source = { vram: insn.vram, op: insn.op };
       set(insn.rt, intern(builder, { kind: "opaque", source, operands: [address, rt] }, block, insn.vram));
       builder.opaque.push({ vram: insn.vram, op: insn.op, note: "half of an unaligned word load; the pair moves one word" });
       return { memory };
     }
     case "swl": case "swr": {
-      const address = bin("add", rs, constant(insn.simm));
+      const address = relocatedAddress ?? bin("add", rs, constant(insn.simm));
       const source = { vram: insn.vram, op: insn.op };
       const effect = pushEffect(builder, { kind: "opaque", source, operands: [address, rt] }, block, insn.vram, nextOrder());
       builder.opaque.push({ vram: insn.vram, op: insn.op, note: "half of an unaligned word store; the pair moves one word" });
@@ -541,7 +558,9 @@ function applyInstruction(
       /* Outgoing-argument slots are memory the caller wrote; the IR records
        * the addresses it would read rather than resolving them here, so the
        * call effect stays a pure description of the transfer. */
-      const op: Effect["op"] = insn.op === "jal" && insn.target !== undefined
+      const op: Effect["op"] = insn.op === "jal" && relocation?.type === "R_MIPS_26"
+        ? { kind: "call", targetSymbol: { reference: relocation.reference, addend: relocation.addend }, args, memory }
+        : insn.op === "jal" && insn.target !== undefined
         ? { kind: "call", target: insn.target >>> 0, args, memory }
         : { kind: "call", through: callThrough ?? registers[insn.rs]!, args, memory };
       const effect = pushEffect(builder, op, block, insn.vram, nextOrder());

@@ -29,13 +29,13 @@ test("copies retain one value but open two webs; register reuse is not identity"
   const reused = partition([["addiu", "v0", "zero", 7], ["sw", "v0", 0, "a0"], ["addiu", "v0", "zero", 8], ["sw", "v0", 4, "a0"]]);
   assert.deepEqual(reused.webs.filter(w => w.residences[0]!.register === "v0").map(w => w.identity?.key), ["const:7", "const:8"]);
 });
-test("fused/split directives cite a prior closure, rather than a register pin", () => {
+test("fused/split directives cite portable mechanisms, not missing game research or register pins", () => {
   const d = diffWebPartitions(partition(split), partition(fused, "candidate"));
   assert.equal(d.facts[0]?.class, "fused"); assert.equal(d.facts[0]?.identity, "const:7");
   assert.match(d.facts[0]!.directive.text, /named typed temporary/);
   assert.ok(d.facts[0]!.directive.citations.every(c => existsSync(join(ROOT, c.path))));
   const inv = diffWebPartitions(partition(fused), partition(split, "candidate"));
-  assert.equal(inv.facts[0]?.class, "split"); assert.equal(inv.facts[0]?.directive.citations[0]?.kind, "closure");
+  assert.equal(inv.facts[0]?.class, "split"); assert.equal(inv.facts[0]?.directive.citations[0]?.kind, "mechanism");
   assert.deepEqual(addressedWebFacts(d, diffWebPartitions(partition(split), partition(split, "candidate"))), ["fused:const:7"]);
   assert.deepEqual(addressedWebFacts(d, { ...d, facts: [], undetermined: [{ identity: "const:7", reason: "lost proof" }] }), []);
 });

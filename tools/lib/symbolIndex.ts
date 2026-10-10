@@ -229,7 +229,7 @@ function computeSymbolIndex(target: Container): SymbolIndex {
   const byAddress = new Map<number, string>();
 
   for (const relative of assignmentFiles(target)) {
-    const file = join(ROOT, relative);
+    const file = join(target.projectRoot ?? ROOT, relative);
     if (!existsSync(file)) continue;
     for (const line of readFileSync(file, "utf-8").split("\n")) {
       const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(0x[0-9A-Fa-f]+)/);
@@ -308,7 +308,7 @@ function loadLinkerScriptSymbols(container: Container): Map<string, number> {
   const splatPath = containerPath(container, "splat");
   const yaml = existsSync(splatPath) ? readFileSync(splatPath, "utf-8") : "";
   const scriptPath = yaml.match(/ld_script_path:\s*(\S+)/)?.[1] ?? container.paths.ldScript;
-  const file = join(ROOT, scriptPath);
+  const file = join(container.projectRoot ?? ROOT, scriptPath);
   if (!existsSync(file)) return result;
   for (const line of readFileSync(file, "utf-8").split("\n")) {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(0x[0-9A-Fa-f]+)\s*;/);
@@ -332,7 +332,7 @@ function computeSymbolAddresses(target: Container): Map<string, number> {
   const byName = new Map<string, number>(loadLinkerScriptSymbols(target));
 
   for (const relative of assignmentFiles(target)) {
-    const file = join(ROOT, relative);
+    const file = join(target.projectRoot ?? ROOT, relative);
     if (!existsSync(file)) continue;
     for (const line of readFileSync(file, "utf-8").split("\n")) {
       const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(0x[0-9A-Fa-f]+)/);

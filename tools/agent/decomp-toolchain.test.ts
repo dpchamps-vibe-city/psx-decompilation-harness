@@ -1,5 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import { join } from "node:path";
+import { projectFixture } from "../testing/projectFixture.js";
 import {
   configuredAsFlagsForContainer,
   configuredCc1FlagsForContainer,
@@ -37,26 +39,22 @@ test("empty stderr means every callee is declared", () => {
   assert.deepEqual(parseImplicitDeclarationWarnings(""), []);
 });
 
-test("a symbol's container comes from its own name", () => {
-  /* An overlay's symbols carry their container id as a prefix and the
-     executable's do not, so no caller ever has to name a container. */
-  assert.equal(containerKindForSymbol("func_80011C24"), "exe");
-  assert.equal(containerForSymbol("func_80011C24")?.id, "exe");
-  assert.equal(containerKindForSymbol("ovl_31_func_800B82E8"), "overlay");
-  assert.equal(containerForSymbol("ovl_31_func_800B82E8")?.id, "ovl_31");
-  /* A name no container claims is the executable's, not an error: that is what
-     a synthetic stem from a probe or a trace looks like. */
-  assert.equal(containerKindForSymbol("probe_stem"), "exe");
+test("a symbol's container comes from its own name", (t) => {
+  const { root } = projectFixture(t);
+  assert.equal(containerKindForSymbol("fixture_entry", root), "exe");
+  assert.equal(containerForSymbol("fixture_entry", root)?.id, "exe");
+  assert.equal(containerKindForSymbol("ovl_fixture_helper", root), "overlay");
+  assert.equal(containerForSymbol("ovl_fixture_helper", root)?.id, "ovl_fixture");
+  assert.equal(containerKindForSymbol("probe_stem", root), "exe", "unclaimed probe stems keep the image default");
 });
 
-test("source and assembly resolve into the symbol's own container", () => {
-  assert.match(sourcePathFor("func_80011C24"), /\/src\/func_80011C24\.c$/);
-  assert.match(sourcePathFor("ovl_31_func_800B82E8"), /\/src\/overlays\/ovl_31\/ovl_31_func_800B82E8\.c$/);
-  assert.match(sourceDirFor("ovl_31_func_800B82E8"), /\/src\/overlays\/ovl_31$/);
-
-  const asm = resolveAsmSource("ovl_31_func_800B8348");
-  assert.ok(asm, "the overlay's original assembly should resolve");
-  assert.match(asm!, /\/build\/ovl_31\//);
+test("source and assembly resolve into the symbol's own container", (t) => {
+  const { root } = projectFixture(t);
+  assert.equal(sourcePathFor("fixture_entry", root), join(root, "src/fixture_entry.c"));
+  assert.equal(sourcePathFor("ovl_fixture_helper", root), join(root, "src/overlays/ovl_fixture/ovl_fixture_helper.c"));
+  assert.equal(sourceDirFor("ovl_fixture_helper", root), join(root, "src/overlays/ovl_fixture"));
+  const asm = resolveAsmSource("ovl_fixture_helper", root);
+  assert.equal(asm, join(root, "build/ovl_fixture/asm/nonmatchings/ovl_fixture_helper/ovl_fixture_helper.s"));
 });
 
 test("unselected overlay profiles inherit base flags without guessing -G0", () => {

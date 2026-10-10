@@ -4,20 +4,19 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { basename, join, relative } from "path";
 import {
-  AS_FLAGS,
-  configuredCc1FlagsForContainer,
-  containerForSymbol,
-  CPP_FLAGS,
   ROOT,
   assembleCompilerOutput,
   assembleTarget,
   compileSource,
   configuredCompilerPath,
-  configuredTool,
   disassembleObject,
   loadFlagOverrides,
+  preprocessOnly,
   resolveSource,
 } from "../decompToolchain.js";
+import { configuredFlags } from "../../lib/toolchain.js";
+import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
+import { projectCompilerArtifacts, resetCompilerArtifacts, writeObjectFunctionView } from "../../lib/compilerArtifacts.js";
 import type { AllocatorCounterfactualAnalysis } from "../allocator-counterfactual/types.js";
 import { buildDiagnosticCompiler } from "./build.js";
 import {
@@ -143,14 +142,15 @@ export function compileOracleVariant(
   const object = join(directory, `${stem}.c.o`);
   const log = join(directory, "events.jsonl");
   if (existsSync(log)) rmSync(log);
-  execFileSync(configuredTool("cpp"), [...CPP_FLAGS, source, "-o", preprocessed], {
-    cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024,
-  });
-  const overrides = loadFlagOverrides().get(stem) || [];
+  const target = resolveFunctionTarget(functionName);
+  resetCompilerArtifacts(directory, stem);
+  preprocessOnly(source, directory, stem, target.flags);
+  const overrides = loadFlagOverrides().get(target.owner.kind === "library" ? target.owner.id : stem) || [];
   requireCompilerCapability("gcc-rtl-dumps");
-  const owner = containerForSymbol(stem);
-  const flags = [...configuredCc1FlagsForContainer(owner?.kind ?? "exe", owner?.id), ...overrides, "-da"];
-  const environment: Record<string, string> = { PSX_ORACLE_LOG: log };
+  const flags = [...configuredFlags("cc1", target.flags), ...overrides, "-da"];
+  // UIDs/pseudos repeat across functions. Scope both logging and interventions,
+  // while compiling the complete TU under its normal declarations/neighbors.
+  const environment: Record<string, string> = { PSX_ORACLE_LOG: log, PSX_ORACLE_FUNCTION: target.symbol };
   if (interventions.scheduleEdges.length > 0) {
     environment.PSX_ORACLE_SCHEDULE_EDGES = interventions.scheduleEdges
       .map((edge) => `${edge.beforeUid}<${edge.afterUid}`).join(",");
@@ -164,7 +164,9 @@ export function compileOracleVariant(
       .map((assignment) => `${assignment.pseudo}:${assignment.hardRegister}`).join(",");
   }
   runCc1(compiler, preprocessed, assembly, directory, flags, environment);
-  assembleCompilerOutput(assembly, object, owner?.kind ?? "exe", owner?.id);
+  assembleCompilerOutput(assembly, object, target.owner.kind, target.owner.id);
+  projectCompilerArtifacts(directory, stem, target.symbol, target.flags);
+  writeObjectFunctionView(object, target.symbol);
   return { object, events: parseOracleEvents(existsSync(log) ? readFileSync(log, "utf8") : "") };
 }
 

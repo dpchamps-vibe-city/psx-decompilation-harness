@@ -31,6 +31,7 @@ import {
   normalizeFunctionName,
   resolveSource,
 } from "./decompToolchain.js";
+import { requireCompilerCapability } from "../lib/toolchain.js";
 import { detectAllocationFeedback } from "./compiler-trace/hard-register-hazards.js";
 import { analyzeAllocation, applyAllocation } from "./compiler-trace/local-allocation.js";
 import { buildPseudoProvenance } from "./compiler-trace/pseudo-provenance.js";
@@ -165,6 +166,7 @@ export interface ExistingTraceArtifacts {
 /** Parse a compatible preserved GCC -da directory without invoking cc1 again. */
 export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): CompilerTraceReport {
   const funcName = options.functionName;
+  requireCompilerCapability("gcc-rtl-dumps");
   const source = resolveSource(funcName, options.sourcePath);
   const outputDirectory = options.outputDirectory;
   mkdirSync(outputDirectory, { recursive: true });
@@ -288,6 +290,7 @@ export function buildTraceReport(
   useOverrides: boolean = true,
   requestedOutputDirectory?: string,
 ): CompilerTraceReport {
+  requireCompilerCapability("gcc-rtl-dumps");
   const source = resolveSource(funcName, requestedSource);
   const outputDirectory = requestedOutputDirectory
     ? (isAbsolute(requestedOutputDirectory) ? requestedOutputDirectory : join(ROOT, requestedOutputDirectory))

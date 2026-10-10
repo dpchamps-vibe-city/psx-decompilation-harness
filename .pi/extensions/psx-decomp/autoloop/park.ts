@@ -5,6 +5,7 @@ import { runCommand } from "../../shared/process.ts";
 import type { PolicyFinding } from "../../shared/types.ts";
 import { declaresIncludeAsm, inspectSource, type SourceFacts } from "./c-ast.ts";
 import type { LoopConfig, ParkRecord, ParkReason } from "./types.ts";
+import { loadLibraryProject } from "../../../../tools/lib/project.js";
 
 /**
  * The stub a parked function is returned to.
@@ -15,6 +16,7 @@ import type { LoopConfig, ParkRecord, ParkReason } from "./types.ts";
  * broken park rather than a wrong path.
  */
 export function canonicalStub(projectRoot: string, functionName: string): string {
+  if (loadLibraryProject(projectRoot)) throw new Error("Cannot synthesize a single-function library fallback; preserve the owning TU and its existing INCLUDE_ASM stubs");
   return [
     '#include "common.h"',
     '#include "include_asm.h"',
@@ -130,6 +132,10 @@ async function inspectText(input: PlanParkInput, name: string, source: string): 
  * be the thing that breaks the build.
  */
 export async function planPark(input: PlanParkInput): Promise<ParkPlan> {
+  if (loadLibraryProject(input.projectRoot)) return {
+    source: input.attemptSource, preserved: true,
+    reasons: ["Library park preserves the complete member TU unchanged; no disabled neighbor bodies or original-object fallback"],
+  };
   const reasons: string[] = [];
 
   const committed = input.committedSource === undefined ? undefined : stripPreviousPark(input.committedSource);
@@ -200,7 +206,7 @@ export function buildApprovalNote(record: ParkRecord, attemptSource: string, pla
     `- **Parked:** ${record.parkedAt}`,
     `- **Reason:** ${record.reason}`,
     `- **Escalation reached:** ${record.reachedTier}`,
-    `- **Source:** \`${record.sourcePath ?? `src/${record.functionName}.c`}\` (INCLUDE_ASM restored)`,
+    `- **Source:** \`${record.sourcePath ?? `src/${record.functionName}.c`}\` (image stub restored; library TU retained)`,
     ...(record.attemptNote ? [`- **Preserved attempt:** ${record.attemptNote}`] : []),
     ...(planReasons.length ? [`- **Parking notes:** ${planReasons.join("; ")}`] : []),
     "",

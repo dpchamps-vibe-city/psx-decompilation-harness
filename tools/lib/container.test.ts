@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { projectFixture, FIXTURE_BASE, FIXTURE_GP } from "../testing/projectFixture.js";
 import {
   EXE_CONTAINER_ID,
   containersCovering,
@@ -77,17 +78,21 @@ test("containers sharing a load address are grouped into one slot", () => {
   assert.deepEqual(slots.get(0x8012dde8)!.map((c) => c.id), ["ovl_15"]);
 });
 
-test("the project loads an exe container whose geometry comes from the binary header", () => {
-  const exe = loadContainer(EXE_CONTAINER_ID);
+test("a fixture project loads an exe container whose geometry comes from the binary header", (t) => {
+  const { root } = projectFixture(t);
+  const exe = loadContainer(EXE_CONTAINER_ID, root);
   assert.ok(exe, "the exe container always exists");
   assert.equal(exe!.kind, "exe");
   assert.equal(exe!.payloadOffset, 0x800);
-  assert.ok(exe!.loadAddr >= 0x80000000 && exe!.loadAddr < 0x80200000);
-  assert.ok(exe!.gpValue !== 0, "the exe uses gp-relative addressing");
+  assert.equal(exe!.loadAddr, FIXTURE_BASE);
+  assert.equal(exe!.gpValue, FIXTURE_GP, "gp comes from the fixture's instructions");
 });
 
-test("every overlay container carries a solved base and no gp", () => {
-  for (const container of loadContainers()) {
+test("every fixture overlay container carries a solved base and no gp", (t) => {
+  const { root } = projectFixture(t);
+  const containers = loadContainers(root);
+  assert.equal(containers.filter(c => c.kind === "overlay").length, 1);
+  for (const container of containers) {
     if (container.kind !== "overlay") continue;
     assert.equal(container.gpValue, 0, `${container.id} must not claim a gp base`);
     assert.equal(container.member?.base?.verdict, "resolved");

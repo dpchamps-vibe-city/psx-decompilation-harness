@@ -49,6 +49,7 @@ function main(): void {
     console.log(JSON.stringify({
       functionName: report.functionName,
       containerId: report.containerId,
+      ...(report.coordinate ? { coordinate: report.coordinate } : {}),
       vram: report.vram,
       sizeBytes: report.sizeBytes,
       size: report.size,

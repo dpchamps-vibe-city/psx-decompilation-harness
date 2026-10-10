@@ -1,4 +1,5 @@
 import { sha256 } from "../variant-lab/artifacts.js";
+import { functionSymbol } from "../../lib/targetAdapter.js";
 import type {
   SourceDeclaration,
   SourceModel,
@@ -285,9 +286,10 @@ function parameters(source: string, open: number, close: number): SourceParamete
 }
 
 export function buildSourceModel(functionName: string, sourcePath: string, source: string): SourceModel {
-  const nameOffset = source.indexOf(functionName);
+  const symbol = functionSymbol(functionName);
+  const nameOffset = source.indexOf(symbol);
   if (nameOffset < 0) throw new Error(`function symbol ${functionName} was not found in ${sourcePath}`);
-  const parameterOpen = source.indexOf("(", nameOffset + functionName.length);
+  const parameterOpen = source.indexOf("(", nameOffset + symbol.length);
   if (parameterOpen < 0) throw new Error(`function ${functionName} has no parameter list`);
   const parameterClose = matchingDelimiter(source, parameterOpen, "(", ")");
   const bodyOpen = source.indexOf("{", parameterClose);

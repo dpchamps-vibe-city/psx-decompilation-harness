@@ -24,7 +24,7 @@
  *   npx tsx tools/build/genProjectProfile.ts --write   # write configs/project-profile.md
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { execSync } from "node:child_process";
@@ -33,7 +33,8 @@ import { digest, snapshot, readCache, writeCache, writeIfChanged } from "../lib/
 
 const INFO_PATH = join(ROOT, "configs/project-info.json");
 const OUT_PATH = join(ROOT, "configs/project-profile.md");
-import { configuredFlags, configuredSdk, loadToolchain } from "../lib/toolchain.js";
+import { configuredFlags, configuredSdk, loadToolchain, type FlagContext } from "../lib/toolchain.js";
+import { libraryContext, loadLibraryProject } from "../lib/project.js";
 
 /* --- helpers --- */
 
@@ -55,6 +56,8 @@ function serialFromPath(binaryPath: string): string | null {
 interface HeaderRole {
   role: string;
   path: string;
+  readonly?: boolean;
+  generated?: boolean;
 }
 
 interface ProjectInfo {
@@ -77,16 +80,16 @@ interface ToolchainFacts {
   builtBin: string | null;
 }
 
-function parseToolchain(): ToolchainFacts {
+function parseToolchain(context: FlagContext): ToolchainFacts {
   const config = loadToolchain();
-  const flags = configuredFlags("cc1", { id: "exe", kind: "exe" });
-  const shim = configuredFlags("maspsx", { id: "exe", kind: "exe" });
+  const flags = configuredFlags("cc1", context);
+  const shim = configuredFlags("maspsx", context);
   const threshold = flags.find(flag => /^-G\d+$/.test(flag));
   const aspsx = shim.indexOf("--aspsx-version");
   return { family: config.compiler.family, gccVersion: config.compiler.version, cc1Flags: flags.join(" "),
     gThreshold: threshold ? Number(threshold.slice(2)) : null,
     aspsxVersion: aspsx >= 0 ? shim[aspsx + 1] ?? null : null,
-    builtBin: join(ROOT, "build", `${exeBasename()}.bin`) };
+    builtBin: context.kind === "library" ? null : join(ROOT, "build", `${exeBasename()}.bin`) };
 }
 
 /** Hash the built binary against the original payload — the byte-identity
@@ -149,6 +152,7 @@ function detectSdkVersion(): { version: string; detail: string } | null {
 function headerEditability(path: string): string {
   const full = join(ROOT, path);
   if (!existsSync(full)) return "**MISSING** — configured but not present";
+  if (statSync(full).isDirectory()) return "hand-edited directory (inspect file banners)";
   const banner = readFileSync(full, "utf-8").split("\n").slice(0, 6).join("\n");
   const generator = banner.match(/(?:Generated|Auto-generated) by ([^\s—-]+)/i)?.[1];
   if (/do not edit/i.test(banner)) {
@@ -162,7 +166,7 @@ function headerEditability(path: string): string {
 function headersSection(headers: HeaderRole[] | undefined): string {
   if (!headers || headers.length === 0) return "";
   const rows = headers
-    .map((entry) => `| ${entry.role} | \`${entry.path}\` | ${headerEditability(entry.path)} |`)
+    .map((entry) => `| ${entry.role} | \`${entry.path}\` | ${entry.readonly ? "reference — **never edit**" : entry.generated ? "generated — **never hand-edit**" : headerEditability(entry.path)} |`)
     .join("\n");
   return `
 ## Headers — where a declaration or type belongs
@@ -186,21 +190,25 @@ required — see the small-data threshold above.
 function main() {
   const write = process.argv.includes("--write");
 
-  const exe = loadPsxExeInfo();
+  const project = loadLibraryProject();
+  const exe = project ? null : loadPsxExeInfo();
   const info = loadProjectInfo();
-  const mk = parseToolchain();
+  const context: FlagContext = project ? libraryContext("default") : { id: "exe", kind: "exe" };
+  const mk = parseToolchain(context);
 
-  const serial = serialFromPath(exe.binaryPath);
+  const serial = exe ? serialFromPath(exe.binaryPath) : null;
   const gameLine = info.game
     ? `${info.game}${serial ? ` (${serial})` : ""}`
-    : serial ?? "(unknown — set \"game\" in configs/project-info.json)";
+    : serial ?? (project ? "relocatable target" : "(unknown — set \"game\" in configs/project-info.json)");
 
-  const check = verifyByteIdentity(exe.binaryPath, exe.payloadOffset, exe.payloadSize, mk.builtBin);
-  const sdk = detectSdkVersion();
+  const check = exe ? verifyByteIdentity(exe.binaryPath, exe.payloadOffset, exe.payloadSize, mk.builtBin)
+    : { verified: false, detail: "generate a fresh owning-TU verdict with the normal diff/finalization tools" };
+  const sdk = exe ? detectSdkVersion() : null;
 
   const sdkLine = sdk
     ? `PSY-Q ${sdk.version} (signature candidate, not proof of original compiler/SDK homogeneity — ${sdk.detail}, \`tools/diagnostics/matchSignatures.ts\`)`
-    : "(detection failed — run tools/diagnostics/matchSignatures.ts manually)";
+    : project ? `configured SDK ${loadToolchain().sdk.version}; reference headers are evidence, not compiler identity`
+      : "(detection failed — run tools/diagnostics/matchSignatures.ts manually)";
 
   const evidenceRef = info.evidence ? ` (evidence: \`${info.evidence}\`)` : "";
 
@@ -213,7 +221,7 @@ function main() {
    * declares itself. Stating the threshold without that qualifier is what
    * produced a round of array over-declarations. */
   const gSentence = mk.gThreshold !== null
-    ? `\`-G${mk.gThreshold}\` — a global can be reached GP-relatively (single \`lw/sw %gp_rel(sym)($gp)\`) only if it is declared **${mk.gThreshold} bytes or smaller**, *and* the file **defines** it (a tentative definition, so cc1 emits \`.comm\`). A file that only declares it \`extern\` gets absolute addressing (\`lui\` + \`lw/sw %lo(sym)\`) whatever the size. Never enlarge a declaration to force absolute addressing; derive ownership from the target with \`tools/build/deriveTuOwnedGlobals.ts\``
+    ? `\`-G${mk.gThreshold}\` — a global can be reached GP-relatively (single \`lw/sw %gp_rel(sym)($gp)\`) only if it is declared **${mk.gThreshold} bytes or smaller**, *and* the file **defines** it (a tentative definition, so cc1 emits \`.comm\`). A file that only declares it \`extern\` gets absolute addressing (\`lui\` + \`lw/sw %lo(sym)\`) whatever the size. Never enlarge a declaration to force absolute addressing; derive ownership from the target's sections and symbols`
     : "unknown — no `-G` flag found in CC1FLAGS";
 
   const aspsxSentence = mk.aspsxVersion
@@ -222,7 +230,7 @@ function main() {
 
   const out = `<!-- Auto-generated by tools/build/genProjectProfile.ts — do not edit manually.
      Human-supplied facts live in configs/project-info.json; toolchain facts
-     configured choices come from toolchain.json; target observations come from splat/layout and the EXE header. -->
+     configured choices come from toolchain.json; observations come from the target adapter. -->
 
 # Project Profile — ${gameLine}
 
@@ -233,9 +241,16 @@ configuration, then regenerate this file.
 
 ## Target
 
-- Game: ${gameLine}
+- Project: ${gameLine}
 - Platform: PlayStation 1 — MIPS R3000 (\`mips1\`), little-endian, GTE coprocessor
-- PS-X EXE: load address \`${hex32(exe.loadAddr)}\`, entry \`${hex32(exe.entryPoint)}\`, \`$gp = ${hex32(exe.gpValue)}\`
+${exe ? `- PS-X EXE: load address \`${hex32(exe.loadAddr)}\`, entry \`${hex32(exe.entryPoint)}\`, \`$gp = ${hex32(exe.gpValue)}\``
+  : `- Inputs: ${[...project!.target.archives, ...project!.target.standaloneObjects].map(p => `\`${p}\``).join(", ")} (ELF/ar)
+- Identity: original member + symbol; coordinates: section + offset, not RAM
+- Source ownership and acceptance: one original member/TU, including all neighboring functions/data and symbolic relocations
+- Original assembly: per-function INCLUDE_ASM; generated data stays assembly-backed until recovered
+- Available analysis: shared instruction/RTL diagnostics, staged residuals, schedule/allocation and loop analysis, callee checks, flag probes, source-shape search, context export, finalization and progress`}
+
+- Iteration oracle scope: ${exe ? "function (relocated bytes)" : "owning translation unit (sections, symbols and relocations)"}
 
 ## Toolchain
 
@@ -244,13 +259,19 @@ ${verifiedSentence}
 - **Small-data threshold:** ${gSentence}
 - **Assembler semantics:** ${aspsxSentence}
 - **SDK:** ${sdkLine}
-${headersSection(info.headers)}
+${project ? `- **Owner profiles:** default \`${project.toolchainProfile ?? "toolchain containerProfiles.library/base"}\`; overrides: ${Object.entries(project.memberProfiles).map(([id, profile]) => `\`${id}\` → \`${profile}\``).join(", ") || "none"}
+- **Preprocessor flags:** \`${configuredFlags("cpp", context).join(" ")}\`\n` : ""}${headersSection(project ? [
+  ...project.headers.reference.map(path => ({ role: "reference declarations/types", path, readonly: true })),
+  ...project.headers.owned.map(path => ({ role: "owned declarations/types", path })),
+  { role: "generated m2c context only (not a compiler include)", path: "build/libraries/context/<member-id>/", generated: true },
+] : info.headers)}
 ## Diagnostic and verification commands
 
-- Structural classification: \`npx tsx tools/agent/explainDiff.ts <func>\`
-- GCC pass/allocation trace: \`npx tsx tools/agent/compilerTrace.ts <func>\`
-- Exact per-function oracle: \`npx tsx tools/agent/diffFunc.ts <func>\` (\`VERDICT: MATCH\` = the function's bytes are right; \`UNDETERMINED\` is a third outcome, not a pass)
-- Full binary oracle: \`npm run check-all\` (SHA-256 against the original payload)
+${exe ? `- Structural classification: \`npx tsx tools/agent/explainDiff.ts <func>\`
+- GCC pass/allocation trace: \`npx tsx tools/agent/compilerTrace.ts <func>\`` : `- Function-local instruction diagnostics: \`npx tsx tools/agent/inventory.ts <func>\`
+- Target names: \`npm run identify -- --json\` (use the member-qualified key when names collide)`}
+- Exact oracle: \`npx tsx tools/agent/diffFunc.ts <func>\` (\`VERDICT: MATCH\` verifies the scope above; \`UNDETERMINED\` is not a pass)
+- Completion oracle: \`npm run check-all\` (${exe ? "SHA-256 against the original payload" : "every configured original member, including data-only objects"})
 `;
 
   if (!write) {

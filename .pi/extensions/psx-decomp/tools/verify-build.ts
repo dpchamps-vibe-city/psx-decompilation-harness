@@ -10,7 +10,7 @@ export function registerVerifyBuildTool(pi: ExtensionAPI): void {
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal, onUpdate, ctx) {
       onUpdate?.({ content: [{ type: "text", text: "Verifying the full build..." }], details: {} });
-      return runProjectCommand(pi, ctx.cwd, "make", ["check"], signal, 120_000);
+      return runProjectCommand(pi, ctx.cwd, "npm", ["run", "check-all"], signal, 300_000);
     },
   });
 }

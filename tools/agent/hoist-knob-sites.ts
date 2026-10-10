@@ -1,6 +1,7 @@
 /** AST-only access-route knobs. Refuse escapes, shadowing and mutable pointer bases. */
 import { parseC, walk, field, namedChildren, declaratorName, declaratorIsPointer, declaratorIsArray, type Node } from "./residual-source-search/tree-sitter-c.js";
 import { analyzeCSource, applyCSourceEdits } from "./cSourceGuard.js";
+import { functionSymbol } from "../lib/targetAdapter.js";
 import type { HoistWindow } from "./loop-emission/desirability.js";
 
 export interface HoistSite {
@@ -125,7 +126,7 @@ export function invariantAddressLocals(preprocessed: string, functionName: strin
     const unsafe = new Set<string>();
     walk(tree.rootNode, (node) => {
       if (node.type === "function_definition") {
-        if (declaratorName(field(node, "declarator"))?.text !== functionName) return false;
+        if (declaratorName(field(node, "declarator"))?.text !== functionSymbol(functionName)) return false;
         const decls = declarations(node);
         for (const [name, declaration] of decls) if (declaration.count !== 1) unsafe.add(name);
         walk(field(node, "body")!, (item) => {
@@ -162,7 +163,7 @@ export function enumerateHoistSites(source: string, functionName: string, window
   try {
     let fn: Node | undefined;
     walk(tree.rootNode, (node) => {
-      if (node.type === "function_definition" && declaratorName(field(node, "declarator"))?.text === functionName) fn = node;
+      if (node.type === "function_definition" && declaratorName(field(node, "declarator"))?.text === functionSymbol(functionName)) fn = node;
       return !fn;
     });
     if (!fn) throw new Error(`no AST definition of ${functionName}`);

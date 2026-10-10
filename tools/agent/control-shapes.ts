@@ -1,6 +1,7 @@
 /** AST-only, read-only decision-tail grammar. Each execution path tests each
  * original condition at most once and in its original short-circuit order. */
 import { children, declaratorName, field, namedChildren, parseC, walk, type Node } from "./residual-source-search/tree-sitter-c.js";
+import { functionSymbol } from "../lib/targetAdapter.js";
 export type DecisionTail = { kind: "return"; value: string } | { kind: "test"; condition: string; yes: DecisionTail; no: DecisionTail; switchValue?: string; switchConstant?: string; switchEqual?: boolean };
 export interface ControlShape { id: string; source: string; form: string; }
 export interface TailSite { start: number; end: number; line: number; tree: DecisionTail; resultVariable?: string; }
@@ -89,7 +90,7 @@ export function decisionTailSite(source: string, functionName: string): TailSite
     checkTree(parsed.rootNode);
     const functions: Node[] = [];
     walk(parsed.rootNode, node => {
-      if (node.type === "function_definition" && declaratorName(field(node, "declarator"))?.text === functionName) functions.push(node);
+      if (node.type === "function_definition" && declaratorName(field(node, "declarator"))?.text === functionSymbol(functionName)) functions.push(node);
       return node.type !== "function_definition";
     });
     if (functions.length !== 1) throw new Error("need exactly one raw function definition");

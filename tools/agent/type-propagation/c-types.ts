@@ -1,6 +1,7 @@
 /** All C/type inspection goes through the pinned tree-sitter front end. */
 import { parseC, namedChildren, children, field, declaratorName, type Node } from "../residual-source-search/tree-sitter-c.js";
 import { declaredFunction } from "../sdkTypes.js";
+import { functionSymbol } from "../../lib/targetAdapter.js";
 const narrowScalars = new Set(["char", "signed char", "unsigned char", "short", "short int", "signed short", "signed short int", "unsigned short", "unsigned short int", "int", "signed", "signed int", "unsigned", "unsigned int", "long", "long int", "signed long", "signed long int", "unsigned long", "unsigned long int", "s8", "u8", "s16", "u16", "s32", "u32", "u_char", "u_short", "u_int", "u_long"]);
 function typedefName(node: Node): string {
   if (node.type === "type_identifier" || node.type === "identifier") return node.text;
@@ -126,7 +127,7 @@ export function typeScopes(types: string[], source: string, lineOf: (row: number
 export function parameterReads(source: string, functionName: string): boolean[] {
   const tree = parseC(source);
   try {
-    const fn = tree.rootNode.descendantsOfType("function_definition").find((n) => declaratorName(field(n, "declarator"))?.text === functionName);
+    const fn = tree.rootNode.descendantsOfType("function_definition").find((n) => declaratorName(field(n, "declarator"))?.text === functionSymbol(functionName));
     if (!fn) return [];
     const declaring = field(fn, "declarator");
     const core = declaring ? declaredFunction(declaring) : undefined;

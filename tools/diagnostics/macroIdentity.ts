@@ -10,6 +10,10 @@ import { containerPath, containerTargetPath, loadContainers, unresolvedCodeMembe
 import { loadFunctionSpans, loadSymbolIndex } from "../lib/symbolIndex.js";
 import { readGroups, type FileGroup } from "../agent/fileGroupings.js";
 import { hex } from "./macroInstructions.js";
+import { loadLibraryProject, libraryContext } from "../lib/project.js";
+import { libraryMembers, libraryTargetKey, resolveLibraryCall } from "../lib/libraryTargets.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
+import type { FlagContext } from "../lib/toolchain.js";
 import { deriveRepoMacroEncodings, type RepoEncodingReport } from "./macroEncodings.js";
 import { extractMacroTemplates, loadMacroHeaders, type TemplateLibrary } from "./macroTemplates.js";
 import { tileMacroFunction, type MacroFunction, type MacroFunctionReport, type TilerOptions } from "./macroTiler.js";
@@ -63,6 +67,33 @@ export interface MacroIdentityReport {
  * function extents are findings; they are not silently clamped. */
 export function loadMacroFunctions(containers: readonly Container[]): { functions: MacroFunction[]; findings: CensusFinding[] } {
   const functions: MacroFunction[] = [], findings: CensusFinding[] = [];
+  if (loadLibraryProject()) {
+    const members = libraryMembers();
+    for (const member of members) {
+      if (!member.functions.length && [...member.object.sections.values()].some(s => (s.flags & 4) && s.size))
+        findings.push({ container: member.id, function: null, reason: "Executable member has no identifiable function extent" });
+      for (const fn of member.functions) {
+        const name = libraryTargetKey(member, fn.name), section = member.object.sections.get(fn.section)!;
+        if (fn.inferredSize) findings.push({ container: member.id, function: name, reason: "Symbol extent inferred; census is not a complete-body proof" });
+        const relocations: NonNullable<MacroFunction["relocations"]> = new Map(member.object.relocations
+          .filter(r => r.section === fn.section && r.offset >= fn.offset && r.offset < fn.offset + fn.size).map(r => {
+            const word = section.data.readUInt32LE(r.offset);
+            const addend = r.type === 4 ? (word & 0x3ffffff) * 4 : (word << 16 >> 16) * (r.type === 10 ? 4 : 1);
+            const local = /^(.*)@(\d+)$/.exec(r.reference);
+            const named = member.object.symbols.find(s => `named:${s.name}` === r.reference);
+            const targetSection = local?.[1] ?? named?.section, value = local ? Number(local[2]) : named?.value;
+            const targetOffset = value === undefined ? undefined : value + addend + (r.type === 10 ? 4 : 0);
+            const callee = r.type === 4 ? resolveLibraryCall(member, r.reference, addend, members) : undefined;
+            return [(r.offset - fn.offset) / 4, { type: r.type, reference: r.reference, addend,
+              ...(targetSection === fn.section && targetOffset !== undefined && targetOffset >= fn.offset && targetOffset < fn.offset + fn.size ? { targetOffset } : {}),
+              ...(callee ? { callee } : {}) }];
+          }));
+        functions.push({ name, container: member.id, vram: fn.offset, bytes: section.data.subarray(fn.offset, fn.offset + fn.size),
+          coordinate: { section: fn.section, offset: fn.offset, inferredSize: fn.inferredSize }, relocations });
+      }
+    }
+    return { functions, findings };
+  }
   for (const container of containers) {
     if (!existsSync(containerTargetPath(container))) { findings.push({ container: container.id, function: null, reason: "Original binary missing" }); continue; }
     if (!existsSync(containerPath(container, "splat"))) { findings.push({ container: container.id, function: null, reason: "Splat configuration missing; no safe code bounds" }); continue; }
@@ -117,11 +148,11 @@ function sourceRepresentation(path: string): MacroFunctionReport["sourceRepresen
  * function table/bytes and grouping/symbol evidence for other projects. */
 export function detectMacroIdentities(options: MacroIdentityOptions = {}): MacroIdentityReport {
   if ("commandEncodingHeaders" in options) throw new Error("Replacement C-header encoding inputs were removed; use the production GAS encoding oracle");
-  const library = options.library ?? extractMacroTemplates(loadMacroHeaders(options.headerPaths ?? [join(ROOT, "include/psyq"), join(ROOT, "include/debughook.h"), join(ROOT, "include/scratchpad.h")]));
-  const containers = options.functions ? [] : (options.containers ?? loadContainers()).filter(c => !options.containerIds || options.containerIds.includes(c.id));
+  const library = options.library ?? extractMacroTemplates(loadMacroHeaders(options.headerPaths ?? (loadLibraryProject()?.headers.reference.map(p => join(ROOT, p)) ?? [join(ROOT, "include/psyq"), join(ROOT, "include/debughook.h"), join(ROOT, "include/scratchpad.h")])));
+  const containers = options.functions || loadLibraryProject() ? [] : (options.containers ?? loadContainers()).filter(c => !options.containerIds || options.containerIds.includes(c.id));
   const loaded = options.functions ? { functions: options.functions, findings: [] as CensusFinding[] } : loadMacroFunctions(containers);
   if (options.functionNames) loaded.functions = loaded.functions.filter(f => options.functionNames!.some(n => n.toLowerCase() === f.name.toLowerCase()));
-  if (!options.functions && !options.containers && !options.containerIds) {
+  if (!loadLibraryProject() && !options.functions && !options.containers && !options.containerIds) {
     for (const member of unresolvedCodeMembers()) loaded.findings.push({ container: member.id, function: null, reason: "Code member base unresolved; not scanned" });
     const configured = join(ROOT, "configs/splat");
     if (existsSync(configured)) for (const file of readdirSync(configured).filter(f => f.endsWith(".yaml")).sort()) {
@@ -130,17 +161,20 @@ export function detectMacroIdentities(options: MacroIdentityOptions = {}): Macro
     }
   }
   const scanned = collectMacroCoverage(containers, loaded.functions, loaded.findings, { scope: options.functions ? "injected-functions" : options.functionNames ? "selected-functions" : options.containers || options.containerIds ? "selected-containers" : "project", ...(options.overlayDirectory ? { overlayDirectory: options.overlayDirectory } : {}), ...(options.containerIds ? { requestedIds: options.containerIds } : {}) });
-  const kindOf = (fn: MacroFunction): "exe" | "overlay" => containers.find(c => c.id === fn.container)?.kind ?? (fn.container.startsWith("ovl_") ? "overlay" : "exe");
+  const contextOf = (fn: MacroFunction): FlagContext => fn.coordinate ? libraryContext(fn.container) :
+    { kind: containers.find(c => c.id === fn.container)?.kind ?? (fn.container.startsWith("ovl_") ? "overlay" : "exe"), id: fn.container };
+  const contextKey = (fn: MacroFunction): string => JSON.stringify(contextOf(fn));
   const encodingToolchains: RepoEncodingReport[] = [];
-  const libraries = new Map<"exe" | "overlay", TemplateLibrary>();
-  for (const kind of new Set(loaded.functions.map(kindOf))) {
-    if (options.resolveCommands === false) libraries.set(kind, library);
+  const libraries = new Map<string, TemplateLibrary>();
+  for (const key of new Set(loaded.functions.map(contextKey))) {
+    const context = JSON.parse(key) as FlagContext;
+    if (options.resolveCommands === false) libraries.set(key, library);
     else {
-      const encoded = deriveRepoMacroEncodings(library, kind);
-      libraries.set(kind, encoded.library); encodingToolchains.push(encoded.report);
+      const encoded = deriveRepoMacroEncodings(library, context.kind, context.id);
+      libraries.set(key, encoded.library); encodingToolchains.push(encoded.report);
     }
   }
-  const libraryOf = (fn: MacroFunction): TemplateLibrary => libraries.get(kindOf(fn)) ?? library;
+  const libraryOf = (fn: MacroFunction): TemplateLibrary => libraries.get(contextKey(fn)) ?? library;
   const functions = loaded.functions.map(fn => tileMacroFunction(fn, libraryOf(fn), options.tiler, options.symbols?.get(fn.container)));
   // Most containers have no asm-macro detections. Resolve symbol feeds only
   // where a tile actually needs them, rather than crawling thousands of
@@ -153,8 +187,7 @@ export function detectMacroIdentities(options: MacroIdentityOptions = {}): Macro
     });
   }
   if (!options.functions) for (const f of functions) {
-    const container = containers.find(c => c.id === f.container)!;
-    f.sourceRepresentation = sourceRepresentation(join(ROOT, container.paths.srcDir, `${f.name}.c`));
+    f.sourceRepresentation = sourceRepresentation(join(ROOT, resolveFunctionTarget(f.name).source));
   }
   const conversionQueue: MacroIdentityReport["conversionQueue"] = functions.filter(f => f.cop2.count && ["INCLUDE_ASM", "top-level-asm"].includes(f.sourceRepresentation)).sort((a, b) => Number(b.sourceRepresentation === "top-level-asm") - Number(a.sourceRepresentation === "top-level-asm") || b.coverage.fraction - a.coverage.fraction || (a.end - a.start) - (b.end - b.start) || a.name.localeCompare(b.name)).map(f => ({ function: f.name, container: f.container, sourceRepresentation: f.sourceRepresentation, coverage: f.coverage, verdict: f.verdict, headerVintages: f.headerVintages, oracleStatus: "not-converted" }));
   const byName = new Map(functions.map(f => [f.name, f]));
@@ -180,13 +213,13 @@ export function detectMacroIdentities(options: MacroIdentityOptions = {}): Macro
 
 /** Target-byte push for triage; works identically for C and INCLUDE_ASM sources. */
 export function detectFunctionMacroIdentity(functionName: string): { function: MacroFunctionReport; encodingToolchains: RepoEncodingReport[] } | null {
-  const containers = loadContainers();
+  const containers = loadLibraryProject() ? [] : loadContainers();
   const loaded = loadMacroFunctions(containers);
   const fn = loaded.functions.find(f => f.name.toLowerCase() === functionName.toLowerCase());
   if (!fn) return null;
-  const container = containers.find(c => c.id === fn.container)!;
-  fn.sourceRepresentation = sourceRepresentation(join(ROOT, container.paths.srcDir, `${fn.name}.c`));
-  const report = detectMacroIdentities({ functions: [fn], symbols: new Map([[container.id, loadSymbolIndex(container).byAddress]]) });
+  const container = containers.find(c => c.id === fn.container);
+  fn.sourceRepresentation = sourceRepresentation(join(ROOT, resolveFunctionTarget(fn.name).source));
+  const report = detectMacroIdentities({ functions: [fn], symbols: container ? new Map([[container.id, loadSymbolIndex(container).byAddress]]) : new Map() });
   return { function: report.functions[0]!, encodingToolchains: report.encodingToolchains };
 }
 
@@ -263,7 +296,7 @@ function main(args: string[]): void {
       }
     } else throw new Error(`Unknown argument ${arg}`);
   }
-  const containers = containerId ? loadContainers().filter(c => c.id === containerId) : undefined;
+  const containers = containerId ? (loadLibraryProject() ? [] : loadContainers().filter(c => c.id === containerId)) : undefined;
   if (containers && !containers.length && !existsSync(join(ROOT, "extracted/overlays", `${containerId}.bin`))) throw new Error(`Unknown container ${containerId}`);
   const options: MacroIdentityOptions = { ...(containerId ? { containerIds: [containerId] } : {}), ...(headerPaths.length ? { headerPaths } : {}), ...(rawHeaders ? { resolveCommands: false } : {}), ...(mine ? { mine } : {}) };
   if (functionName) {

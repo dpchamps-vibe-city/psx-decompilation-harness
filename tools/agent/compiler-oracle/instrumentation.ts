@@ -24,10 +24,19 @@ static FILE *psx_oracle_local_file;
 static int psx_oracle_local_initialized;
 static int psx_oracle_current_block = -1;
 
+static int
+psx_oracle_local_selected ()
+{
+  const char *name = getenv ("PSX_ORACLE_FUNCTION");
+  return ! name || (current_function_name && ! strcmp (name, current_function_name));
+}
+
 static FILE *
 psx_oracle_local_log ()
 {
   const char *path;
+  if (! psx_oracle_local_selected ())
+    return 0;
   if (! psx_oracle_local_initialized)
     {
       psx_oracle_local_initialized = 1;
@@ -55,7 +64,7 @@ psx_oracle_forced_local_reg (qty)
 {
   const char *p = getenv ("PSX_ORACLE_FORCE_LOCAL");
   int pseudo, hard, used;
-  if (! p)
+  if (! p || ! psx_oracle_local_selected ())
     return -1;
   while (*p)
     {
@@ -80,7 +89,7 @@ psx_oracle_local_reg_forbidden (qty, hard)
 {
   const char *p = getenv ("PSX_ORACLE_FORBID_LOCAL");
   int pseudo, candidate, used;
-  if (! p)
+  if (! p || ! psx_oracle_local_selected ())
     return 0;
   while (*p)
     {
@@ -128,11 +137,21 @@ const SCHED_HELPERS = String.raw`
    sched1 is backward, so FINAL-AFTER wins a ready-list comparison. */
 static FILE *psx_oracle_sched_file;
 static int psx_oracle_sched_initialized;
+extern char *current_function_name;
+
+static int
+psx_oracle_sched_selected ()
+{
+  const char *name = getenv ("PSX_ORACLE_FUNCTION");
+  return ! name || (current_function_name && ! strcmp (name, current_function_name));
+}
 
 static FILE *
 psx_oracle_sched_log ()
 {
   const char *path;
+  if (! psx_oracle_sched_selected ())
+    return 0;
   if (! psx_oracle_sched_initialized)
     {
       psx_oracle_sched_initialized = 1;
@@ -149,7 +168,7 @@ psx_oracle_schedule_relation (xuid, yuid, beforep, afterp)
 {
   const char *p = getenv ("PSX_ORACLE_SCHEDULE_EDGES");
   int before, after, used;
-  if (! p || reload_completed)
+  if (! p || reload_completed || ! psx_oracle_sched_selected ())
     return 0;
   while (*p)
     {
@@ -348,7 +367,7 @@ export function instrumentScheduler(source = readFileSync(SCHED_REFERENCE, "utf8
 
   /* Inject diagnostic ordering dependencies after the stock DAG has been
      built but before priorities and reference counts are calculated.  */
-  if (! reload_completed)
+  if (! reload_completed && psx_oracle_sched_selected ())
     {
       const char *oracle_edges = getenv ("PSX_ORACLE_SCHEDULE_EDGES");
       const char *oracle_p = oracle_edges;

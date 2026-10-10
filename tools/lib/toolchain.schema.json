@@ -47,8 +47,10 @@
       "additionalProperties": {
         "type": "object", "additionalProperties": false,
         "properties": {
+          "cpp": { "$ref": "#/$defs/args" }, "includeDirs": { "$ref": "#/$defs/args" },
           "cc1": { "$ref": "#/$defs/args" }, "as": { "$ref": "#/$defs/args" },
-          "ld": { "$ref": "#/$defs/args" }, "maspsx": { "$ref": "#/$defs/args" }
+          "ld": { "$ref": "#/$defs/args" }, "maspsx": { "$ref": "#/$defs/args" },
+          "m2c": { "$ref": "#/$defs/args" }, "spimdisasm": { "$ref": "#/$defs/args" }
         }
       }
     },

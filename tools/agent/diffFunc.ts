@@ -36,6 +36,8 @@ import {
 import { requireFunctionLocation } from "../lib/symbolIndex.js";
 import { containerPath, containerTargetPath, vramToRom, type Container } from "../lib/container.js";
 
+import { loadLibraryProject } from "../lib/project.js";
+import { measureLibraryFunction, renderLibraryComparison } from "./libraryTarget.js";
 const ROOT = new URL("../..", import.meta.url).pathname;
 
 // Compilation is shared with builds/analysis via toolchain.json.
@@ -222,6 +224,17 @@ if (positional.length !== 1) {
   process.exit(1);
 }
 
+if (loadLibraryProject()) {
+  if (watchMode || columnsMode || containerOverride) throw new Error("Library diff supports <member::symbol> [--src FILE] [--bytes]; no image containers/watch/columns adapter");
+  try {
+    const measured = measureLibraryFunction(positional[0]!, srcOverride);
+    console.log(`target: ${measured.key} (${measured.member.input}[${measured.member.ordinal}])`);
+    console.log(`source: ${measured.artifacts.source}`);
+    console.log(renderLibraryComparison(measured.comparison));
+    console.log(`Report: ${measured.report}`);
+    process.exit(measured.comparison.verdict === "match" ? 0 : 1);
+  } catch (error) { console.error(String(error)); process.exit(1); }
+}
 const funcName = positional[0].replace(/^src\//, "").replace(/\.c$/, "");
 
 /* The container a function belongs to is derived, not typed by the operator.

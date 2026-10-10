@@ -59,6 +59,8 @@ export interface PartitionInput {
    * symbol guess. LUI alone proves only its high value, not a full symbol. */
   symbols?: ReadonlyMap<number, string>;
   resolveDispatch?: (instructionIndex: number) => number[] | undefined;
+  /** Symbolic ET_REL operands; they are not absolute addresses. */
+  symbolicRelocations?: ReadonlyMap<number, { type: string; reference: string; addend: number; targetOffset?: number }>;
 }
 interface Term { op: string; args?: number[][]; value?: number | undefined; detail?: string | undefined }
 interface Node { id: number; register: string; at: number; term: Term; reads: number[]; depth: number; remat: boolean }
@@ -105,6 +107,11 @@ function operands(i: DecodedInsn): number[] {
 export function extractWebPartition(input: PartitionInput): WebPartition {
   if (!Number.isSafeInteger(input.vram) || input.vram < 0 || input.vram + input.bytes.length > 0x100000000 || input.vram % 4 || input.bytes.length % 4) throw new Error("unaligned web-partition input");
   const insns = decodeBytes(input.bytes, input.vram);
+  for (const [at, r] of input.symbolicRelocations ?? []) {
+    if (!["R_MIPS_26", "R_MIPS_PC16"].includes(r.type) || !insns[at]) continue;
+    if (r.targetOffset === undefined) delete insns[at]!.target;
+    else insns[at]!.target = r.targetOffset;
+  }
   const caveats: string[] = ["Machine read counts and live lengths are observations/approximations, not allocator REG_N_REFS or live lengths."];
   if (!insns.length) return { schemaVersion: 1, functionName: input.functionName, side: input.side ?? "target", byteHash: createHash("sha256").update(input.bytes).digest("hex"), instructionCount: 0, machine: { vram: input.vram, words: [] }, webs: [], copies: [], transitions: [], deadWrites: [], caveats };
   const cfg = buildCfg(insns, { resolveDispatch: input.resolveDispatch });
@@ -166,12 +173,23 @@ export function extractWebPartition(input: PartitionInput): WebPartition {
           for (const s of slots) if (Math.abs(s - i.simm) < 4) e.writes.push({ register: `slot:${s}`, op: i.op === "sw" && s === i.simm ? "copy" : "unknown", inputs: [rt] });
         } else e.writes.push(...slots.map(s => ({ register: `slot:${s}`, op: "unknown" })));
       }
+      const relocation = input.symbolicRelocations?.get(at);
+      if (relocation && dest !== null && dest !== "unknown" && i.op !== "jal" && i.op !== "jalr") {
+        const register = REGISTER_NAMES[dest]!;
+        const detail = JSON.stringify([relocation.reference.replace(/^(import|named):/, ""), relocation.addend]);
+        if (relocation.type === "R_MIPS_HI16") e.writes = [{ register, op: "reloc-high", detail, remat: true }];
+        else if (["R_MIPS_LO16", "R_MIPS_GPREL16"].includes(relocation.type)) {
+          e.writes = [{ register, op: isLoad(i.op) ? `reloc-load:${i.op}` : "reloc-address", detail,
+            inputs: isLoad(i.op) ? [rs, "memory"] : [rs], value: relocation.type === "R_MIPS_GPREL16" ? 1 : 0 }];
+        }
+      }
       es.push(e);
       // Call effects occur AFTER its slot, even when the slot sets an argument
       // or copies the old return register. No target arity is guessed.
       const call = insns[at - 1];
       if (call && (call.op === "jal" || call.op === "jalr")) {
-        const detail = `${call.target === undefined ? "indirect" : call.target}:${callOrdinals.get(at - 1)}`;
+        const symbolicCall = input.symbolicRelocations?.get(at - 1);
+        const detail = `${symbolicCall ? `${symbolicCall.reference}+${symbolicCall.addend}` : call.target === undefined ? "indirect" : call.target}:${callOrdinals.get(at - 1)}`;
         es.push({ at, reads: [], depth: depths[at]!, writes: [
           ...[...CLOBBER, "hi", "lo"].map(register => ({ register, op: register === "v0" || register === "v1" ? "call-result" : "unknown", detail: `${detail}:${register}` })),
           { register: "memory", op: "memory", detail: `call:${detail}` },
@@ -237,7 +255,18 @@ export function extractWebPartition(input: PartitionInput): WebPartition {
       return vs.length > 0 && vs.every(v => v && v.key === vs[0]!.key) ? vs[0]! : null;
     });
     let v: ValueIdentity | null = null;
-    if (t.op === "const" || t.op === "high") v = constant(t.value!, t.op === "high" ? "symbol-high" : "constant");
+    if (t.op === "reloc-high") v = { key: `high:${t.detail}`, kind: "symbol-high", description: `%hi(${t.detail})` };
+    else if (t.op.startsWith("reloc-") && (t.value === 1 || args[0]?.key === `high:${t.detail}`)) {
+      const [symbol, bias] = JSON.parse(t.detail!) as [string, number];
+      const address: ValueIdentity = { key: `symbol:${symbol}:${bias}`, kind: "address", description: `${symbol}${bias ? `+${bias}` : ""}` };
+      if (t.op === "reloc-address") v = address;
+      else if (t.op.startsWith("reloc-load:") && args[1]) {
+        const op = insns[n.at]!.op;
+        v = { key: `${t.op}:${digest(`${address.key}|${args[1].key}`)}`, kind: "load", description: `${op}(${address.description})`,
+          memory: { addressKey: address.key, address: null, width: loadWidth(op), signed: loadSigned(op) } };
+      }
+    }
+    else if (t.op === "const" || t.op === "high") v = constant(t.value!, t.op === "high" ? "symbol-high" : "constant");
     else if (t.op === "entry") v = { key: `entry:${t.detail}`, kind: "entry", description: `entry $${t.detail}` };
     else if (t.op === "memory") v = { key: `memory:${t.detail}`, kind: "derived", description: t.detail! };
     else if (t.op === "call-result") v = { key: `call:${t.detail}`, kind: "call-result", description: `result ${t.detail}` };
@@ -246,7 +275,7 @@ export function extractWebPartition(input: PartitionInput): WebPartition {
       const address = expressionIdentity("add", [args[0]!], t.value)!;
       const loadOp = insns[n.at]!.op;
       v = { key: `${t.op}:${digest(`${address.key}|${args[1]!.key}`)}`, kind: "load", description: `${t.op}(${address.description};${args[1]!.description})`, memory: { addressKey: address.key, address: address.key.startsWith("const:") ? Number(address.key.slice(6)) : null, width: loadWidth(loadOp), signed: loadSigned(loadOp) } };
-    } else if (t.op !== "unknown" && args.length && args.every(Boolean)) v = expressionIdentity(t.op, args as ValueIdentity[], t.value);
+    } else if (t.op !== "unknown" && !t.op.startsWith("reloc-") && args.length && args.every(Boolean)) v = expressionIdentity(t.op, args as ValueIdentity[], t.value);
     if (v && /^const:/.test(v.key) && t.op !== "high") {
       const address = Number(v.key.slice(6)), symbol = input.symbols?.get(address);
       if (symbol) v = { ...v, kind: "address", description: `${symbol} (0x${address.toString(16)})` };

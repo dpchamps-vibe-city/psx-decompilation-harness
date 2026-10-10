@@ -3,6 +3,8 @@ import type { AutodecompConfig, DiffResult, GateResult, WorkMode } from "./types
 import { runCommand } from "./process.ts";
 import { checkSourcePolicy } from "./source-policy.ts";
 import { Timings } from "../../../tools/lib/contentCache.js";
+import { loadLibraryProject } from "../../../tools/lib/project.js";
+import { libraryMembers, requireLibraryFunction } from "../../../tools/lib/libraryTargets.js";
 
 /**
  * The oracle's summary lines.
@@ -35,7 +37,7 @@ export async function runFunctionDiff(
      one ambiguity a name cannot: two overlays sharing a RAM slot. Without it
      the oracle derives the container from the name, which is right for every
      other case. */
-  const command = await runCommand("npx", ["tsx", "tools/agent/diffFunc.ts", functionName, ...(container ? ["--container", container] : [])], {
+  const command = await runCommand("npx", ["tsx", "tools/agent/diffFunc.ts", functionName, ...(container && !loadLibraryProject(projectRoot) ? ["--container", container] : [])], {
     cwd: projectRoot,
     timeoutMs,
     maxCaptureBytes: 4 * 1024 * 1024,
@@ -155,7 +157,14 @@ export interface ResidualReading {
  * overlay, and a gate scoped to the edited container would pass while another
  * container's binary had silently changed.
  */
-export async function runBuildCheck(projectRoot: string, timeoutMs = 5 * 60_000, signal?: AbortSignal) {
+export async function runBuildCheck(projectRoot: string, timeoutMs = 5 * 60_000, signal?: AbortSignal, memberIds: string[] = []) {
+  // Libraries have a reconstruction backlog, not an original-object fallback.
+  // The loop guard rechecks prior verified members; a finalizer also checks the
+  // active/edited members. Only npm check-all claims whole-library completion.
+  if (loadLibraryProject(projectRoot)) {
+    const args = ["run", "library", "--", "check", ...(memberIds.length ? memberIds.flatMap(id => ["--member", id]) : ["--accepted"])];
+    return runCommand("npm", args, { cwd: projectRoot, timeoutMs, signal, maxCaptureBytes: 4 * 1024 * 1024 });
+  }
   return runCommand("npm", ["run", "check-all"], { cwd: projectRoot, timeoutMs, signal, maxCaptureBytes: 4 * 1024 * 1024 });
 }
 
@@ -191,9 +200,15 @@ export async function runGate(options: {
     return true;
   };
   cancelled();
+  const library = loadLibraryProject(options.projectRoot);
+  const members = library ? libraryMembers(options.projectRoot, library) : [];
   const scanFunctions = options.mode === "project-refinement"
-    ? sourceNames(options.changedFiles)
+    ? library ? Object.entries(options.functionSources ?? {}).filter(([, path]) => options.changedFiles.includes(path)).map(([name]) => name) : sourceNames(options.changedFiles)
     : options.functionName ? [options.functionName] : [];
+  const activeMembers = library ? [...new Set([
+    ...(options.functionName ? [requireLibraryFunction(options.functionName, options.projectRoot).member.id] : []),
+    ...members.filter(m => options.changedFiles.includes(m.source)).map(m => m.id),
+  ])] : [];
   const policy = timings.measureSync("policy", () => checkSourcePolicy({
     projectRoot: options.projectRoot,
     config: options.config,
@@ -223,8 +238,8 @@ export async function runGate(options: {
   }
 
   const build = options.machineVerification?.build ?? (options.runBuild === false || !proceed() ? undefined :
-    await timings.measure("linked-images", () => runBuildCheck(options.projectRoot, 5 * 60_000, options.signal)));
-  if (build && build.code !== 0) failures.push(`Full build verification failed with exit code ${build.code}`);
+    await timings.measure(library ? "relocatable-members" : "linked-images", () => runBuildCheck(options.projectRoot, 5 * 60_000, options.signal, activeMembers)));
+  if (build && build.code !== 0) failures.push(`${library ? "Active/previously verified library member" : "Full build"} verification failed with exit code ${build.code}`);
   cancelled();
 
   return {

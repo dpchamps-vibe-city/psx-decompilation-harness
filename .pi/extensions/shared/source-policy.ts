@@ -3,6 +3,8 @@ import { relative, resolve, sep } from "node:path";
 import type { AutodecompConfig, PolicyFinding, SourcePolicyResult } from "./types.ts";
 import { analyzeCSource, capturePrevRetSites, matchingConstructs, walkActiveC } from "../../../tools/agent/cSourceGuard.ts";
 import { parseC, field } from "../../../tools/agent/residual-source-search/tree-sitter-c.ts";
+import { loadLibraryProject } from "../../../tools/lib/project.js";
+import { libraryMembers } from "../../../tools/lib/libraryTargets.js";
 
 interface PolicyOptions {
   projectRoot: string;
@@ -387,7 +389,15 @@ function sourceIdentity(file: string): { name: string; container?: string } | un
 }
 
 function patchScope(options: PolicyOptions, file: string): { name?: string; vram?: string; container?: string } {
-  const identity = sourceIdentity(file);
+  const project = loadLibraryProject(options.projectRoot);
+  if (project) {
+    const member = libraryMembers(options.projectRoot, project).find(m => m.source === normalizedPath(file));
+    // A member is a shared TU: never lend one symbol's exception to its neighbors.
+    if (member) return { name: member.id, container: member.id };
+  }
+  const mapped = Object.entries(options.functionSources ?? {}).find(([name, path]) => path === normalizedPath(file) && name === options.functionName)
+    ?? Object.entries(options.functionSources ?? {}).find(([, path]) => path === normalizedPath(file));
+  const identity = mapped ? { name: mapped[0], container: options.functionContainers?.[mapped[0]] } : sourceIdentity(file);
   const name = identity?.name ?? options.functionName;
   if (!name) return {};
   const vram = options.functionVrams?.[name]
@@ -545,15 +555,23 @@ export function checkSourcePolicy(options: PolicyOptions): SourcePolicyResult {
 
   // Workers cannot change the build's authority (including global/profile
   // flags) to make an otherwise incorrect candidate appear byte-identical.
-  if ([...changedFiles, ...patchFiles].includes("toolchain.json")) hardFailures.push({
-    kind: "flag-override", file: "toolchain.json", message: "Worker toolchain configuration changes require human review",
+  for (const file of ["toolchain.json", "project.json"]) if ([...changedFiles, ...patchFiles].includes(file)) hardFailures.push({
+    kind: "flag-override", file, message: "Worker target/toolchain configuration changes require human review",
   });
+  const library = loadLibraryProject(options.projectRoot);
+  if (library) for (const file of new Set([...changedFiles, ...patchFiles])) {
+    if (library.headers.reference.some(dir => file === dir || file.startsWith(dir + "/"))) hardFailures.push({
+      kind: "out-of-scope", file, message: "Reference headers are immutable evidence; edit owned headers instead",
+    });
+  }
   const toolchainPath = resolve(options.projectRoot, "toolchain.json");
   if (existsSync(toolchainPath)) {
     try {
       const fileFlags = JSON.parse(readFileSync(toolchainPath, "utf8")).fileFlags;
       if (!fileFlags || typeof fileFlags !== "object" || Array.isArray(fileFlags)) throw new Error("fileFlags must be an object");
-      const names = options.functionName ? [options.functionName] : scanNames.length ? scanNames : Object.keys(fileFlags);
+      const selectedNames = options.functionName ? [options.functionName] : scanNames.length ? scanNames : Object.keys(fileFlags);
+      const names = library ? [...new Set(libraryMembers(options.projectRoot, library).filter(m =>
+        selectedNames.some(name => name === m.id || name.startsWith(m.id + "::")) || changedFiles.includes(m.source)).map(m => m.id))] : selectedNames;
       for (const name of names) {
         const flags = fileFlags[name];
         if (flags === undefined) continue;

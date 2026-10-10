@@ -19,6 +19,7 @@
     "wipe": "tsx tools/build/pipeline.ts wipe",
     "setup": "tsx tools/build/pipeline.ts setup",
     "identify": "tsx tools/diagnostics/identifyToolchain.ts",
+    "library": "tsx tools/agent/library.ts",
     "progress": "tsx tools/diagnostics/progress.ts",
     "macro-identity": "tsx tools/diagnostics/macroIdentity.ts",
     "web-partition": "tsx tools/diagnostics/fingerprintWebPartition.ts",

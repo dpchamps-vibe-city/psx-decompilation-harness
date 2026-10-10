@@ -6,8 +6,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { digest, fileDigest, filesUnder, readCache, snapshot, writeCache } from "../lib/contentCache.js";
-import { configuredCppFlags, ROOT } from "./decompToolchain.js";
-import { configuredTool, executablePath, toolchainDigest, loadToolchain } from "../lib/toolchain.js";
+import { ROOT } from "./decompToolchain.js";
+import { sourceFlagContext } from "../lib/targetAdapter.js";
+import { configuredFlags, configuredTool, executablePath, toolchainDigest, loadToolchain } from "../lib/toolchain.js";
 
 export function dependencyPaths(text: string, root: string): string[] {
   const first = text.replace(/\\\r?\n/g, " ").split("\n")[0] ?? "";
@@ -60,7 +61,7 @@ export function preprocessingTools(): { tools: ReturnType<typeof toolConfigurati
     .map((p) => [p, process.env[p] ?? null])) };
 }
 export interface ProcessedBundle { text: string; dependencies: string[]; inputs: Record<string, string>; cache: "hit" | "miss" }
-export function cachedPreprocess(source: string, root = ROOT, flags = configuredCppFlags()): ProcessedBundle {
+export function cachedPreprocess(source: string, root = ROOT, flags = configuredFlags("cpp", sourceFlagContext(resolve(root, source), root), root)): ProcessedBundle {
   source = resolve(root, source);
   const { tools, environment } = preprocessingTools();
   const { cpp } = tools;

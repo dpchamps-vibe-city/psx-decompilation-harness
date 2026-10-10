@@ -34,7 +34,7 @@ export interface CommandEncodingEvidence {
   from: number;
   to: number;
   assemblerStatement: string;
-  containerKind: "exe" | "overlay";
+  containerKind: "exe" | "overlay" | "library";
   probeObject: string;
   probeObjectSha256: string;
   probeOffset: number;

@@ -31,6 +31,12 @@ incremental builds and all npm tasks.
 In Pi, use `/skill:psx-identify-project` to inspect an unfamiliar project's assets
 and create an evidence-backed configuration. Without a target, the shallow
 identification report returns `undetermined`; it does not invent game facts.
+Target adapters support linked images and ELF/ar members through the same
+matching tools and skills. `project.json` selects library assets; without it,
+the EXE/overlay configuration applies. See [target configuration](docs/library-targets.md)
+and `examples/library/project.json`. Generate the agent-facing profile with
+`npm run profile -- --write` after configuring either format.
+
 An explicit-file header diagnostic also works:
 
 ```sh
@@ -42,6 +48,7 @@ npx tsx tools/diagnostics/headerInfo.ts /path/to/PS-X-EXE /tmp/header-info.md
 | Path | Contents |
 | --- | --- |
 | `toolchain.json` | Shared tool paths, flags, SDK inputs and explicit profiles |
+| `project.json` (optional) | Target assets, header roles and owner profiles |
 | `.pi/` | Decompilation/resource extensions and workflow skills |
 | `tools/agent/` | Matching, compiler analysis, source search and resource extraction |
 | `tools/build/` | npm pipeline, disassembly, SDK integration and build generators |
@@ -60,23 +67,26 @@ no policy exceptions and establish no facts for another game.
 
 Repository-wide rules live in `AGENTS.md`; active workflows live in `.pi/skills/`.
 `psx_reference` serves the per-pass sheets in `prompts/reference/`, selected by
-the residual owner rather than loaded wholesale. Historical standalone templates
-in `prompts/legacy/` are not active workflows; see [prompts/README.md](prompts/README.md).
+the residual owner rather than loaded wholesale. The per-pass sheets in `prompts/reference/` are served by `psx_reference`
+and loaded individually when the pipeline reversal names the owning pass.
 
 Policy exceptions belong in `.pi/autoloop.json` under `sourcePolicy.allowlist`.
 Key an entry by function name or `<container>:<address>` because overlays share
 RAM. Bare address keys apply only to the executable. This template supplies no
 exceptions; adding one is a human decision, not an agent workaround.
+Library TU exceptions use the member ID, not invented addresses or one symbol's
+approval borrowed by its neighbors.
 
 ## Validation and references
 
-Use narrow checks while scaffolding. `npm test` still includes inherited
-real-project tests requiring absent binaries, sources, generated headers and
-history; the full suite and strict TypeScript check are not currently green.
-Do not fabricate target inputs or suppress unrelated regressions to change that.
+`npm test` passes without BTN assets using [isolated fixtures](test-fixtures/harness/README.md)
+and the provisioned tools from `toolchain.json`. Optional historical original-asset
+tests remain guarded and skipped without their inputs; strict TypeScript checking
+still has inherited errors. Fixture checks do not establish target-byte identity.
 The locally provisioned compiler is an ignored artifact, not a distribution.
 
 - [Toolchain configuration and npm tasks](docs/toolchain.md)
+- [Library targets and verification scope](docs/library-targets.md)
 - [Migration inventory, pins and measured validation](docs/migration.md)
 - [Remaining generalization work](docs/game-agnosticity.md)
 - [Agent instructions](AGENTS.md)

@@ -27,6 +27,8 @@
  */
 
 import { configuredFlags, configuredTool } from "../lib/toolchain.js";
+import { loadLibraryProject } from "../lib/project.js";
+import { exportRelocatableContext, exportAllRelocatableContexts } from "./relocatableContext.js";
 import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync } from "fs";
 import { dirname, join, relative } from "path";
@@ -225,7 +227,7 @@ function renderFunctionsHeader(signatures: Map<string, string>): string {
  */
 export function verifyContextParses(
   rootDir: string,
-  container: Container = requireContainer(EXE_CONTAINER_ID),
+  container: Container = requireContainer(EXE_CONTAINER_ID, rootDir),
 ): { ok: boolean; skipped?: string; diagnostic?: string } {
   const asmRoot = join(rootDir, container.paths.asmDir, "nonmatchings");
   if (!existsSync(asmRoot)) {
@@ -280,7 +282,7 @@ export function verifyContextParses(
 export function writeContext(
   rootDir: string,
   signatures: Map<string, string>,
-  container: Container = requireContainer(EXE_CONTAINER_ID),
+  container: Container = requireContainer(EXE_CONTAINER_ID, rootDir),
   typeSignatures: Map<string, string> = signatures,
   catalog = scopedTypeCatalog(rootDir),
 ): void {
@@ -340,8 +342,10 @@ export function writeContext(
 export function exportContext(
   funcName: string,
   rootDir: string = ROOT,
-  container: Container = requireContainer(EXE_CONTAINER_ID),
+  container?: Container,
 ): ExportResult {
+  if (loadLibraryProject(rootDir)) return exportRelocatableContext(funcName, rootDir);
+  container ??= requireContainer(EXE_CONTAINER_ID, rootDir);
   const cFile = join(rootDir, container.paths.srcDir, `${funcName}.c`);
 
   if (!existsSync(cFile)) {
@@ -377,7 +381,7 @@ function unionSignatures(
   current: Map<string, string>,
 ): Map<string, string> {
   const union = new Map<string, string>(current);
-  for (const other of loadContainers()) {
+  for (const other of loadContainers(rootDir)) {
     if (other.id === container.id) continue;
     for (const [name, signature] of readExistingHeader(join(rootDir, functionsHeaderFor(other)))) {
       if (!union.has(name)) union.set(name, signature);
@@ -391,7 +395,7 @@ function unionSignatures(
  */
 function collectAllSignatures(
   rootDir: string,
-  container: Container = requireContainer(EXE_CONTAINER_ID),
+  container: Container = requireContainer(EXE_CONTAINER_ID, rootDir),
 ): { signatures: Map<string, string>; exported: string[]; skipped: string[] } {
   const srcDir = join(rootDir, container.paths.srcDir);
   if (!existsSync(srcDir)) return { signatures: new Map(), exported: [], skipped: [] };
@@ -422,8 +426,10 @@ function collectAllSignatures(
  */
 export function exportAll(
   rootDir: string = ROOT,
-  containers: Container[] = loadContainers(),
+  containers?: Container[],
 ): { exported: string[]; skipped: string[] } {
+  if (loadLibraryProject(rootDir)) return exportAllRelocatableContexts(rootDir);
+  containers ??= loadContainers(rootDir);
   const includes = generatedContextIncludes(rootDir);
   if (includes.length) throw new Error(`Generated context is included by compiler sources:\n${includes.join("\n")}`);
   const perContainer = containers.map((container) => ({
@@ -497,7 +503,15 @@ if (process.argv[1]?.endsWith("contextExport.ts")) {
   }
 
   try {
-    if (all) {
+    if (loadLibraryProject(ROOT)) {
+      if (containerId) throw new Error("Use the member-qualified target key instead of --container");
+      if (all) console.log(JSON.stringify(exportAllRelocatableContexts(ROOT, dryRun)));
+      else {
+        const result = exportRelocatableContext(funcName!, ROOT, dryRun);
+        if (!dryRun) console.log(CONTEXT_EXPORT_STATUS + JSON.stringify(result));
+        if (result.skipped) { console.log(`Skipped: ${result.reason}`); process.exitCode = 1; }
+      }
+    } else if (all) {
       if (dryRun) {
         const { signatures } = collectAllSignatures(ROOT, requireContainer(containerId ?? EXE_CONTAINER_ID));
         const { resolution, defs } = resolveContextTypes(ROOT, signatures);

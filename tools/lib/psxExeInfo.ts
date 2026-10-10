@@ -41,23 +41,23 @@ export interface SectionLayout {
  * here rather than through tools/lib/container.ts because the container model
  * reads this module, not the other way round.
  */
-export function exeSplatYamlPath(): string {
-  const moved = join(ROOT, "configs/splat/exe.yaml");
-  return existsSync(moved) ? moved : join(ROOT, "configs/splat.yaml");
+export function exeSplatYamlPath(root = ROOT): string {
+  const moved = join(root, "configs/splat/exe.yaml");
+  return existsSync(moved) ? moved : join(root, "configs/splat.yaml");
 }
 
 /** The PS-X EXE's `NAME = 0xADDR;` table, at whichever of the two paths exists. */
-export function exeSymbolAddrsPath(): string {
-  const moved = join(ROOT, "configs/symbols/exe.txt");
-  return existsSync(moved) ? moved : join(ROOT, "configs/symbol_addrs.txt");
+export function exeSymbolAddrsPath(root = ROOT): string {
+  const moved = join(root, "configs/symbols/exe.txt");
+  return existsSync(moved) ? moved : join(root, "configs/symbol_addrs.txt");
 }
 
 /**
  * Parse the PS-X EXE's splat header fields without a full YAML parser.
  * Returns target_path and gp_value if present.
  */
-function parseSplatYamlHeader(): { targetPath?: string; gpValue?: number; basename?: string } {
-  const yamlPath = exeSplatYamlPath();
+function parseSplatYamlHeader(root: string): { targetPath?: string; gpValue?: number; basename?: string } {
+  const yamlPath = exeSplatYamlPath(root);
   if (!existsSync(yamlPath)) return {};
 
   const content = readFileSync(yamlPath, "utf-8");
@@ -76,12 +76,12 @@ function parseSplatYamlHeader(): { targetPath?: string; gpValue?: number; basena
 }
 
 /** splat's `basename` for the main executable, from the project config. */
-export function exeBasename(): string {
-  const configured = parseSplatYamlHeader().basename;
+export function exeBasename(root = ROOT): string {
+  const configured = parseSplatYamlHeader(root).basename;
   if (configured) return configured;
   /* Fall back to the target file's own stem rather than a literal: the
      executable names itself, and no game's name belongs in this file. */
-  const target = discoverPsxExe();
+  const target = discoverPsxExe(join(root, "extracted"));
   return target ? basename(target).replace(/\.[^.]*$/, "").replace(/\./g, "_") : "main";
 }
 
@@ -170,9 +170,9 @@ function discoverGp(binary: Buffer, entryFileOffset: number): number | null {
  * Load PSX-EXE info from the binary and splat.yaml header.
  * Throws if binary not found or invalid.
  */
-export function loadPsxExeInfo(): PsxExeInfo {
-  const yaml = parseSplatYamlHeader();
-  const binaryPath = yaml.targetPath ? join(ROOT, yaml.targetPath) : discoverPsxExe();
+export function loadPsxExeInfo(root = ROOT): PsxExeInfo {
+  const yaml = parseSplatYamlHeader(root);
+  const binaryPath = yaml.targetPath ? join(root, yaml.targetPath) : discoverPsxExe(join(root, "extracted"));
 
   if (!binaryPath || !existsSync(binaryPath)) {
     throw new Error(
@@ -221,8 +221,8 @@ export function loadPsxExeInfo(): PsxExeInfo {
  * Load section layout from build/sectionLayout.json.
  * Returns null if the file doesn't exist.
  */
-export function loadSectionLayout(): SectionLayout | null {
-  const layoutPath = join(ROOT, "build/sectionLayout.json");
+export function loadSectionLayout(root = ROOT): SectionLayout | null {
+  const layoutPath = join(root, "build/sectionLayout.json");
   if (!existsSync(layoutPath)) return null;
   return JSON.parse(readFileSync(layoutPath, "utf-8"));
 }
@@ -230,8 +230,8 @@ export function loadSectionLayout(): SectionLayout | null {
 /**
  * Require section layout — throws if not available.
  */
-export function requireSectionLayout(): SectionLayout {
-  const layout = loadSectionLayout();
+export function requireSectionLayout(root = ROOT): SectionLayout {
+  const layout = loadSectionLayout(root);
   if (!layout) {
     throw new Error(
       "build/sectionLayout.json not found. Run bootstrap first: npx tsx tools/build/bootstrap.ts --write"

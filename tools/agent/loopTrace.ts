@@ -47,6 +47,7 @@ import {
   type EnsuredArtifact,
   type Provenance,
 } from "./provenance.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { parseLoopDump } from "./loop-trace/parse.js";
 import { readLineMap, sameCode, type LineMap } from "./loop-trace/lines.js";
 import { nameFor, readRtlFacts } from "./loop-trace/symbols.js";
@@ -157,7 +158,7 @@ export function loopTrace(
   const artifactPath = join(directory, "trace.json");
   /* Hoist decisions depend on header layouts/macros too, not just source bytes.
      Hash fresh cpp and compile that very snapshot rather than a second context. */
-  const preprocessed = readFileSync(preprocessOnly(source, directory, "trace-context"), "utf8");
+  const preprocessed = readFileSync(preprocessOnly(source, directory, "trace-context", resolveFunctionTarget(functionName).flags), "utf8");
 
   const ensured = ensureArtifact<LoopTraceResult>({
     artifactPath,
@@ -186,7 +187,7 @@ export function loopTrace(
           "the source may define no function under this name, or may not compile.",
         );
       }
-      const trace = parseLoopDump(readFileSync(dumpPath, "utf8"), functionName);
+      const trace = parseLoopDump(readFileSync(dumpPath, "utf8"), resolveFunctionTarget(functionName).symbol);
       resolveSymbols(trace, directory, functionName);
       if (trace.functionName === "") {
         /* cc1 wrote a dump but no section for this symbol, so the source
@@ -237,7 +238,7 @@ export function lineMapFor(functionName: string, sourceOverride?: string): LineM
   const source = resolveSource(functionName, sourceOverride);
   const directory = join(traceDirectory(functionName), "lines");
   const artifactPath = join(directory, "lines.json");
-  const preprocessed = readFileSync(preprocessOnly(source, directory, "lines-context"), "utf8");
+  const preprocessed = readFileSync(preprocessOnly(source, directory, "lines-context", resolveFunctionTarget(functionName).flags), "utf8");
 
   const ensured = ensureArtifact<{ file: string; byInsn: Array<[number, number]> } | null>({
     artifactPath,

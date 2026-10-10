@@ -1,6 +1,6 @@
 /** Conservative bounded tiling over original words. A tile proves expansion
  * compatibility, never historical provenance or a byte-matching C solution. */
-import { cop2Mnemonic, decodeMacroBytes, hex, isCop2, registerNumber, type MacroInstruction } from "./macroInstructions.js";
+import { cop2Mnemonic, decodeMacroFunction, hex, isCop2, registerNumber, type MacroInstruction } from "./macroInstructions.js";
 import type { CommandEncodingEvidence, InstructionPattern, MacroTemplate, TemplateLibrary } from "./macroTemplates.js";
 
 export interface MacroFunction {
@@ -8,6 +8,9 @@ export interface MacroFunction {
   container: string;
   vram: number;
   bytes: Buffer;
+  /** ET_REL coordinates/operands, not linked addresses. Indexed by word. */
+  coordinate?: { section: string; offset: number; inferredSize: boolean };
+  relocations?: ReadonlyMap<number, { type: number; reference: string; addend: number; targetOffset?: number; callee?: string }>;
   /** Metadata only; never a filter on target-byte decoding/tiling. */
   sourceRepresentation?: "compiled-C" | "INCLUDE_ASM" | "top-level-asm" | "missing" | "not-inspected";
   /** Independent adjudication only; disassembler 'handwritten' comments do
@@ -174,7 +177,7 @@ function alternative(template: MacroTemplate, operands: OperandBinding[]): Macro
 export function tileMacroFunction(fn: MacroFunction, library: TemplateLibrary, options: TilerOptions = {}, symbols: ReadonlyMap<number, string> = new Map()): MacroFunctionReport {
   const limits = { maxGap: options.maxGap ?? 16, maxNops: options.maxNops ?? 8, maxSearchStates: options.maxSearchStates ?? 4096 };
   for (const [key, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < (key === "maxSearchStates" ? 1 : 0)) throw new Error(`Invalid ${key}`);
-  const insns = decodeMacroBytes(fn.bytes, fn.vram);
+  const insns = decodeMacroFunction(fn);
   const targets = new Set(insns.filter(i => i.target !== null && i.op !== "jal").map(i => i.target!));
   const snapshots = operandStates(insns, targets, symbols);
   const cop = insns.filter(isCop2);

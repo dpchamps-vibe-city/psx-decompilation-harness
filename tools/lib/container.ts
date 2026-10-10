@@ -15,7 +15,7 @@
  */
 
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { ROOT, exeBasename, loadPsxExeInfo } from "./psxExeInfo.js";
 import { codeMembers, loadManifest, memberBinPath, type ManifestMember } from "./overlayManifest.js";
 
@@ -63,6 +63,8 @@ export interface ContainerPaths {
 }
 
 export interface Container {
+  /** Explicit project ownership; omitted only in older/in-memory callers. */
+  projectRoot?: string;
   id: string;
   kind: ContainerKind;
   /** splat's `basename` for this container. */
@@ -82,30 +84,31 @@ export interface Container {
 }
 
 /** First existing path, else the last one — so a move is a move, not a code change. */
-function preferred(...candidates: string[]): string {
+function preferred(root: string, ...candidates: string[]): string {
   for (const candidate of candidates.slice(0, -1)) {
-    if (existsSync(join(ROOT, candidate))) return candidate;
+    if (existsSync(join(root, candidate))) return candidate;
   }
   return candidates[candidates.length - 1]!;
 }
 
-function exeContainer(): Container {
-  const info = loadPsxExeInfo();
+function exeContainer(root: string): Container {
+  const info = loadPsxExeInfo(root);
   /* splat's own `basename` for this project. Never a literal — the executable's
      name is a fact about one game. */
-  const basename = exeBasename();
+  const basename = exeBasename(root);
   return {
+    projectRoot: root,
     id: EXE_CONTAINER_ID,
     kind: "exe",
     basename,
-    targetPath: info.binaryPath.startsWith(ROOT) ? info.binaryPath.slice(ROOT.length + 1) : info.binaryPath,
+    targetPath: info.binaryPath.startsWith(root + "/") ? info.binaryPath.slice(root.length + 1) : info.binaryPath,
     payloadOffset: info.payloadOffset,
     payloadSize: info.payloadSize,
     loadAddr: info.loadAddr,
     gpValue: info.gpValue,
     paths: {
-      splat: preferred("configs/splat/exe.yaml", "configs/splat.yaml"),
-      symbolAddrs: preferred("configs/symbols/exe.txt", "configs/symbol_addrs.txt"),
+      splat: preferred(root, "configs/splat/exe.yaml", "configs/splat.yaml"),
+      symbolAddrs: preferred(root, "configs/symbols/exe.txt", "configs/symbol_addrs.txt"),
       asmDir: "build/asm",
       srcDir: "src",
       objDir: "build/src",
@@ -124,15 +127,16 @@ function exeContainer(): Container {
   };
 }
 
-function overlayContainer(member: ManifestMember): Container | null {
+function overlayContainer(member: ManifestMember, root: string): Container | null {
   if (member.base?.verdict !== "resolved" || member.base.base === null) return null;
   return {
+    projectRoot: root,
     id: member.id,
     kind: "overlay",
     basename: member.id,
     /* An overlay's target is its extracted member bytes, which is why
        Deliverable 1's acceptance requires reproducible extraction. */
-    targetPath: memberBinPath(member).slice(ROOT.length + 1),
+    targetPath: memberBinPath(member, root).slice(root.length + 1),
     payloadOffset: member.base.loadOffset,
     payloadSize: member.size - member.base.loadOffset,
     loadAddr: member.base.base + member.base.loadOffset,
@@ -162,24 +166,26 @@ function overlayContainer(member: ManifestMember): Container | null {
   };
 }
 
-let cache: Container[] | undefined;
+const cache = new Map<string, Container[]>();
 
 /**
  * Every container the project builds: `exe` first, then one per code member
  * whose base is solved. A member whose base is `undetermined` is deliberately
  * absent — it is work to finish, not a container to build on a guessed base.
  */
-export function loadContainers(): Container[] {
-  if (cache) return cache;
-  const containers = [exeContainer()];
-  const manifest = loadManifest();
+export function loadContainers(root = ROOT): Container[] {
+  root = resolve(root);
+  const cached = cache.get(root);
+  if (cached) return cached;
+  const containers = [exeContainer(root)];
+  const manifest = loadManifest(root);
   if (manifest) {
     for (const member of codeMembers(manifest)) {
-      const container = overlayContainer(member);
+      const container = overlayContainer(member, root);
       if (container) containers.push(container);
     }
   }
-  cache = containers;
+  cache.set(root, containers);
   return containers;
 }
 
@@ -190,14 +196,14 @@ export function unresolvedCodeMembers(): ManifestMember[] {
   return codeMembers(manifest).filter((m) => m.base?.verdict !== "resolved");
 }
 
-export function loadContainer(id: string): Container | null {
-  return loadContainers().find((container) => container.id === id) ?? null;
+export function loadContainer(id: string, root = ROOT): Container | null {
+  return loadContainers(root).find((container) => container.id === id) ?? null;
 }
 
-export function requireContainer(id: string): Container {
-  const container = loadContainer(id);
+export function requireContainer(id: string, root = ROOT): Container {
+  const container = loadContainer(id, root);
   if (!container) {
-    const known = loadContainers().map((c) => c.id).join(", ");
+    const known = loadContainers(root).map((c) => c.id).join(", ");
     throw new Error(`Unknown container ${JSON.stringify(id)}. Known containers: ${known}`);
   }
   return container;
@@ -209,11 +215,11 @@ export function exeContainerOf(containers = loadContainers()): Container {
 
 /** Absolute path for one of a container's paths. */
 export function containerPath(container: Container, key: keyof ContainerPaths): string {
-  return join(ROOT, container.paths[key]);
+  return join(container.projectRoot ?? ROOT, container.paths[key]);
 }
 
 export function containerTargetPath(container: Container): string {
-  return join(ROOT, container.targetPath);
+  return join(container.projectRoot ?? ROOT, container.targetPath);
 }
 
 /** File offset of an address inside this container's image. */
@@ -280,5 +286,5 @@ export function defaultFunctionName(container: Container, vram: number): string 
 
 /** Reset the module cache. Tests and long-lived processes need this after a re-split. */
 export function resetContainerCache(): void {
-  cache = undefined;
+  cache.clear();
 }

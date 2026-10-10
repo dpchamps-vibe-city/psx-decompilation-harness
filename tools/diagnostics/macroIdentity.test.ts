@@ -13,6 +13,8 @@ import { tileMacroFunction, type MacroFunction } from "./macroTiler.js";
 import { mineMacroCandidates } from "./macroMiner.js";
 import { detectMacroIdentities, loadMacroFunctions, formatMacroIdentityReport } from "./macroIdentity.js";
 import { collectMacroCoverage, loadMacroTextRanges, scanMacroPresence } from "./macroCoverage.js";
+import { configuredFlags } from "../lib/toolchain.js";
+import { projectFixture } from "../testing/projectFixture.js";
 
 const bytes = (...words: number[]): Buffer => {
   const buffer = Buffer.alloc(words.length * 4);
@@ -134,7 +136,7 @@ test("fixed final command words do not match different GTE operations or DMPSX m
   assert.equal(tileMacroFunction(fn(bytes(0, 0, 0x4a180001)), sdk).tiling.length, 0);
 });
 
-test("production oracle uses the repo include graph and both configured flag columns", () => {
+test("production oracle uses the repo include graph and both configured flag columns", (t) => {
   for (const oracle of [productionExe, productionOverlay]) {
     const kind = oracle.report.containerKind;
     assert.deepEqual(oracle.report.cc1Flags, configuredCc1FlagsForContainer(kind));
@@ -156,8 +158,11 @@ test("production oracle uses the repo include graph and both configured flag col
     assert.equal(report.tiling[0]!.encodingEvidence[0]!.probeObjectSha256, oracle.report.probeObjectSha256);
     assert.ok(oracle.library.diagnostics.some(d => d.reason.includes("GAS macro 'rt'")), "missing aliases stay unresolved rather than guessed");
   }
-  assert.ok(productionExe.report.asFlags.includes("-G8"));
-  assert.ok(productionOverlay.report.asFlags.includes("-G0"));
+  // Production columns follow config; only the isolated fixture selects G0.
+  const { root, toolchain } = projectFixture(t);
+  assert.deepEqual(configuredFlags("cc1", { kind: "exe" }, root), toolchain.flags.cc1);
+  assert.deepEqual(configuredFlags("cc1", { kind: "overlay" }, root), toolchain.profiles.fixture_overlay!.cc1);
+  assert.ok(configuredFlags("as", { kind: "overlay" }, root).includes("-G0"));
   assert.throws(() => deriveRepoMacroEncodings(productionExe.library, "overlay"), /raw header templates/);
 });
 

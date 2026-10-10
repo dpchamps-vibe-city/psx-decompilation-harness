@@ -18,7 +18,9 @@ import { readFileSync } from "node:fs";
 import { containerTargetPath, vramToRom, type Container } from "../../lib/container.js";
 import { loadSymbolIndex, requireFunctionLocation, resolveAddress } from "../../lib/symbolIndex.js";
 import { decodeBytes } from "../matching-reconstruction/exec.js";
-import type { DecodedInsn } from "../matching-reconstruction/decode.js";
+import { decodeFunctionWords, type DecodedInsn } from "../matching-reconstruction/decode.js";
+import { resolveFunctionTarget, type FunctionTarget } from "../../lib/targetAdapter.js";
+import { targetWordsOf } from "../../lib/functionOracle.js";
 import { buildCfg, renderCfg, type Cfg } from "./cfg.js";
 import { computeDominators } from "./dominance.js";
 import { buildRegions, distinctRegionCount, regionCount, renderRegions, type RegionTree } from "./regions.js";
@@ -30,6 +32,7 @@ export interface MachineIrReport {
   containerId: string;
   vram: number;
   sizeBytes: number;
+  coordinate?: FunctionTarget["coordinate"];
   ir: LiftResult;
   regions: RegionTree;
   /** The sizes the proportionality claim is about. */
@@ -96,6 +99,12 @@ function dispatchResolver(
 
 /** Build the machine IR for one named function. */
 export function buildMachineIr(functionName: string): MachineIrReport {
+  const target = resolveFunctionTarget(functionName);
+  if (target.coordinate.kind === "section") {
+    const insns = decodeFunctionWords(targetWordsOf(functionName));
+    return { ...buildMachineIrFrom(functionName, insns, { containerId: target.owner.id,
+      vram: target.coordinate.offset, sizeBytes: target.coordinate.size }), coordinate: target.coordinate };
+  }
   const location = requireFunctionLocation(functionName);
   const container = location.container;
   const span = location.span;
@@ -176,7 +185,8 @@ export function resolveCallTargets(report: MachineIrReport): Map<number, string>
 export function renderMachineIr(report: MachineIrReport, options: { values?: boolean } = {}): string[] {
   const lines: string[] = [];
   const size = report.size;
-  lines.push(`${report.functionName} @ 0x${report.vram.toString(16)} (${report.sizeBytes} B, ${report.containerId})`);
+  const coordinate = report.coordinate?.kind === "section" ? `${report.coordinate.section}+0x${report.coordinate.offset.toString(16)}${report.coordinate.inferredSize ? " (inferred extent)" : ""}` : `0x${report.vram.toString(16)}`;
+  lines.push(`${report.functionName} @ ${coordinate} (${report.sizeBytes} B, ${report.containerId})`);
   lines.push(
     `  size: ${size.instructions} insn → ${size.blocks} block(s), ${size.edges} edge(s), ` +
     `${size.values} value(s) (${size.phis} phi), ${size.memoryVersions} memory version(s), ` +

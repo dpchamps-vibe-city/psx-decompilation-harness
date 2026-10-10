@@ -12,10 +12,12 @@ import { extractMacroTemplates } from "../../../../tools/diagnostics/macroTempla
 import { tileMacroFunction } from "../../../../tools/diagnostics/macroTiler.ts";
 import { attemptStaticFinalization, buildInputs, documentCompletion, inputIdentity, sameInputs, type Completion } from "./prepared-attempt.ts";
 import { DEFAULT_CONFIG } from "../../shared/config.ts";
+import { seedProjectFixture } from "../../../../tools/testing/projectFixture.js";
 import { checkSourcePolicy } from "../../shared/source-policy.ts";
 
 function fixture(t: { after: (f: () => void) => void }) {
   const root = mkdtempSync(join(tmpdir(), "prepared-lifecycle-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  seedProjectFixture(root);
   for (const dir of ["src", "include", "configs", "build/draft"]) mkdirSync(join(root, dir), { recursive: true });
   const stub = '#include "common.h"\nINCLUDE_ASM("build/asm/nonmatchings/f", f);\n';
   const text = "void f(void) {}\n";
@@ -113,7 +115,8 @@ test("unavailable detection, no macros and COP2 presence alone never grant a mac
   for (const value of [undefined, null]) {
     if (value === undefined) delete packet.discovery.macroIdentity;
     else packet.discovery.macroIdentity = value;
-    assert.match(packetOpening(packet, attempt.path), /detection unavailable; no macro policy exception/);
+    assert.match(packetEvidence(packet), /detection unavailable; no macro policy exception/);
+    assert.doesNotMatch(packetOpening(packet, attempt.path), /you may call/);
   }
   for (const word of [0x03e00008, 0x4affffff]) {
     const bytes = Buffer.alloc(4); bytes.writeUInt32LE(word);

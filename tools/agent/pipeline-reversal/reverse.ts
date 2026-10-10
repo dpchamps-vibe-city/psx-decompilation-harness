@@ -10,6 +10,10 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { StubSourceError, compareFunction } from "../../lib/functionOracle.js";
 import { loadSymbolIndex, requireFunctionLocation } from "../../lib/symbolIndex.js";
+import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
+import { configuredFlags, configuredFileFlags } from "../../lib/toolchain.js";
+import { filesUnder } from "../../lib/contentCache.js";
+import { requireLibraryFunction } from "../../lib/libraryTargets.js";
 import {
   CPP_FLAGS,
   ROOT,
@@ -106,22 +110,19 @@ function sameOrder(left: MirProgram, right: MirProgram): boolean {
  * still carried the removed flag (recorded in
  * notes/research/ovl_11_func_800F13D8-embedded-table-origin.md).
  */
-export function candidateObjectInputs(functionName: string, source: string): ProvenanceInputs {
-  const kind = containerKindForSymbol(functionName);
+export function candidateObjectInputs(functionName: string, source: string, root = ROOT): ProvenanceInputs {
+  const target = resolveFunctionTarget(functionName, root), context = target.flags;
+  const member = context.kind === "library" ? requireLibraryFunction(functionName, root).member : undefined;
   return {
     files: [
-      ...sourceDependencyFiles(source),
-      join(ROOT, "toolchain.json"),
+      ...sourceDependencyFiles(source, context, root), join(root, "toolchain.json"),
+      ...(member ? [join(root, "project.json"), join(root, member.input), ...filesUnder(join(root, target.includeAsm.folder))] : []),
     ],
-    values: {
-      mode: "compiled",
-      containerKind: kind,
-      cppFlags: CPP_FLAGS,
-      cc1Flags: [...configuredCc1FlagsForContainer(kind, containerForSymbol(functionName)?.id), ...(loadFlagOverrides().get(functionName) ?? [])],
-      asFlags: configuredAsFlagsForContainer(kind, containerForSymbol(functionName)?.id),
-      maspsxFlags: configuredMaspsxFlags(),
-    },
-    implementation: [join(ROOT, "tools/agent/decompToolchain.ts")],
+    values: { mode: "compiled", owner: target.owner,
+      cppFlags: configuredFlags("cpp", context, root),
+      cc1Flags: [...configuredFlags("cc1", context, root), ...configuredFileFlags(member?.id ?? target.symbol, root)],
+      asFlags: configuredFlags("as", context, root), maspsxFlags: configuredFlags("maspsx", context, root) },
+    implementation: [join(ROOT, "tools/agent/decompToolchain.ts"), join(ROOT, "tools/lib/compilerArtifacts.ts"), join(ROOT, "tools/lib/targetAdapter.ts")],
   };
 }
 
@@ -214,13 +215,14 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
      looks the function up in the executable's splat config and reports it has
      no subsegment — a true statement about the wrong binary. The name carries
      the container for every overlay symbol, so nothing has to be passed in. */
-  const container = requireFunctionLocation(functionName).container;
-  const oracle = compareFunction(functionName, { objectPath, container });
+  const target = resolveFunctionTarget(functionName);
+  const container = target.coordinate.kind === "image" ? requireFunctionLocation(functionName).container : undefined;
+  const oracle = compareFunction(functionName, { objectPath, ...(container ? { container } : {}) });
   /* Nothing downstream can read a stub. The lift would produce the original
      words on both sides and every waypoint would agree, so the reversal would
      report a perfect program that no compiler produced. Refuse at the seam. */
   if (oracle.verdict === "stub") throw new StubSourceError(functionName, objectPath);
-  const index = loadSymbolIndex(container);
+  const index = container ? loadSymbolIndex(container) : { byAddress: new Map<number, string>(), addresses: [] };
 
   const targetMachine = liftWords({ functionName, words: oracle.targetWords, index });
   const candidateMachine = liftWords({ functionName, words: oracle.candidateWords, index });
@@ -337,14 +339,18 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
     const insn = candidateDbr.program.insns.find((entry) => entry.vram === word.vram);
     if (insn) blindBlocks.add(insn.block);
   }
+  const exact = oracle.verdict === "match" && (!oracle.verification || oracle.verification.verdict === "match");
   const objective = residualObjective(
     functionName, comparison, targetDbr.program, candidateDbr.program,
-    oracle.verdict === "match", oracle.undetermined.length, blindBlocks);
+    exact, oracle.undetermined.length, blindBlocks);
+  if (oracle.verification && oracle.verification.verdict !== "match")
+    objective.reason = `${objective.reason ? `${objective.reason}; ` : ""}Owning TU: ${oracle.verification.verdict}; ${oracle.verification.differences.join("; ")}`;
 
   const report: ReversalReport = {
     schemaVersion: PIPELINE_REVERSAL_SCHEMA_VERSION,
     functionName,
-    exact: oracle.verdict === "match",
+    exact,
+    ...(oracle.verification ? { verification: oracle.verification } : {}),
     matchedWords: oracle.same,
     totalWords: oracle.same + oracle.differing.length + oracle.undetermined.length,
     comparisons,

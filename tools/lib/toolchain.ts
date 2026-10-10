@@ -20,8 +20,8 @@ export interface ToolchainConfig {
   includeDirs: string[];
   flags: Record<FlagName, string[]>;
   /** A profile replaces the named flag arrays; omitted arrays inherit base. */
-  profiles: Record<string, Partial<Record<"cc1" | "as" | "ld" | "maspsx", string[]>>>;
-  /** Exact container id first, then kind (exe/overlay). No implicit selection. */
+  profiles: Record<string, Partial<Record<FlagName, string[]>> & { includeDirs?: string[] }>;
+  /** Exact owner id first, then kind (exe/overlay/library). No implicit selection. */
   containerProfiles: Record<string, string>;
   /** Additional cc1 flags, keyed by source/function stem. */
   fileFlags: Record<string, string[]>;
@@ -60,7 +60,7 @@ export function loadToolchain(root = HARNESS_ROOT): ToolchainConfig {
   for (const name of FLAG_NAMES) strings(value.flags[name], `flags.${name}`);
   object(value.profiles, "profiles");
   for (const [name, profile] of Object.entries(value.profiles)) {
-    const p = object(profile, `profiles.${name}`); keys(p, ["cc1", "as", "ld", "maspsx"], `profiles.${name}`);
+    const p = object(profile, `profiles.${name}`); keys(p, [...FLAG_NAMES, "includeDirs"], `profiles.${name}`);
     for (const [flag, args] of Object.entries(p)) strings(args, `profiles.${name}.${flag}`);
   }
   object(value.containerProfiles, "containerProfiles");
@@ -82,13 +82,16 @@ export function configuredTool(name: ToolName, root = HARNESS_ROOT): string {
   if (name === "maspsx" || name === "m2c") return executablePath(value, root) ?? resolve(root, value);
   return value;
 }
-export function configuredFlags(name: FlagName, container?: { id?: string | undefined; kind: "exe" | "overlay" }, root = HARNESS_ROOT): string[] {
+export interface FlagContext { id?: string | undefined; kind: "exe" | "overlay" | "library"; profile?: string }
+export function configuredFlags(name: FlagName, container?: FlagContext, root = HARNESS_ROOT): string[] {
   const config = loadToolchain(root);
-  const profile = container ? config.containerProfiles[container.id ?? ""] ?? config.containerProfiles[container.kind] : undefined;
-  const flags = [...(profile ? (config.profiles[profile] as Partial<Record<FlagName, string[]>>)[name] ?? config.flags[name] : config.flags[name])];
+  const profile = container ? container.profile ?? config.containerProfiles[container.id ?? ""] ?? config.containerProfiles[container.kind] : undefined;
+  if (profile && !config.profiles[profile]) throw new Error(`${TOOLCHAIN_FILE}: unknown profile ${profile}`);
+  const selected = profile ? config.profiles[profile] : undefined;
+  const flags = [...(selected?.[name] ?? config.flags[name])];
   // Includes are shared between production and diagnostics. Preserve one argv
   // item per path, including paths with spaces; never join them into a shell.
-  if (name === "cpp" || name === "as") flags.unshift(...config.includeDirs.map(p => `-I${resolve(root, p)}`));
+  if (name === "cpp" || name === "as") flags.unshift(...(selected?.includeDirs ?? config.includeDirs).map(p => `-I${resolve(root, p)}`));
   for (let i = 0; i < flags.length; i++) {
     if (flags[i] === "-I" && flags[i + 1]) flags[++i] = resolve(root, flags[i]!);
     else if (flags[i]!.startsWith("-I") && flags[i]!.length > 2) flags[i] = `-I${resolve(root, flags[i]!.slice(2))}`;

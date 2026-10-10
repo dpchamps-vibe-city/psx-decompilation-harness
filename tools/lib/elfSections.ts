@@ -2,6 +2,8 @@
 export interface Elf32Section {
   index: number;
   type: number;
+  flags: number;
+  alignment: number;
   offset: number;
   size: number;
   link: number;
@@ -42,7 +44,7 @@ export function elf32Sections(bytes: Buffer): Map<string, Elf32Section> {
     const name = bytes.toString("utf8", names + nameOffset, end);
     if (name && result.has(name)) fail(`duplicate section ${name}`);
     if (name) result.set(name, {
-      index: i, type, offset: u32(header + 16), size,
+      index: i, type, flags: u32(header + 8), alignment: u32(header + 32), offset: u32(header + 16), size,
       link: u32(header + 24), info: u32(header + 28), entsize: u32(header + 36),
       data: type === 8 ? Buffer.alloc(0) : bytes.subarray(u32(header + 16), u32(header + 16) + size),
     });

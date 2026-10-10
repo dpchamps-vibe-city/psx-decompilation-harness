@@ -68,6 +68,10 @@ import { compareFunction } from "../lib/functionOracle.js";
 import { cachedPreprocess, withPreprocessorMetadata, preprocessingTools } from "./preprocessedCache.js";
 import { digest, snapshot, readCache, writeCache } from "../lib/contentCache.js";
 import { declaredFunction } from "./sdkTypes.js";
+import { configuredFlags } from "../lib/toolchain.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
+import { loadLibraryProject, libraryContext } from "../lib/project.js";
+import { requireLibraryFunction } from "../lib/libraryTargets.js";
 import { inspectType } from "./type-propagation/c-types.js";
 import { children, field, parseC, subtreeIsBroken, walk, type Node } from "./residual-source-search/tree-sitter-c.js";
 
@@ -362,12 +366,15 @@ function effectiveSource(path: string): string {
 }
 
 let sdkIndexCache: { identity: string; index: Map<string, Prototype>; observed: Record<string, string> } | undefined;
-export function sdkPrototypes(): Map<string, Prototype> {
-  return withPreprocessorMetadata(buildSdkPrototypes);
+export function sdkPrototypes(owner?: string): Map<string, Prototype> {
+  return withPreprocessorMetadata(() => buildSdkPrototypes(owner));
 }
-function buildSdkPrototypes(): Map<string, Prototype> {
-  const headers = headersUnder(join(ROOT, "include/psyq"));
-  const identity = digest(JSON.stringify([configuredCppFlags(), preprocessingTools(), snapshot(ROOT, ["include", "tools/agent/calleeTruth.ts", "tools/agent/sdkTypes.ts",
+function buildSdkPrototypes(owner?: string): Map<string, Prototype> {
+  const project = loadLibraryProject();
+  const references = project?.headers.reference ?? ["include/psyq"];
+  const headers = [...new Set(references.flatMap(p => headersUnder(join(ROOT, p))))];
+  const flags = configuredFlags("cpp", owner ? resolveFunctionTarget(owner).flags : project ? libraryContext("") : undefined);
+  const identity = digest(JSON.stringify([flags, preprocessingTools(), snapshot(ROOT, [...references, "include", "tools/agent/calleeTruth.ts", "tools/agent/sdkTypes.ts",
     "tools/agent/preprocessedCache.ts", "tools/agent/residual-source-search/tree-sitter-c.ts", "tools/vendor/tree-sitter-c", "package-lock.json",
     preprocessingTools().tools.cpp], (p) => !/include\/(?:functions\.h|sdk_types\.h|overlays\/)/.test(p))]));
   const fresh = (observed: Record<string, string>) => JSON.stringify(observed) === JSON.stringify(snapshot(ROOT, Object.keys(observed)));
@@ -379,7 +386,7 @@ function buildSdkPrototypes(): Map<string, Prototype> {
   const dependencies = new Set<string>();
   for (const header of headers) {
     const where = relative(ROOT, header);
-    const processed = cachedPreprocess(header);
+    const processed = cachedPreprocess(header, ROOT, flags);
     for (const path of processed.dependencies) dependencies.add(path);
     const scope = scopeFromPreprocessed(processed.text);
     for (const prototype of prototypesIn(scope.source, where, scope.lineOf)) {
@@ -403,32 +410,35 @@ function definesFunction(text: string, callee: string): boolean {
  * A definition is a stronger witness than any declaration of the same
  * function, because it is the thing the declaration is supposed to describe.
  */
-export function definitionPrototype(callee: string): Prototype | undefined {
+export function definitionPrototype(callee: string, root = ROOT): Prototype | undefined {
   /* Source can change inside an interactive process. Never cache a prototype
      solely by symbol name; preparation must observe the defining source now. */
-  return computeDefinitionPrototype(callee);
+  return computeDefinitionPrototype(callee, root);
 }
 
-function computeDefinitionPrototype(callee: string): Prototype | undefined {
+function computeDefinitionPrototype(callee: string, root: string): Prototype | undefined {
   /* Scoped to the callee's own container: an overlay's translation units live
      under its own source directory, and the executable's under the project's.
      Sweeping the wrong directory answers "no definition" for every overlay
      callee, which reads as an absence of evidence rather than a wrong path. */
-  const direct = sourcePathFor(callee);
-  const sourceDir = sourceDirFor(callee);
+  let target;
+  try { target = resolveFunctionTarget(callee, root); } catch { return undefined; }
+  const symbol = target.symbol;
+  const direct = join(root, target.source);
+  const sourceDir = sourceDirFor(callee, root);
   const candidates = existsSync(direct)
     ? [direct]
-    : !existsSync(sourceDir)
+    : target.owner.kind === "library" || !existsSync(sourceDir)
       ? []
       : readdirSync(sourceDir)
         .filter((name) => name.endsWith(".c"))
         .map((name) => join(sourceDir, name))
-        .filter((path) => definesFunction(readFileSync(path, "utf-8"), callee));
+        .filter((path) => definesFunction(readFileSync(path, "utf-8"), symbol));
 
   for (const path of candidates) {
-    const scope = scopeFromPreprocessed(effectiveSource(path));
-    const found = prototypesIn(scope.source, relative(ROOT, path), scope.lineOf)
-      .find((item) => item.name === callee && item.kind === "definition");
+    const scope = scopeFromPreprocessed(cachedPreprocess(path, root).text);
+    const found = prototypesIn(scope.source, relative(root, path), scope.lineOf)
+      .find((item) => item.name === symbol && item.kind === "definition");
     if (found) return found;
   }
   return undefined;
@@ -514,10 +524,10 @@ function targetReadObserver(scratch: string,
       const evidence = targetReadEvidence(insns, (insn) => {
         const name = insn.mnemonic === "jal" ? insn.relocation?.symbol : undefined;
         if (!name || name === ".text") return { reads: [], unknown: [0, 1, 2, 3] };
-        const sdk = (sdkIndex ??= sdkPrototypes()).get(name);
+        const sdk = (sdkIndex ??= sdkPrototypes(callee)).get(name);
         if (sdk?.parameters !== null && sdk?.parameters !== undefined && !sdk.variadic && sdk.slots?.every((s) => s !== null))
           return { reads: sdk.slots as number[], unknown: [] };
-        const child = read(name);
+        const child = read(scopedCallee(callee, name));
         return { reads: child.reads ?? [], unknown: child.readsComplete === false ? [0, 1, 2, 3] : child.undeterminedReads ?? [] };
       });
       memo.set(callee, evidence); return evidence;
@@ -877,6 +887,16 @@ export function calleesOf(instructions: DisassembledInstruction[]): { direct: st
   return { direct: [...direct].sort(), indirect };
 }
 
+/** Local member definitions win; ambiguous imports never borrow a neighbor. */
+function scopedCallee(owner: string, symbol: string): string {
+  if (!loadLibraryProject()) return symbol;
+  try {
+    const { member } = requireLibraryFunction(owner);
+    if (member.functions.some(f => f.name === symbol)) return `${member.id}::${symbol}`;
+    return requireLibraryFunction(symbol).key;
+  } catch { return symbol; }
+}
+
 interface AuditEvidence {
   sdk?: Map<string, Prototype>;
   definition?: typeof definitionPrototype;
@@ -897,26 +917,27 @@ export function auditCallees(name: string, sourcePath: string, scratch: string, 
     if (!inScope.has(prototype.name)) inScope.set(prototype.name, prototype);
   }
 
-  const sdk = evidence.sdk ?? sdkPrototypes();
+  const sdk = evidence.sdk ?? sdkPrototypes(name);
   const callees: CalleeReport[] = [];
-  const readTarget = targetReadObserver(scratch);
+  const readTarget = targetReadObserver(scratch, undefined, sdk);
   let observer: ReturnType<typeof callerSiteObserver> | undefined;
   const callerEvidence = evidence.callerSites ?? ((callee: string, slots: number[]) => (observer ??= callerSiteObserver())(callee, slots));
 
   for (const callee of direct) {
-    if (callee === name) continue;
+    const calleeKey = scopedCallee(name, callee);
+    if (calleeKey === name) continue;
     const declared = inScope.get(callee);
     const witnesses: Witness[] = [];
 
     const fromSdk = sdk.get(callee);
     if (fromSdk) witnesses.push({ kind: "sdk", where: fromSdk.where, prototype: fromSdk });
 
-    const fromDefinition = (evidence.definition ?? definitionPrototype)(callee);
+    const fromDefinition = (evidence.definition ?? definitionPrototype)(calleeKey);
     if (fromDefinition && fromDefinition.where !== displayPath(sourcePath)) {
       witnesses.push({ kind: "definition", where: fromDefinition.where, prototype: fromDefinition });
     }
 
-    const fromTarget = evidence.target ? evidence.target(callee) : targetWitness(callee, scratch, readTarget);
+    const fromTarget = evidence.target ? evidence.target(callee) : targetWitness(calleeKey, scratch, readTarget);
     if (fromTarget) witnesses.push({ ...fromTarget, callee });
 
     const item = adjudicateCallee(callee, declared, witnesses, source);

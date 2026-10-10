@@ -25,18 +25,20 @@ export interface SymbolTypes {
   scalars: Map<string, string>;
 }
 
-let cachedSymbolTypes: SymbolTypes | undefined;
+const cachedSymbolTypes = new Map<string, SymbolTypes>();
 
 /**
  * The declared type of each data symbol the include path names.
  *
  * The type has to come from a declaration, never from the shape of a use:
- * `&D_80049370[i]` is an `s32 *` only because a header says the array holds
+ * `&values[i]` is an `s32 *` only because a header says the array holds
  * `s32`. A symbol this cannot read has no entry, and every site that would
  * need it is refused rather than typed by guess.
  */
-export function symbolTypes(): SymbolTypes {
-  if (cachedSymbolTypes) return cachedSymbolTypes;
+export function symbolTypes(includeDirs = CPP_FLAGS.filter(flag => flag.startsWith("-I")).map(flag => flag.slice(2))): SymbolTypes {
+  const key = JSON.stringify(includeDirs);
+  const cached = cachedSymbolTypes.get(key);
+  if (cached) return cached;
   const arrays = new Map<string, string>();
   const scalars = new Map<string, string>();
   const seen = new Set<string>();
@@ -111,11 +113,10 @@ export function symbolTypes(): SymbolTypes {
       }
     }
   };
-  for (const flag of CPP_FLAGS) {
-    if (flag.startsWith("-I")) scan(flag.slice(2), 0);
-  }
-  cachedSymbolTypes = { arrays, scalars };
-  return cachedSymbolTypes;
+  for (const directory of includeDirs) scan(directory, 0);
+  const types = { arrays, scalars };
+  cachedSymbolTypes.set(key, types);
+  return types;
 }
 
 /* ------------------------------------------------------------------ */
@@ -174,7 +175,7 @@ function isPure(node: Node): boolean {
   return pure;
 }
 
-/** `D_80049370` from `D_80049370[i]`; `D_8006BF48` from `(&D_8006BF48)[i]`. */
+/** `values` from `values[i]`; `run` from `(&run)[i]`. */
 function arraySymbol(argument: Node, source: string, types: SymbolTypes):
 { name: string; elementType: string; addressOf: boolean } | undefined {
   if (argument.type === "identifier") {
@@ -204,9 +205,9 @@ function statementNode(root: Node, node: SemanticNode): Node | undefined {
  * that element reaches all of them.
  *
  * This is the form the residual keeps asking for and the grammar could not
- * spell. `D_80049370[i]`, `D_80049370[i + 1]`, `D_80049370[i + 2]` are three
+ * spell. `values[i]`, `values[i + 1]`, `values[i + 2]` are three
  * addresses off one base. The source can say that outright —
- * `s32 *p = &D_80049370[i];` and then `p[0]`, `p[1]`, `p[2]` — and the choice
+ * `s32 *p = &values[i];` and then `p[0]`, `p[1]`, `p[2]` — and the choice
  * between the two spellings is a decision the original author made, not a
  * cosmetic one: it changes which quantity is live, for how long, and therefore
  * what the allocator does with it. Hand-authored variants of exactly this
@@ -224,9 +225,11 @@ export function basePointerSites(options: {
   closureNodes: Set<string>;
   flowOrder: string[];
   reserved: Set<string>;
+  /** Declarations from the selected context (also supports isolated fixtures). */
+  symbolTypes?: SymbolTypes;
 }): { sites: BasePointerSite[]; refusals: string[] } {
   const { graph, source, closureNodes, flowOrder, reserved } = options;
-  const types = symbolTypes();
+  const types = options.symbolTypes ?? symbolTypes();
   const refusals: string[] = [];
   const orderIndex = new Map(flowOrder.map((id, index) => [id, index]));
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));

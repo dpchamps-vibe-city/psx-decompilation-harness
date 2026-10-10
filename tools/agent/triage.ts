@@ -116,6 +116,7 @@ import { loadSubsegments } from "../lib/symbolIndex.js";
 import { boundaryPremise, followingTextObject } from "../lib/sdkProvenance.js";
 import { allocationDominant, fingerprintWebPartition, type FingerprintReport } from "../diagnostics/fingerprintWebPartition.js";
 import { nestedFunctionCensus, chainRow, type ChainRow } from "../diagnostics/nestedFunctionScan.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { sourceConstructFindings } from "../../.pi/extensions/shared/source-policy.ts";
 import { loadConfig } from "../../.pi/extensions/shared/config.ts";
 
@@ -2260,8 +2261,9 @@ function allowlistFor(name: string): string[] {
  * embedded-asm-inside-compiled-C failure mode this detector is hunting.
  */
 function detectAsmPolicy(name: string, srcText: string): Finding[] {
-  const container = containerForSymbol(name)?.id ?? "exe";
-  return sourceConstructFindings(srcText, loadConfig(ROOT), { name, container }).map(f => ({
+  const target = resolveFunctionTarget(name);
+  const container = target.owner.id;
+  return sourceConstructFindings(srcText, loadConfig(ROOT), { name: target.owner.kind === "library" ? container : name, container }).map(f => ({
     detector: "asm-policy", severity: "blocker", summary: f.message,
     evidence: [f.text ?? `line ${f.line ?? "unknown"}`], see: ["AGENTS.md"],
   }));

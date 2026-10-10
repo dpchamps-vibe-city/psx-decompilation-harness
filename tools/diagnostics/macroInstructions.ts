@@ -2,6 +2,7 @@
  * Registers in COP2 operands are NOT general-purpose registers. Unknown words
  * are barriers, never instructions a matcher is allowed to skip. */
 import { decodeWord } from "../agent/matching-reconstruction/decode.js";
+import type { MacroFunction } from "./macroTiler.js";
 
 export type AtomKind = "gpr" | "cop" | "imm" | "word" | "address";
 export interface Atom { kind: AtomKind; value: number }
@@ -15,6 +16,7 @@ export interface MacroInstruction {
   control: boolean;
   memory: boolean;
   target: number | null;
+  callee?: string;
 }
 export const hex = (n: number): string => `0x${(n >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
 const g = (value: number): Atom => ({ kind: "gpr", value });
@@ -86,6 +88,25 @@ export function decodeMacroInstruction(word: number, vram: number): MacroInstruc
     if (d.op === "jalr") result.writes = [rd];
   } else if (d.op === "break") { result.args = [i(d.code!)]; result.control = true; }
   return result;
+}
+
+/** Shared function view: unresolved relocation fields are never numeric facts. */
+export function decodeMacroFunction(fn: MacroFunction): MacroInstruction[] {
+  const insns = decodeMacroBytes(fn.bytes, fn.vram);
+  for (const [at, relocation] of fn.relocations ?? []) {
+    const insn = insns[at]; if (!insn || relocation.type === 0) continue;
+    if ([4, 10].includes(relocation.type)) {
+      insn.target = relocation.targetOffset ?? null;
+      if (relocation.callee) insn.callee = relocation.callee;
+      insn.args = insn.args.filter(a => a.kind !== "address");
+      if (insn.target !== null) insn.args.push({ kind: "address", value: insn.target });
+    } else {
+      // The opcode/register effects remain useful, but macro tiling must not
+      // turn an unresolved address field into a constant operand binding.
+      insn.op = `reloc-${insn.op}`;
+    }
+  }
+  return insns;
 }
 
 export function decodeMacroBytes(bytes: Buffer, vram: number): MacroInstruction[] {

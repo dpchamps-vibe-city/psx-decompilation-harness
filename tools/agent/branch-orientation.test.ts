@@ -5,7 +5,7 @@ import { branchOrientations, attachJumpAttribution } from "./branch-orientation.
 import { jumpTraceFromDumps } from "./jumpTrace.js";
 
 function machine(lines: string[]) {
-  return liftWords({ functionName: "fixture", words: lines.map((text, i) => ({ vram: 0x1000 + 4 * i, raw: 0, text, key: text })) });
+  return liftWords({ functionName: "fixture", index: { byAddress: new Map(), addresses: [] }, words: lines.map((text, i) => ({ vram: 0x1000 + 4 * i, raw: 0, text, key: text })) });
 }
 const branch = (sense = "bnez", temporary = "v1", bit = 8) => machine([
   `lw ${temporary},0x0(a0)`, `andi ${temporary},${temporary},${bit}`, `${sense} ${temporary},0x1014`,

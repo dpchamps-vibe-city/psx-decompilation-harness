@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test, after } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import {
 } from "./sdkTypes.js";
 import { exportContext, exportAll, generatedContextIncludes, signatureContract, parseContextExportArgs, resolveContextTypes, verifyContextParses, writeContext } from "./contextExport.js";
 import { requireContainer } from "../lib/container.js";
+import { projectFixture } from "../testing/projectFixture.js";
 
 const REPO = new URL("../..", import.meta.url).pathname;
 
@@ -31,7 +32,7 @@ const PROBE_ASM = [
 ].join("\n");
 
 function scratchRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "ctxexport-"));
+  const { root } = projectFixture({ after }, { assemblies: false });
   mkdirSync(join(root, "src"), { recursive: true });
   mkdirSync(join(root, "include/psyq"), { recursive: true });
   return root;
@@ -245,14 +246,15 @@ test("SDK types resolve to their real layouts, not opaque stubs", () => {
 });
 
 test("every type the published signatures name is resolvable", () => {
-  /* Use the exporter's source-backed, scope-aware resolver: the legacy
-   * harvester knows original names, not the M2C_<scope> names we publish.
-   * Do not resolve against generated sdk_types.h and ingest our own output. */
-  const header = readFileSync(join(REPO, "include/functions.h"), "utf-8");
+  const root = probeRoot();
+  writeFileSync(join(root, "src/typed.c"), "typedef struct { short x, y; } FixturePair;\nvoid typed(FixturePair *p) {}\n");
+  exportContext("typed", root);
+  // Resolve scoped published names against their source, not generated output.
+  const header = readFileSync(join(root, "include/functions.h"), "utf-8");
   const signatures = new Map(extractPrototypesFromSource(header).map((s) => [s.name, s.signature]));
   assert.ok(signatures.size > 0, "the fixture must actually contain signatures");
 
-  const { resolution, referencedBy } = resolveContextTypes(REPO, signatures);
+  const { resolution, referencedBy } = resolveContextTypes(root, signatures);
   assert.ok(referencedBy.size > 0, "the fixture must actually reference types");
   assert.ok([...referencedBy.keys()].some((name) => name.startsWith("M2C_")), "the fixture must exercise scoped types");
   assert.deepEqual(resolution.unresolved, [], "an unresolved type here means a placeholder shipped");
@@ -358,7 +360,7 @@ test("generated context is never included by live compiler sources or non-genera
   assert.deepEqual(generatedContextIncludes(root), []);
   writeFileSync(join(root, "include/a.h"), '#include "overlays/ovl_11.h"\n');
   assert.equal(generatedContextIncludes(root).length, 1);
-  assert.throws(() => exportAll(root, [requireContainer("exe")]), /included by compiler/);
+  assert.throws(() => exportAll(root, [requireContainer("exe", root)]), /included by compiler/);
 });
 
 test("local prototypes are reported only when they disagree, never veto publication", () => {
@@ -377,7 +379,7 @@ test("local prototypes are reported only when they disagree, never veto publicat
 });
 
 test("container-scoped --all retains types used only by other containers", () => {
-  const root = probeRoot(), overlay = requireContainer("ovl_11");
+  const root = probeRoot(), overlay = requireContainer("ovl_fixture", root);
   mkdirSync(join(root, overlay.paths.srcDir), { recursive: true });
   mkdirSync(join(root, "include/overlays"), { recursive: true });
   writeFileSync(join(root, "include/game_types.h"), "typedef struct { int x, y; } PairS32;\n");

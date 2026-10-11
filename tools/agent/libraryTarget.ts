@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { dirname, join, relative, resolve } from "node:path";
 import { configuredFlags, configuredTool, toolchainExecutables } from "../lib/toolchain.js";
 import { libraryContext, loadLibraryProject, libraryInputFiles } from "../lib/project.js";
-import { libraryInventory, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, type LibraryMember } from "../lib/libraryTargets.js";
+import { libraryInventory, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, withLibraryMetadata, type LibraryMember } from "../lib/libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, type ObjectComparison } from "../lib/relocatableObject.js";
 import { libraryAssemblyParts, librarySourceScaffold } from "../lib/libraryAssembly.js";
 import { migrateLibrarySources } from "./librarySources.js";
@@ -17,7 +17,7 @@ import { classifyLibraryCode } from "./libraryCodeClass.js";
 import { biosSyscallCandidate } from "./biosSyscall.js";
 import { biosTailJumpCandidate } from "./biosTailJump.js";
 import { libraryFunctionTarget } from "../lib/targetAdapter.js";
-import { digest, filesUnder, snapshot } from "../lib/contentCache.js";
+import { digest, fileDigest, filesUnder, snapshot, withContentMemo } from "../lib/contentCache.js";
 import { recordedCommand, commandText } from "../lib/recordedCommand.js";
 import { compileSource, compileSourceAsync, configuredToolchainIdentity, loadFlagOverrides, rejectionFromDiagnostics, runTool, sourceDependencyFiles } from "./decompToolchain.js";
 import { extractSignaturesFromSource } from "./sdkTypes.js";
@@ -29,13 +29,34 @@ import { sourceConstructFindings } from "../../.pi/extensions/shared/source-poli
 import { loadConfig } from "../../.pi/extensions/shared/config.js";
 const hashFile = (path: string) => existsSync(path) ? digest(readFileSync(path)) : "absent";
 const acceptedPath = (root: string, member: LibraryMember) => join(root, "build/libraries/verified", `${member.id}.json`);
-function memberInputPaths(member: LibraryMember, root: string): string[] {
+function memberInputPaths(member: LibraryMember, root: string, inputs?: string[]): string[] {
   const p = loadLibraryProject(root)!;
-  const cpp = configuredFlags("cpp", libraryContext(member.id, root), root);
+  const context = libraryContext(member.id, root);
+  const cpp = configuredFlags("cpp", context, root);
   const includeDirs = cpp.flatMap((f, i) => f === "-I" ? [cpp[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []);
-  return ["project.json", member.source, ...libraryInputFiles(p, root).map(i => i.path),
+  return ["project.json", member.source, ...(inputs ?? libraryInputFiles(p, root).map(i => i.path)),
     ...includeDirs, ...p.headers.reference, ...p.headers.owned,
-    ...(existsSync(join(root, member.source)) ? sourceDependencyFiles(member.source) : [])];
+    ...(existsSync(join(root, member.source)) ? sourceDependencyFiles(member.source, context, root) : [])];
+}
+/** The same active/previously accepted set used by the per-function gate. */
+export function libraryVerificationMembers(ids: string[], root = projectRoot(), members = libraryMembers(root)): LibraryMember[] {
+  for (const id of ids) if (!members.some(m => m.id === id)) throw new Error(`Unknown library member ${id}`);
+  return members.filter(m => ids.includes(m.id) || existsSync(acceptedPath(root, m)));
+}
+/** Snapshot shared targets/headers once, not once per member. Uncompiled source
+ * edits still invalidate finalization; only the checked TUs need CPP dependencies. */
+export function libraryWorkspaceIdentity(members: LibraryMember[], root = projectRoot()): string {
+  return withContentMemo(() => {
+    const inputs = libraryInputFiles(loadLibraryProject(root)!, root).map(i => i.path);
+    const paths = ["src", "project.json", "toolchain.json", "configs/flag_overrides.mk", ...inputs,
+      ...members.flatMap(m => memberInputPaths(m, root, []))];
+    const identities = members.map(m => {
+      if (fileDigest(resolve(root, m.input)) !== m.inputHash) throw new Error(`Target input changed while measuring ${m.id}; rerun inventory`);
+      return [m.id, m.sha256, m.inputHash, compilationIdentity(root, libraryContext(m.id, root), m.id)];
+    });
+    return digest(JSON.stringify({ members: identities,
+      inputs: snapshot(root, paths, f => !f.endsWith(".test.ts") && !f.includes("__pycache__")) }));
+  });
 }
 export function libraryBuildIdentity(member: LibraryMember, root = projectRoot()): string {
   if (hashFile(resolve(root, member.input)) !== member.inputHash) throw new Error(`Target input changed while measuring ${member.id}; rerun inventory`);
@@ -43,11 +64,81 @@ export function libraryBuildIdentity(member: LibraryMember, root = projectRoot()
     tools: compilationIdentity(root, libraryContext(member.id, root), member.id),
     inputs: snapshot(root, memberInputPaths(member, root), f => !f.endsWith(".test.ts") && !f.includes("__pycache__")) }));
 }
-function accepted(member: LibraryMember, root: string): boolean {
-  try { const record = JSON.parse(readFileSync(acceptedPath(root, member), "utf8")); return record.verdict === "match" && record.identity === libraryBuildIdentity(member, root); }
-  catch { return false; }
+/** Versioned shared/owner fingerprints: hash the common catalogue once, not
+ * once per TU. The final guard re-reads all observed inputs and tools. */
+export function libraryBuildIdentities(root = projectRoot()) {
+  const project = loadLibraryProject(root)!;
+  const commonPaths = ["project.json", ...libraryInputFiles(project, root).map(i => i.path), ...project.headers.reference, ...project.headers.owned];
+  const filter = (f: string) => !f.endsWith(".test.ts") && !f.includes("__pycache__");
+  const common = snapshot(root, commonPaths, filter), commonHash = digest(JSON.stringify(common));
+  const guardPaths = ["src", "toolchain.json", "configs/flag_overrides.mk"];
+  const expected = { ...common, ...snapshot(root, guardPaths, filter) };
+  const tools = JSON.stringify(compilationIdentity(root));
+  const includes = new Map<string, string>(), includeInputs = new Map<string, Record<string, string>>();
+  const locals = new Map<string, Record<string, string>>();
+  const observedPaths = new Set([...commonPaths, ...guardPaths]);
+  const identity = (member: LibraryMember): string => {
+    if (fileDigest(resolve(root, member.input)) !== member.inputHash) throw new Error(`Target input changed while measuring ${member.id}; rerun inventory`);
+    const context = libraryContext(member.id, root), cpp = configuredFlags("cpp", context, root);
+    const dirs = cpp.flatMap((f, i) => f === "-I" ? [cpp[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []);
+    const key = JSON.stringify(dirs);
+    if (!includes.has(key)) {
+      const input = snapshot(root, dirs, filter);
+      includes.set(key, digest(JSON.stringify(input))); includeInputs.set(key, input);
+      for (const [path, hash] of Object.entries(input)) {
+        if (expected[path] !== undefined && expected[path] !== hash) throw new Error(`Library input changed during batch: ${path}`);
+        expected[path] = hash;
+      }
+      dirs.forEach(p => observedPaths.add(p));
+    }
+    const paths = [member.source, ...(existsSync(join(root, member.source)) ? sourceDependencyFiles(member.source, context, root) : [])];
+    const local = snapshot(root, paths, filter); locals.set(member.id, local);
+    for (const [path, hash] of Object.entries(local)) {
+      if (expected[path] !== undefined && expected[path] !== hash) throw new Error(`Library input changed during batch: ${path}`);
+      expected[path] = hash;
+    }
+    paths.forEach(p => observedPaths.add(p));
+    return digest(JSON.stringify({ version: 2, target: member.sha256, input: member.inputHash, common: commonHash,
+      includes: includes.get(key), tools: compilationIdentity(root, context, member.id), local }));
+  };
+  const assertUnchanged = () => {
+    const after = snapshot(root, [...observedPaths], filter);
+    const sorted = Object.fromEntries(Object.entries(expected).sort(([a], [b]) => a.localeCompare(b)));
+    if (JSON.stringify(after) !== JSON.stringify(sorted) || tools !== JSON.stringify(compilationIdentity(root)))
+      throw new Error("Library batch inputs changed; rerun verification");
+  };
+  const legacyIdentity = (member: LibraryMember): string => {
+    identity(member);
+    const cpp = configuredFlags("cpp", libraryContext(member.id, root), root);
+    const dirs = cpp.flatMap((f, i) => f === "-I" ? [cpp[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []);
+    const input = { ...common, ...includeInputs.get(JSON.stringify(dirs)), ...locals.get(member.id) };
+    return digest(JSON.stringify({ target: member.sha256, input: member.inputHash,
+      tools: compilationIdentity(root, libraryContext(member.id, root), member.id),
+      inputs: Object.fromEntries(Object.entries(input).sort(([a], [b]) => a.localeCompare(b))) }));
+  };
+  return { identity, legacyIdentity, assertUnchanged };
 }
-export const isLibraryMemberVerified = accepted;
+export function isLibraryMemberVerified(member: LibraryMember, root = projectRoot()): boolean {
+  return verifiedLibraryMembers([member], root).get(member.id)!;
+}
+export function verifiedLibraryMembers(members: LibraryMember[], root = projectRoot()): Map<string, boolean> {
+  return withContentMemo(() => {
+    const batch = libraryBuildIdentities(root), upgrades: Array<{ member: LibraryMember; record: Record<string, unknown> }> = [];
+    const verified = new Map(members.map(member => {
+      try {
+        const record = JSON.parse(readFileSync(acceptedPath(root, member), "utf8"));
+        const match = record.verdict === "match" && record.identity === (record.identityVersion === 2 ? batch.identity(member) : batch.legacyIdentity(member));
+        if (match && record.identityVersion !== 2) upgrades.push({ member, record: { ...record, identityVersion: 2, identity: batch.identity(member) } });
+        return [member.id, match] as const;
+      } catch { return [member.id, false] as const; }
+    }));
+    batch.assertUnchanged();
+    // Upgrade only independently revalidated legacy fingerprints. No verdict
+    // is invented, and no input change can pass the batch guard.
+    for (const { member, record } of upgrades) writeFileSync(acceptedPath(root, member), JSON.stringify(record, null, 2) + "\n");
+    return verified;
+  });
+}
 
 function compileMember(member: LibraryMember, source = member.source, root = projectRoot()) {
   const artifacts = compileSource(source, `build/libraries/candidates/${member.id}/${randomUUID()}`, member.id, { assemble: true, containerKind: "library", containerId: member.id });
@@ -86,6 +177,10 @@ export function disassembleLibraryMember(member: LibraryMember, root = projectRo
 }
 export function writeLibraryGraph(root = projectRoot()) {
   const members = libraryMembers(root);
+  return withLibraryMetadata(() => writeLibraryGraphScoped(members, root), members, root);
+}
+function writeLibraryGraphScoped(members: LibraryMember[], root: string) {
+  const verified = verifiedLibraryMembers(members, root);
   const entries = members.flatMap(member => member.functions.map(fn => {
     const target = libraryFunctionTarget(member, fn, root);
     const assemblyClass = classifyLibraryCode(member.object, fn);
@@ -94,11 +189,12 @@ export function writeLibraryGraph(root = projectRoot()) {
       includeAsmPath: target.includeAsm.folder, assembly: target.assembly.function, verification: target.verification,
       vram: `symbol:${target.symbol}`, section: fn.section, sectionOffset: fn.offset, size: fn.size,
       inferredSize: fn.inferredSize, tier: 1, priority: 0, callerCount: 0, calls: [] as string[], calledBy: [] as string[], instructionCount: Math.ceil(fn.size / 4),
-      decompiled: accepted(member, root), handwritten: assemblyClass && !syscall ? "asm" as const : false as const, dead: false,
+      decompiled: verified.get(member.id)!, handwritten: assemblyClass && !syscall ? "asm" as const : false as const, dead: false,
       ...(assemblyClass ? { assemblyClass } : {}), ...(syscall ? { platformMacro: syscall.evidence } : {}) };
   }));
+  const byName = new Map(entries.map(e => [e.name, e]));
   for (const member of members) for (const fn of member.functions) {
-    const entry = entries.find(e => e.name === libraryTargetKey(member, fn.name))!;
+    const entry = byName.get(libraryTargetKey(member, fn.name))!;
     for (const r of member.object.relocations.filter(r => r.section === fn.section && r.offset >= fn.offset && r.offset < fn.offset + fn.size && r.type === 4)) {
       const addend = (member.object.sections.get(r.section)!.data.readUInt32LE(r.offset) & 0x3ffffff) * 4;
       const target = resolveLibraryCall(member, r.reference, addend, members);
@@ -106,10 +202,10 @@ export function writeLibraryGraph(root = projectRoot()) {
     }
     entry.calls = [...new Set(entry.calls)];
   }
-  for (const entry of entries) for (const call of entry.calls) entries.find(e => e.name === call)!.calledBy.push(entry.name);
+  for (const entry of entries) for (const call of entry.calls) byName.get(call)!.calledBy.push(entry.name);
   for (const entry of entries) { entry.callerCount = entry.calledBy.length; entry.priority = entry.callerCount; }
   const graph = { targetKind: "relocatable-library", identityKind: "member-symbol", functions: entries,
-    stats: { totalFunctions: entries.length, totalMembers: members.length, verifiedMembers: members.filter(m => accepted(m, root)).length,
+    stats: { totalFunctions: entries.length, totalMembers: members.length, verifiedMembers: [...verified.values()].filter(Boolean).length,
       assemblyOnlyFunctions: entries.filter(entry => entry.handwritten === "asm").length } };
   mkdirSync(join(root, "build"), { recursive: true }); writeFileSync(join(root, "build/callGraph.json"), JSON.stringify(graph, null, 2) + "\n");
   return graph;
@@ -136,8 +232,9 @@ export function splitLibrary(root = projectRoot()): void {
   console.log("Library members indexed; original objects/disassembly stay under build/libraries. Existing C untouched.");
 }
 export function libraryProgress(args: string[] = [], root = projectRoot()): void {
-  const members = libraryMembers(root), rows = members.map(m => ({ id: m.id, input: m.input, member: m.member, ordinal: m.ordinal, source: m.source,
-    functions: m.functions.map(f => libraryTargetKey(m, f.name)), codeBytes: [...m.object.sections.values()].filter(s => s.flags & 4).reduce((n, s) => n + s.size, 0), verified: accepted(m, root) }));
+  const members = libraryMembers(root), verified = verifiedLibraryMembers(members, root);
+  const rows = members.map(m => ({ id: m.id, input: m.input, member: m.member, ordinal: m.ordinal, source: m.source,
+    functions: m.functions.map(f => libraryTargetKey(m, f.name)), codeBytes: [...m.object.sections.values()].filter(s => s.flags & 4).reduce((n, s) => n + s.size, 0), verified: verified.get(m.id)! }));
   const done = rows.filter(r => r.verified), report = { targetKind: "relocatable-library", scope: "fresh whole-member verification, not source presence or liveness",
     members: { verified: done.length, total: rows.length }, functions: { verified: done.reduce((n, r) => n + r.functions.length, 0), total: rows.reduce((n, r) => n + r.functions.length, 0) },
     codeBytes: { verified: done.reduce((n, r) => n + r.codeBytes, 0), total: rows.reduce((n, r) => n + r.codeBytes, 0) },
@@ -154,13 +251,13 @@ export function libraryProgress(args: string[] = [], root = projectRoot()): void
  * A finalizer verifies the active member plus every previously accepted member;
  * npm check-all requires every configured member, including data-only objects. */
 export function checkLibrary(args: string[], root = projectRoot()): void {
-  const members = libraryMembers(root), ids = args.flatMap((a, i) => a === "--member" ? [args[i + 1]] : []);
-  for (const id of ids) if (!members.some(m => m.id === id)) throw new Error(`Unknown library member ${id}`);
+  const members = libraryMembers(root), ids = args.flatMap((a, i) => a === "--member" ? [args[i + 1] ?? ""] : []);
   const scoped = args.includes("--accepted") || ids.length > 0;
-  const selected = scoped ? members.filter(m => ids.includes(m.id) || existsSync(acceptedPath(root, m))) : members;
+  const selected = scoped ? libraryVerificationMembers(ids, root, members) : members;
   if (!scoped && !selected.length) throw new Error("No library members to verify");
-  for (const member of selected) {
-    const before = libraryBuildIdentity(member, root), artifacts = compileMember(member, undefined, root);
+  const batch = libraryBuildIdentities(root), records: Array<{ member: LibraryMember; comparison: ObjectComparison; identity: string }> = [];
+  withLibraryMetadata(() => { for (const member of selected) {
+    const identity = batch.identity(member), artifacts = compileMember(member, undefined, root);
     const source = readFileSync(artifacts.source, "utf8"), guard = analyzeCSource(source), signatures = extractSignaturesFromSource(source);
     const findings = sourceConstructFindings(source, loadConfig(root), { name: member.id, container: member.id });
     const includesGeneratedContext = /#\s*\d+\s+"[^"]*build\/libraries\/context\//.test(readFileSync(artifacts.preprocessed, "utf8"));
@@ -169,10 +266,12 @@ export function checkLibrary(args: string[], root = projectRoot()): void {
     const comparison = compareRelocatableObjects(member.bytes, readFileSync(artifacts.object!));
     console.log(`${member.id}: ${renderLibraryComparison(comparison)}`);
     if (comparison.verdict !== "match") throw new Error(`${member.id}: whole-member verdict ${comparison.verdict}`);
-    const identity = libraryBuildIdentity(member, root);
-    if (before !== identity) throw new Error(`${member.id}: verification inputs changed during compile`);
+    records.push({ member, comparison, identity });
+  } }, members, root);
+  batch.assertUnchanged();
+  for (const { member, comparison, identity } of records) {
     const path = acceptedPath(root, member); mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify({ ...comparison, scope: "whole-member", identity, originalHash: member.sha256, source: member.source }, null, 2) + "\n");
+    writeFileSync(path, JSON.stringify({ ...comparison, scope: "whole-member", identityVersion: 2, identity, originalHash: member.sha256, source: member.source }, null, 2) + "\n");
   }
   console.log(scoped ? `Verified ${selected.length} active/previously accepted member(s); ${members.length - selected.length} backlog member(s) not verified.` : `All ${selected.length} configured library members verified.`);
 }

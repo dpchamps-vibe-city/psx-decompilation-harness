@@ -12,9 +12,9 @@ import { loadFunctionSpans, loadSymbolIndex } from "../lib/symbolIndex.js";
 import { readGroups, type FileGroup } from "../agent/fileGroupings.js";
 import { hex } from "./macroInstructions.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
-import { libraryMembers, libraryTargetKey, resolveLibraryCall } from "../lib/libraryTargets.js";
+import { libraryMembers, libraryTargetKey, resolveLibraryCall, withLibraryMetadata } from "../lib/libraryTargets.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
-import { configuredSdkHeaders, type FlagContext } from "../lib/toolchain.js";
+import { configuredFlags, configuredSdkHeaders, type FlagContext } from "../lib/toolchain.js";
 import { deriveRepoMacroEncodings, type RepoEncodingReport } from "./macroEncodings.js";
 import { extractMacroTemplates, loadMacroHeaders, type TemplateLibrary } from "./macroTemplates.js";
 import { tileMacroFunction, type MacroFunction, type MacroFunctionReport, type TilerOptions } from "./macroTiler.js";
@@ -148,6 +148,9 @@ function sourceRepresentation(path: string): MacroFunctionReport["sourceRepresen
 /** Complete structured census. Reusable with an injected header library,
  * function table/bytes and grouping/symbol evidence for other projects. */
 export function detectMacroIdentities(options: MacroIdentityOptions = {}): MacroIdentityReport {
+  return withLibraryMetadata(() => detectMacroIdentitiesScoped(options));
+}
+function detectMacroIdentitiesScoped(options: MacroIdentityOptions): MacroIdentityReport {
   if ("commandEncodingHeaders" in options) throw new Error("Replacement C-header encoding inputs were removed; use the production GAS encoding oracle");
   const library = options.library ?? extractMacroTemplates(loadMacroHeaders(options.headerPaths ?? (loadLibraryProject()?.headers.reference.map(p => resolve(projectRoot(), p)) ?? [...configuredSdkHeaders(), join(projectRoot(), "include/debughook.h"), join(projectRoot(), "include/scratchpad.h")].filter(existsSync))));
   const containers = options.functions || loadLibraryProject() ? [] : (options.containers ?? loadContainers()).filter(c => !options.containerIds || options.containerIds.includes(c.id));
@@ -164,11 +167,18 @@ export function detectMacroIdentities(options: MacroIdentityOptions = {}): Macro
   const scanned = collectMacroCoverage(containers, loaded.functions, loaded.findings, { scope: options.functions ? "injected-functions" : options.functionNames ? "selected-functions" : options.containers || options.containerIds ? "selected-containers" : "project", ...(options.overlayDirectory ? { overlayDirectory: options.overlayDirectory } : {}), ...(options.containerIds ? { requestedIds: options.containerIds } : {}) });
   const contextOf = (fn: MacroFunction): FlagContext => fn.coordinate ? libraryContext(fn.container) :
     { kind: containers.find(c => c.id === fn.container)?.kind ?? (fn.container.startsWith("ovl_") ? "overlay" : "exe"), id: fn.container };
-  const contextKey = (fn: MacroFunction): string => JSON.stringify(contextOf(fn));
+  // Owner IDs are not a flag column. Identical production flags need one
+  // encoding probe, not a separate compiler run for every library member.
+  const contextKey = (fn: MacroFunction): string => {
+    const context = contextOf(fn);
+    return JSON.stringify([context.kind, ...(["cpp", "cc1", "as", "maspsx"] as const).map(stage => configuredFlags(stage, context))]);
+  };
   const encodingToolchains: RepoEncodingReport[] = [];
   const libraries = new Map<string, TemplateLibrary>();
-  for (const key of new Set(loaded.functions.map(contextKey))) {
-    const context = JSON.parse(key) as FlagContext;
+  for (const fn of loaded.functions) {
+    const key = contextKey(fn);
+    if (libraries.has(key)) continue;
+    const context = contextOf(fn);
     if (options.resolveCommands === false) libraries.set(key, library);
     else {
       const encoded = deriveRepoMacroEncodings(library, context.kind, context.id);

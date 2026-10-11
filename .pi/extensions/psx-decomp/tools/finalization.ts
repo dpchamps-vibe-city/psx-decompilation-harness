@@ -7,7 +7,7 @@ import type { AutodecompConfig, GateResult } from "../../shared/types.ts";
 import { Timings } from "../../../../tools/lib/contentCache.js";
 import type { ExportResult } from "../../../../tools/agent/contextExport.js";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
-import { libraryMembers, libraryTargetKey } from "../../../../tools/lib/libraryTargets.js";
+import { libraryMembers, libraryTargetKey, requireLibraryFunction } from "../../../../tools/lib/libraryTargets.js";
 import { compilerInputs, consumeReceipt, contextIsCompilerIndependent, publishReceipt, verificationOutputs } from "./verification-receipt.ts";
 
 /** One authoritative route. Machine work can be reused only across unchanged
@@ -25,15 +25,19 @@ export async function finalizeWorkspace(options: {
   const done = (gate: GateResult): GateResult => ({ ...gate, ...(contextPublication ? { contextPublication } : {}), finalizationGates: gates,
     timings: { phases: timings.phases, totalMs: timings.totalMs } });
   if (loadLibraryProject(options.projectRoot)) {
-    const { libraryBuildIdentity } = await import("../../../../tools/agent/libraryTarget.js");
+    const { libraryVerificationMembers, libraryWorkspaceIdentity } = await import("../../../../tools/agent/libraryTarget.js");
     options.signal?.throwIfAborted();
     const members = libraryMembers(options.projectRoot);
     const sources = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.source])));
     const containers = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.id])));
-    const identity = () => JSON.stringify(members.map(m => [m.id, libraryBuildIdentity(m, options.projectRoot)]));
+    const target = requireLibraryFunction(options.functionName, options.projectRoot);
+    const active = [...new Set([target.member.id,
+      ...members.filter(m => options.changedFiles.includes(m.source)).map(m => m.id)])];
+    const checkedMembers = libraryVerificationMembers(active, options.projectRoot, members);
+    const identity = () => timings.measureSync("library-inputs", () => libraryWorkspaceIdentity(checkedMembers, options.projectRoot));
     const before = identity();
-    const gate = await timings.measure("library-gate", () => runGate({ ...options, mode: "match", runBuild: true,
-      functionSources: sources, functionContainers: containers, functionContainer: containers[options.functionName] }));
+    const gate = await timings.measure("library-gate", () => runGate({ ...options, functionName: target.key, mode: "match", runBuild: true,
+      functionSources: sources, functionContainers: containers, functionContainer: target.member.id }));
     gates.push(gate);
     if (gate.pass && before !== identity()) { gate.pass = false; gate.failures.push("Library inputs changed during finalization; rerun the member gate"); }
     if (!gate.pass) return done(gate);

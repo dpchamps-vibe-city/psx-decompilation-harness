@@ -6,7 +6,7 @@ import { parseC, field, namedChildren } from "../../../tools/agent/residual-sour
 import { BIOS_SYSCALL_HEADER, BIOS_SYSCALL_MACRO, isBiosSyscallHeader, BIOS_TAILJUMP_HEADER, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_END_MACRO, isBiosTailJumpHeader } from "../../../tools/lib/biosSyscallMacro.js";
 import { BIOS_FUNCTION_MACRO, biosFunctionProjection } from "../../../tools/lib/biosFunctionMacro.js";
 import { loadLibraryProject } from "../../../tools/lib/project.js";
-import { libraryMembers } from "../../../tools/lib/libraryTargets.js";
+import { libraryMemberForSource, withLibraryMetadata } from "../../../tools/lib/libraryTargets.js";
 
 interface PolicyOptions {
   projectRoot: string;
@@ -427,7 +427,7 @@ function sourceIdentity(file: string): { name: string; container?: string } | un
 function patchScope(options: PolicyOptions, file: string): { name?: string; vram?: string; container?: string } {
   const project = loadLibraryProject(options.projectRoot);
   if (project) {
-    const member = libraryMembers(options.projectRoot, project).find(m => m.source === normalizedPath(file));
+    const member = libraryMemberForSource(normalizedPath(file), options.projectRoot);
     // A member is a shared TU: never lend one symbol's exception to its neighbors.
     if (member) return { name: member.id, container: member.id };
   }
@@ -447,6 +447,14 @@ function patchScope(options: PolicyOptions, file: string): { name?: string; vram
 function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
   if (!options.patch) return [];
   const findings: PolicyFinding[] = [];
+  const sourceLines = new Map<string, string[] | undefined>();
+  const linesOf = (file: string): string[] | undefined => {
+    if (!sourceLines.has(file)) {
+      const path = resolve(options.projectRoot, file);
+      sourceLines.set(file, existsSync(path) ? readFileSync(path, "utf8").split("\n") : undefined);
+    }
+    return sourceLines.get(file);
+  };
   let file = "";
   let scope: ReturnType<typeof patchScope> = {};
   let newLine = 0;
@@ -469,8 +477,7 @@ function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
       /* Complete source files are audited through the AST once below; a hunk
          cannot distinguish code from a multiline comment/string/disabled arm.
          Missing-file patch fixtures retain the conservative legacy fallback. */
-      const completeSource = sourceIdentity(file) && existsSync(resolve(options.projectRoot, file)) &&
-        readFileSync(resolve(options.projectRoot, file), "utf8").split("\n")[newLine - 1] === text;
+      const completeSource = sourceIdentity(file) && linesOf(file)?.[newLine - 1] === text;
       const approvedPlatformHeader = (options.config.sourcePolicy.allowBiosSyscallMacro && isBiosSyscallHeader(options.projectRoot, file)) ||
         (options.config.sourcePolicy.allowBiosTailJumpMacro && isBiosTailJumpHeader(options.projectRoot, file));
       const violation = commentOnly || !policesConstructs(file) || completeSource || approvedPlatformHeader
@@ -500,8 +507,7 @@ function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
             text: text.trim(),
           });
         }
-        const currentFile = resolve(options.projectRoot, file);
-        const preceding = existsSync(currentFile) ? readFileSync(currentFile, "utf8").split("\n")[newLine - 2] : undefined;
+        const preceding = linesOf(file)?.[newLine - 2];
         if (preceding !== undefined && !/^\s*#\s*\S/.test(preceding)) findings.push({ kind: "flag-override", file, line: newLine,
           message: "Changed compiler override needs its directly preceding evidence comment", text: text.trim() });
       }
@@ -546,6 +552,9 @@ function dedupeFindings(findings: PolicyFinding[]): PolicyFinding[] {
 }
 
 export function checkSourcePolicy(options: PolicyOptions): SourcePolicyResult {
+  return withLibraryMetadata(() => checkSourcePolicyScoped(options), undefined, options.projectRoot);
+}
+function checkSourcePolicyScoped(options: PolicyOptions): SourcePolicyResult {
   const changedFiles = [...new Set((options.changedFiles ?? []).map(normalizedPath))].sort();
   const outOfScopeFiles = changedFiles.filter((file) => !withinAllowedRoots(options.config, file));
   const hardFailures: PolicyFinding[] = outOfScopeFiles.map((file) => ({

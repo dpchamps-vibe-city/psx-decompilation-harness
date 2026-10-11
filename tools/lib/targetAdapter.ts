@@ -8,7 +8,7 @@ import { type FlagContext } from "./toolchain.js";
 import { EXE_CONTAINER_ID, containerOfSymbol, loadContainers, symbolPrefix, type Container } from "./container.js";
 import { loadFunctionSpans } from "./symbolIndex.js";
 import { libraryContext, loadLibraryProject } from "./project.js";
-import { libraryMembers, libraryTargetKey, requireLibraryFunction, type LibraryMember } from "./libraryTargets.js";
+import { libraryMemberForSource, libraryTargetKey, requireLibraryFunction, type LibraryMember } from "./libraryTargets.js";
 
 /** Diagnostic keys may be owner-qualified; C/RTL still names the actual symbol. */
 export function functionSymbol(key: string): string {
@@ -95,7 +95,7 @@ export function resolveFunctionTarget(value: string, root = projectRoot()): Func
 export function sourceFlagContext(source: string, root = projectRoot()): FlagContext | undefined {
   const path = relative(root, resolve(root, source)).replaceAll("\\", "/");
   if (loadLibraryProject(root)) {
-    const member = libraryMembers(root).find(m => m.source === path);
+    const member = libraryMemberForSource(path, root);
     return member ? libraryContext(member.id, root) : undefined;
   }
   return imageContainerFor(basename(source).replace(/\.c$/, ""), root) ?? undefined;

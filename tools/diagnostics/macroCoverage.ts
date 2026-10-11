@@ -1,9 +1,10 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Coverage and presence are separate from macro identity. Raw opcode hits in
  * unenabled overlays may be data; they never become functions or template tiles. */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import { containerPath, containerTargetPath, type Container } from "../lib/container.js";
 import { loadManifest } from "../lib/overlayManifest.js";
 import { loadSubsegments } from "../lib/symbolIndex.js";
@@ -111,7 +112,7 @@ export function collectMacroCoverage(containers: readonly Container[], functions
     for (const id of new Set(functions.map(f => f.container))) coverage.containersScanned.push({ container: id, targetPath: null, functionCount: functions.filter(f => f.container === id).length, textRanges: [] });
     return { coverage, presence };
   }
-  const directory = options.overlayDirectory ?? join(ROOT, "extracted/overlays");
+  const directory = options.overlayDirectory ?? join(projectRoot(), "extracted/overlays");
   const files = existsSync(directory) ? readdirSync(directory).filter(f => f.endsWith(".bin")).sort().map(f => join(directory, f)) : [];
   const targets = new Map(containers.map(c => [c.id, containerTargetPath(c)]));
   for (const file of files) targets.set(basename(file, ".bin"), file);
@@ -128,19 +129,19 @@ export function collectMacroCoverage(containers: readonly Container[], functions
       reason = !member ? "No manifest/container mapping and no enabled splat configuration" : member.classification?.verdict !== "code" ? `No enabled splat/container mapping; manifest classification ${member.classification?.verdict ?? "missing"}; container not enabled` : member.base?.verdict !== "resolved" ? "Overlay base unresolved; container not enabled" : "No splat configuration; container not enabled";
     } else if (!functions.some(f => f.container === id)) reason = options.scope === "selected-functions" ? "No functions in requested function scope" : "No valid function extents scanned";
     if (reason) {
-      coverage.containersSkipped.push({ container: id, targetPath: relative(ROOT, target), reason });
+      coverage.containersSkipped.push({ container: id, targetPath: relative(projectRoot(), target), reason });
       if (!["Outside requested container scope", "No functions in requested function scope"].includes(reason)) coverage.complete = false;
-    } else coverage.containersScanned.push({ container: id, targetPath: relative(ROOT, target), functionCount: functions.filter(f => f.container === id).length, textRanges: loadMacroTextRanges(container!) });
+    } else coverage.containersScanned.push({ container: id, targetPath: relative(projectRoot(), target), functionCount: functions.filter(f => f.container === id).length, textRanges: loadMacroTextRanges(container!) });
     if (!requested || reason === "Outside requested container scope" || !existsSync(target)) continue;
     const bytes = readFileSync(target);
     if (enabled) {
       const ranges = loadMacroTextRanges(container!);
       const valid = ranges.every(r => r.startOffset >= container!.payloadOffset && r.endOffset <= Math.min(bytes.length, container!.payloadOffset + container!.payloadSize) && r.startOffset % 4 === 0 && r.endOffset % 4 === 0);
-      if (!valid) { coverage.complete = false; coverage.containersSkipped.push({ container: id, targetPath: relative(ROOT, target), reason: "Invalid/truncated splat text bounds; presence scan refused" }); continue; }
-      presence.push(scanMacroPresence(bytes, { container: id, targetPath: relative(ROOT, target), enabled: true, ranges, base: container!.loadAddr - container!.payloadOffset, reason: "Configured text bounds" }));
+      if (!valid) { coverage.complete = false; coverage.containersSkipped.push({ container: id, targetPath: relative(projectRoot(), target), reason: "Invalid/truncated splat text bounds; presence scan refused" }); continue; }
+      presence.push(scanMacroPresence(bytes, { container: id, targetPath: relative(projectRoot(), target), enabled: true, ranges, base: container!.loadAddr - container!.payloadOffset, reason: "Configured text bounds" }));
     } else {
       const member = members.find(m => m.id === id);
-      presence.push(scanMacroPresence(bytes, { container: id, targetPath: relative(ROOT, target), enabled: false, reason: reason!, base: member?.base?.verdict === "resolved" ? member.base.base : null }));
+      presence.push(scanMacroPresence(bytes, { container: id, targetPath: relative(projectRoot(), target), enabled: false, reason: reason!, base: member?.base?.verdict === "resolved" ? member.base.base : null }));
     }
   }
   return { coverage, presence };

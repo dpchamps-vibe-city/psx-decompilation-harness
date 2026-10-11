@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * idiomSearch.ts — what C produced assembly that looks like this?
  *
@@ -36,7 +37,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
+import { normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { targetWordsOf } from "../lib/functionOracle.js";
 import { liftWords } from "./pipeline-reversal/lift.js";
 import { inverseAssembler } from "./pipeline-reversal/inverse-assembler.js";
@@ -83,7 +84,7 @@ function renderHit(hit: SearchHit, queryTokens: string[], index: number): string
   ];
   const source = sourcePathOf(region.functionName);
   if (source) {
-    lines.push(`   source: ${source.slice(ROOT.length + 1)}  (region ${region.from}..${region.to} of the target stream)`);
+    lines.push(`   source: ${source.slice(projectRoot().length + 1)}  (region ${region.from}..${region.to} of the target stream)`);
   }
   return lines;
 }
@@ -103,7 +104,7 @@ function renderSource(hit: SearchHit): string[] {
   const text = readFileSync(path, "utf8");
   return [
     "",
-    `--- ${path.slice(ROOT.length + 1)} — the C that produced the shapes above ---`,
+    `--- ${path.slice(projectRoot().length + 1)} — the C that produced the shapes above ---`,
     text.trimEnd(),
     "--- end ---",
   ];
@@ -189,7 +190,7 @@ function leaveOneOut(index: IdiomIndex, tier: Tier, sample: number): void {
 
 /** Suspected-translation-unit membership, from the grouping ledger. */
 function groupIndex(): Map<string, string[]> {
-  const path = join(ROOT, "notes/file-groupings.md");
+  const path = join(projectRoot(), "notes/file-groupings.md");
   const membership = new Map<string, string[]>();
   if (!existsSync(path)) return membership;
   let members: string[] | undefined;

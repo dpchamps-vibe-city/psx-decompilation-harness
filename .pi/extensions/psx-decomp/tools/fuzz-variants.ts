@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runProjectCommand, validateFunctionName } from "./shared.ts";
@@ -59,7 +60,7 @@ export function registerFuzzVariantsTool(pi: ExtensionAPI): void {
         if (!variant.endsWith(".c")) throw new Error(`Variant path must end in .c: ${variant}`);
       }
 
-      const args = ["tsx", "tools/agent/fuzzVariants.ts", params.functionName];
+      const args = [params.functionName];
       if (params.manifest) args.push("--manifest", params.manifest);
       else if (params.transformSpec) args.push("--transform-spec", params.transformSpec);
       else args.push(...variants, "--mechanism", params.mechanism!, "--expected-pass", params.expectedPass!, "--expected-effect", params.expectedEffect!);
@@ -72,7 +73,7 @@ export function registerFuzzVariantsTool(pi: ExtensionAPI): void {
         content: [{ type: "text", text: `Running mechanism-aware variants for ${params.functionName}...` }],
         details: {},
       });
-      return runProjectCommand(pi, ctx.cwd, "npx", args, signal, 180_000);
+      return runProjectCommand(pi, ctx.cwd, process.execPath, installedScriptArgs("tools/agent/fuzzVariants.ts", args, ctx.cwd), signal, 180_000);
     },
   });
 }

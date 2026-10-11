@@ -1,3 +1,5 @@
+import { HARNESS_ROOT } from "../../lib/runtimeContext.js";
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * precedents.ts — who already produced the emission order you need.
  *
@@ -21,7 +23,7 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { best, readLedger } from "../experimentLedger.js";
 import { ensureArtifact, projectPath, stamped, writeStableJson, type EnsuredArtifact } from "../provenance.js";
 import { targetProgram } from "../idiomSearch.js";
@@ -86,7 +88,7 @@ interface PrecedentIndex {
 /** Every source file under `src/`, matched or still a stub. */
 function sourceFiles(): Array<{ name: string; path: string; stub: boolean }> {
   const directories = ["src"];
-  const overlays = join(ROOT, "src/overlays");
+  const overlays = join(projectRoot(), "src/overlays");
   if (existsSync(overlays)) {
     for (const entry of readdirSync(overlays, { withFileTypes: true })) {
       if (entry.isDirectory()) directories.push(`src/overlays/${entry.name}`);
@@ -95,7 +97,7 @@ function sourceFiles(): Array<{ name: string; path: string; stub: boolean }> {
   }
   const found: Array<{ name: string; path: string; stub: boolean }> = [];
   for (const directory of directories) {
-    const absolute = join(ROOT, directory);
+    const absolute = join(projectRoot(), directory);
     if (!existsSync(absolute)) continue;
     for (const file of readdirSync(absolute)) {
       if (!file.endsWith(".c")) continue;
@@ -138,7 +140,7 @@ export function precedentSources(): Array<{ name: string; path: string; status: 
        precedent that names no source is a shape with nowhere to go. */
     const winner = best(readLedger(entry.name));
     if (!winner?.sourcePath) continue;
-    const preserved = join(ROOT, winner.sourcePath);
+    const preserved = join(projectRoot(), winner.sourcePath);
     if (!existsSync(preserved)) continue;
     found.push({ name: entry.name, path: preserved, status: "parked" });
   }
@@ -192,7 +194,7 @@ function scan(): PrecedentIndex {
  * whose best attempt changes is re-read.
  */
 export function precedentIndex(): EnsuredArtifact<PrecedentIndex> {
-  const artifactPath = join(ROOT, "build/loopEmission/precedents.json");
+  const artifactPath = join(projectRoot(), "build/loopEmission/precedents.json");
   return ensureArtifact<PrecedentIndex>({
     artifactPath,
     label: "loop-emission precedent index",
@@ -200,7 +202,7 @@ export function precedentIndex(): EnsuredArtifact<PrecedentIndex> {
     costHint: "scans every registered function's target bytes, about 90 seconds",
     inputs: {
       files: precedentSources().map((entry) => entry.path),
-      implementation: [join(ROOT, "tools/agent/loop-emission")],
+      implementation: [join(HARNESS_ROOT, "tools/agent/loop-emission")],
     },
     produce: (provenance) => {
       const index = scan();

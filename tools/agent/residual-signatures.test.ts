@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { lookupSignature, unifiedDiff, type SignatureIndex } from "./residualSignatures.js";
 
 test("a unified diff keeps the edit and drops the unchanged bulk", () => {

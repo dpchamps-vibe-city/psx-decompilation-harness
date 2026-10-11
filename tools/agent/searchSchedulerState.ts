@@ -1,9 +1,10 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { analyzeTargetSchedule } from "./analyzeTargetSchedule.js";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { normalizeFunctionName } from "./decompToolchain.js";
 import type { CompilerTraceReport } from "./compiler-trace/types.js";
 import { assertTargetScheduleAnalysis, type TargetScheduleAnalysis } from "./target-schedule/types.js";
 import { projectPath } from "./variant-lab/artifacts.js";
@@ -66,8 +67,8 @@ function parseCli(args: string[]): CliOptions {
 }
 
 function projectInput(path: string, label: string): string {
-  const absolute = isAbsolute(path) ? resolve(path) : resolve(ROOT, path);
-  const related = relative(ROOT, absolute);
+  const absolute = isAbsolute(path) ? resolve(path) : resolve(projectRoot(), path);
+  const related = relative(projectRoot(), absolute);
   if (related.startsWith("..") || isAbsolute(related)) throw new Error(`${label} must stay within the project tree`);
   if (!existsSync(absolute)) throw new Error(`${label} not found: ${path}`);
   return absolute;
@@ -119,12 +120,12 @@ export function runSchedulerConstraintSearch(options: CliOptions): SchedulerCons
     analysis = fresh.analysis;
   }
   const runId = schedulerConstraintRunId(input);
-  const directory = join(ROOT, "build", "schedulerConstraint", input.model.function, runId);
+  const directory = join(projectRoot(), "build", "schedulerConstraint", input.model.function, runId);
   const artifactPath = projectPath(directory);
   const result = solveSchedulerConstraints(input, artifactPath);
   let handoff;
   if (options.handoff && analysis && result.status === "sat" && result.witness && result.witness.sourceRequirements.length > 0) {
-    const sourcePath = isAbsolute(analysis.source) ? analysis.source : join(ROOT, analysis.source);
+    const sourcePath = isAbsolute(analysis.source) ? analysis.source : join(projectRoot(), analysis.source);
     handoff = deriveSchedulerSourceHandoff(input, result, analysis, sourcePath);
     if (handoff) result.sourceSearchSpec = projectPath(join(directory, "source-search-spec.json"));
     else result.caveats.push("SAT witness had no compatible proof-admitted source recipe in the current source-shape synthesis catalog.");
@@ -141,7 +142,7 @@ if (isCli) {
     const result = runSchedulerConstraintSearch(options);
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else {
-      const inputPath = join(ROOT, result.artifacts, "input.json");
+      const inputPath = join(projectRoot(), result.artifacts, "input.json");
       const input = validateSchedulerConstraintInput(readJson(inputPath, "written constraint input"));
       console.log(renderSchedulerConstraintResult(input, result));
     }

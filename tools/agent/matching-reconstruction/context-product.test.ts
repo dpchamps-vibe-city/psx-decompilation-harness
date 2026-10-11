@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * The recovered-context product: interface and storage facts from the target's
  * own words, available whether or not construction produced any C.
@@ -9,10 +10,10 @@
  */
 
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { calleePrototypes, recoverContext } from "./context-product.js";
 
 const configured = existsSync(join(ROOT, "configs/splat"));

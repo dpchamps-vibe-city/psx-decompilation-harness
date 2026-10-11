@@ -451,7 +451,9 @@ function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
           ?? (overrideStem === options.functionName ? options.functionVram : undefined);
         const overrideContainer = options.functionContainers?.[overrideStem]
           ?? (overrideStem === options.functionName ? options.functionContainer : undefined);
-        if (!allowlisted(options.config, overrideStem, overrideVram, overrideContainer, "flag-override")) {
+        const ownerNames = (options.scanFunctions ?? (options.functionName ? [options.functionName] : []))
+          .filter(name => sourceFileOf(options, name).split("/").at(-1)?.replace(/\.c$/, "") === overrideStem);
+        if (![overrideStem, ...ownerNames].some(name => allowlisted(options.config, name, overrideVram, overrideContainer, "flag-override"))) {
           findings.push({
             kind: "flag-override",
             file,
@@ -460,6 +462,10 @@ function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
             text: text.trim(),
           });
         }
+        const currentFile = resolve(options.projectRoot, file);
+        const preceding = existsSync(currentFile) ? readFileSync(currentFile, "utf8").split("\n")[newLine - 2] : undefined;
+        if (preceding !== undefined && !/^\s*#\s*\S/.test(preceding)) findings.push({ kind: "flag-override", file, line: newLine,
+          message: "Changed compiler override needs its directly preceding evidence comment", text: text.trim() });
       }
       newLine++;
     } else if (!line.startsWith("-") && !line.startsWith("\\")) {
@@ -539,7 +545,9 @@ export function checkSourcePolicy(options: PolicyOptions): SourcePolicyResult {
       const vram = options.functionVrams?.[name] ?? (name === options.functionName ? options.functionVram : undefined);
       const container = options.functionContainers?.[name] ?? (name === options.functionName ? options.functionContainer : undefined);
       if (allowlisted(options.config, name, vram, container, "flag-override")) continue;
-      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const stem = sourceFileOf(options, name).split("/").at(-1)!.replace(/\.c$/, "");
+      if (allowlisted(options.config, stem, vram, container, "flag-override")) continue;
+      const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const index = lines.findIndex((line) => new RegExp(`^CC1FLAGS_${escaped}\\s*:?=`).test(line));
       if (index >= 0) {
         hardFailures.push({
@@ -567,20 +575,8 @@ export function checkSourcePolicy(options: PolicyOptions): SourcePolicyResult {
   const toolchainPath = resolve(options.projectRoot, "toolchain.json");
   if (existsSync(toolchainPath)) {
     try {
-      const fileFlags = JSON.parse(readFileSync(toolchainPath, "utf8")).fileFlags;
-      if (!fileFlags || typeof fileFlags !== "object" || Array.isArray(fileFlags)) throw new Error("fileFlags must be an object");
-      const selectedNames = options.functionName ? [options.functionName] : scanNames.length ? scanNames : Object.keys(fileFlags);
-      const names = library ? [...new Set(libraryMembers(options.projectRoot, library).filter(m =>
-        selectedNames.some(name => name === m.id || name.startsWith(m.id + "::")) || changedFiles.includes(m.source)).map(m => m.id))] : selectedNames;
-      for (const name of names) {
-        const flags = fileFlags[name];
-        if (flags === undefined) continue;
-        if (!Array.isArray(flags) || flags.some(f => typeof f !== "string")) throw new Error(`Invalid fileFlags.${name}`);
-        const vram = options.functionVrams?.[name] ?? (name === options.functionName ? options.functionVram : undefined);
-        const container = options.functionContainers?.[name] ?? (name === options.functionName ? options.functionContainer : undefined);
-        if (flags.length && !allowlisted(options.config, name, vram, container, "flag-override")) hardFailures.push({
-          kind: "flag-override", file: "toolchain.json", message: "Per-function compiler flag override is not allowlisted", text: `${name}: ${flags.join(" ")}`,
-        });
+      if (Object.hasOwn(JSON.parse(readFileSync(toolchainPath, "utf8")), "fileFlags")) {
+        throw new Error("fileFlags is unsupported; overrides belong only in configs/flag_overrides.mk");
       }
     } catch (error) { hardFailures.push({ kind: "flag-override", file: "toolchain.json", message: `Invalid toolchain configuration: ${String(error)}` }); }
   }

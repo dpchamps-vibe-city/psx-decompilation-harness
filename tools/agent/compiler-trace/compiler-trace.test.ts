@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { detectAllocationFeedback } from "./hard-register-hazards.js";
 import { analyzeAllocation, applyAllocation } from "./local-allocation.js";
 import { buildPseudoProvenance } from "./pseudo-provenance.js";

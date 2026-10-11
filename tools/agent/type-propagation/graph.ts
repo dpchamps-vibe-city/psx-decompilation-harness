@@ -1,9 +1,10 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /** Original-code evidence graph, independent of worklist eligibility and C bodies. */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadContainers, containerTargetPath, vramToRom, type Container } from "../../lib/container.js";
 import { loadFunctionSpans, loadSymbolIndex, requireFunctionLocation, type FunctionSpan } from "../../lib/symbolIndex.js";
-import { ROOT } from "../decompToolchain.js";
+
 import { digest, filesUnder, snapshot } from "../../lib/contentCache.js";
 import { decodeBytes } from "../matching-reconstruction/exec.js";
 import { buildMachineIr, type MachineIrReport } from "../machine-ir/index.js";
@@ -26,11 +27,11 @@ function copyIndex(index: OriginalIndex): OriginalIndex {
 /** In-process immutable index. No persistent cache, worklist graph or candidate C. */
 export function originalIndex(limit = DEFAULT_BOUNDS.indexInstructions): OriginalIndex {
   const containers = loadContainers();
-  const inputs = containers.flatMap((c) => [containerTargetPath(c), join(ROOT, c.paths.splat), join(ROOT, c.paths.symbolAddrs),
-    join(ROOT, c.paths.undefinedFuncs), join(ROOT, c.paths.undefinedSyms), join(ROOT, c.paths.sectionLayout), join(ROOT, c.paths.ldScript),
-    ...filesUnder(join(ROOT, c.paths.asmDir)).filter((p) => p.endsWith(".s"))])
-    .concat(["build/engine_syms.txt", "build/dep_syms.txt", "build/lib_bss_syms.txt", "configs/overlays.json"].map((p) => join(ROOT, p)));
-  const identity = digest(JSON.stringify([limit, snapshot(ROOT, inputs), containers]));
+  const inputs = containers.flatMap((c) => [containerTargetPath(c), join(projectRoot(), c.paths.splat), join(projectRoot(), c.paths.symbolAddrs),
+    join(projectRoot(), c.paths.undefinedFuncs), join(projectRoot(), c.paths.undefinedSyms), join(projectRoot(), c.paths.sectionLayout), join(projectRoot(), c.paths.ldScript),
+    ...filesUnder(join(projectRoot(), c.paths.asmDir)).filter((p) => p.endsWith(".s"))])
+    .concat(["build/engine_syms.txt", "build/dep_syms.txt", "build/lib_bss_syms.txt", "configs/overlays.json"].map((p) => join(projectRoot(), p)));
+  const identity = digest(JSON.stringify([limit, snapshot(projectRoot(), inputs), containers]));
   if (cached?.identity === identity) return copyIndex(cached);
   const nodes = new Map<string, IndexedFunction>();
   const addresses = new Map<string, Map<number, string>>();
@@ -43,7 +44,7 @@ export function originalIndex(limit = DEFAULT_BOUNDS.indexInstructions): Origina
     }
     /* SDK symbols have no C/asm subsegment. Admit external names only in
        witnessed code ranges, never every non-D-looking data label. */
-    const layoutPath = join(ROOT, container.paths.sectionLayout);
+    const layoutPath = join(projectRoot(), container.paths.sectionLayout);
     const layout = existsSync(layoutPath) ? JSON.parse(readFileSync(layoutPath, "utf8")) as { textStart?: number; dataStart?: number } : {};
     for (const [address, name] of loadSymbolIndex(container).byAddress) {
       const rom = vramToRom(container, address);
@@ -111,7 +112,7 @@ export function buildEvidenceGraph(functionName: string, options: GraphOptions =
   const loadedData = new Set<string>();
   const loadTables = (container: Container) => {
     if (loadedData.has(container.id)) return; loadedData.add(container.id);
-    const directory = join(ROOT, container.paths.asmDir, "data");
+    const directory = join(projectRoot(), container.paths.asmDir, "data");
     if (!existsSync(directory)) return;
     const symbols = loadSymbolIndex(container);
     for (const file of readdirSync(directory).filter((f) => f.endsWith(".s")).sort()) {

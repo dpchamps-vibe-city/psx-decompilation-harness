@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * A zero exit status is not acceptance.
  *
@@ -19,8 +20,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { test } from "node:test";
-import { ROOT, classifyDiagnostics, compileSource, rejectionFromDiagnostics } from "../decompToolchain.js";
+
+import { classifyDiagnostics, compileSource, rejectionFromDiagnostics } from "../decompToolchain.js";
 import { reconstructFunction } from "./engine.js";
 
 const configured = existsSync(join(ROOT, "configs/splat"));

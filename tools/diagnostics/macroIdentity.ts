@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Standalone macro census and reusable API consumed by agent routing. Makes
  * no source edits. Run `npx tsx tools/diagnostics/macroIdentity.ts --help`.
  * Import detectMacroIdentities or tileMacroFunction for future agent tools. */
@@ -5,7 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseC, walk } from "../agent/residual-source-search/tree-sitter-c.js";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import { containerPath, containerTargetPath, loadContainers, unresolvedCodeMembers, type Container } from "../lib/container.js";
 import { loadFunctionSpans, loadSymbolIndex } from "../lib/symbolIndex.js";
 import { readGroups, type FileGroup } from "../agent/fileGroupings.js";
@@ -13,7 +14,7 @@ import { hex } from "./macroInstructions.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
 import { libraryMembers, libraryTargetKey, resolveLibraryCall } from "../lib/libraryTargets.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
-import type { FlagContext } from "../lib/toolchain.js";
+import { configuredSdkHeaders, type FlagContext } from "../lib/toolchain.js";
 import { deriveRepoMacroEncodings, type RepoEncodingReport } from "./macroEncodings.js";
 import { extractMacroTemplates, loadMacroHeaders, type TemplateLibrary } from "./macroTemplates.js";
 import { tileMacroFunction, type MacroFunction, type MacroFunctionReport, type TilerOptions } from "./macroTiler.js";
@@ -148,13 +149,13 @@ function sourceRepresentation(path: string): MacroFunctionReport["sourceRepresen
  * function table/bytes and grouping/symbol evidence for other projects. */
 export function detectMacroIdentities(options: MacroIdentityOptions = {}): MacroIdentityReport {
   if ("commandEncodingHeaders" in options) throw new Error("Replacement C-header encoding inputs were removed; use the production GAS encoding oracle");
-  const library = options.library ?? extractMacroTemplates(loadMacroHeaders(options.headerPaths ?? (loadLibraryProject()?.headers.reference.map(p => join(ROOT, p)) ?? [join(ROOT, "include/psyq"), join(ROOT, "include/debughook.h"), join(ROOT, "include/scratchpad.h")])));
+  const library = options.library ?? extractMacroTemplates(loadMacroHeaders(options.headerPaths ?? (loadLibraryProject()?.headers.reference.map(p => resolve(projectRoot(), p)) ?? [...configuredSdkHeaders(), join(projectRoot(), "include/debughook.h"), join(projectRoot(), "include/scratchpad.h")].filter(existsSync))));
   const containers = options.functions || loadLibraryProject() ? [] : (options.containers ?? loadContainers()).filter(c => !options.containerIds || options.containerIds.includes(c.id));
   const loaded = options.functions ? { functions: options.functions, findings: [] as CensusFinding[] } : loadMacroFunctions(containers);
   if (options.functionNames) loaded.functions = loaded.functions.filter(f => options.functionNames!.some(n => n.toLowerCase() === f.name.toLowerCase()));
   if (!loadLibraryProject() && !options.functions && !options.containers && !options.containerIds) {
     for (const member of unresolvedCodeMembers()) loaded.findings.push({ container: member.id, function: null, reason: "Code member base unresolved; not scanned" });
-    const configured = join(ROOT, "configs/splat");
+    const configured = join(projectRoot(), "configs/splat");
     if (existsSync(configured)) for (const file of readdirSync(configured).filter(f => f.endsWith(".yaml")).sort()) {
       const id = file.slice(0, -5);
       if (!containers.some(c => c.id === id) && !loaded.findings.some(f => f.container === id)) loaded.findings.push({ container: id, function: null, reason: "Configured container unavailable in active manifest; not scanned" });
@@ -187,7 +188,7 @@ export function detectMacroIdentities(options: MacroIdentityOptions = {}): Macro
     });
   }
   if (!options.functions) for (const f of functions) {
-    f.sourceRepresentation = sourceRepresentation(join(ROOT, resolveFunctionTarget(f.name).source));
+    f.sourceRepresentation = sourceRepresentation(join(projectRoot(), resolveFunctionTarget(f.name).source));
   }
   const conversionQueue: MacroIdentityReport["conversionQueue"] = functions.filter(f => f.cop2.count && ["INCLUDE_ASM", "top-level-asm"].includes(f.sourceRepresentation)).sort((a, b) => Number(b.sourceRepresentation === "top-level-asm") - Number(a.sourceRepresentation === "top-level-asm") || b.coverage.fraction - a.coverage.fraction || (a.end - a.start) - (b.end - b.start) || a.name.localeCompare(b.name)).map(f => ({ function: f.name, container: f.container, sourceRepresentation: f.sourceRepresentation, coverage: f.coverage, verdict: f.verdict, headerVintages: f.headerVintages, oracleStatus: "not-converted" }));
   const byName = new Map(functions.map(f => [f.name, f]));
@@ -218,7 +219,7 @@ export function detectFunctionMacroIdentity(functionName: string): { function: M
   const fn = loaded.functions.find(f => f.name.toLowerCase() === functionName.toLowerCase());
   if (!fn) return null;
   const container = containers.find(c => c.id === fn.container);
-  fn.sourceRepresentation = sourceRepresentation(join(ROOT, resolveFunctionTarget(fn.name).source));
+  fn.sourceRepresentation = sourceRepresentation(join(projectRoot(), resolveFunctionTarget(fn.name).source));
   const report = detectMacroIdentities({ functions: [fn], symbols: container ? new Map([[container.id, loadSymbolIndex(container).byAddress]]) : new Map() });
   return { function: report.functions[0]!, encodingToolchains: report.encodingToolchains };
 }
@@ -297,7 +298,7 @@ function main(args: string[]): void {
     } else throw new Error(`Unknown argument ${arg}`);
   }
   const containers = containerId ? (loadLibraryProject() ? [] : loadContainers().filter(c => c.id === containerId)) : undefined;
-  if (containers && !containers.length && !existsSync(join(ROOT, "extracted/overlays", `${containerId}.bin`))) throw new Error(`Unknown container ${containerId}`);
+  if (containers && !containers.length && !existsSync(join(projectRoot(), "extracted/overlays", `${containerId}.bin`))) throw new Error(`Unknown container ${containerId}`);
   const options: MacroIdentityOptions = { ...(containerId ? { containerIds: [containerId] } : {}), ...(headerPaths.length ? { headerPaths } : {}), ...(rawHeaders ? { resolveCommands: false } : {}), ...(mine ? { mine } : {}) };
   if (functionName) {
     const loaded = loadMacroFunctions(containers ?? loadContainers());

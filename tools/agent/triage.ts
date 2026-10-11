@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * triage.ts — pre-flight symptom detector for one function.
  *
@@ -55,19 +56,7 @@ import { existsSync, readFileSync, readdirSync, rmSync } from "fs";
 import { join, resolve } from "path";
 import { packetIsFresh } from "./prepareFunction.js";
 import type { PreparationPacket } from "./campaign/packet.js";
-import {
-  ROOT,
-  type DisassembledInstruction,
-  assembleTarget,
-  compileSource,
-  containerForSymbol,
-  detectImplicitDeclarations,
-  disassembleObject,
-  normalizeFunctionName,
-  resolveAsmSource,
-  resolveSource,
-  sourcePathFor,
-} from "./decompToolchain.js";
+import { type DisassembledInstruction, assembleTarget, compileSource, containerForSymbol, detectImplicitDeclarations, disassembleObject, loadFlagOverrides, normalizeFunctionName, resolveAsmSource, resolveSource, sourcePathFor } from "./decompToolchain.js";
 import {
   type FrameMap,
   type ReturnValue,
@@ -215,10 +204,10 @@ function readCompiled(name: string, source: string, scratch: string, prepared?: 
   try {
     if (prepared) {
       try {
-        const packet = JSON.parse(readFileSync(join(ROOT, prepared), "utf8")) as PreparationPacket;
-        if (packet.identity.functionName === name && packet.primary && resolve(ROOT, packet.primary.path) === resolve(source) &&
+        const packet = JSON.parse(readFileSync(join(projectRoot(), prepared), "utf8")) as PreparationPacket;
+        if (packet.identity.functionName === name && packet.primary && resolve(projectRoot(), packet.primary.path) === resolve(source) &&
           packetIsFresh(packet) && packet.compilation.status === "succeeded" && packet.compilation.assembly && packet.compilation.preprocessed && packet.compilation.object) {
-          artifacts = { assembly: join(ROOT, packet.compilation.assembly.path), preprocessed: join(ROOT, packet.compilation.preprocessed.path), object: join(ROOT, packet.compilation.object.path) };
+          artifacts = { assembly: join(projectRoot(), packet.compilation.assembly.path), preprocessed: join(projectRoot(), packet.compilation.preprocessed.path), object: join(projectRoot(), packet.compilation.object.path) };
           console.error("triage compilation: cache hit (fresh preparation input/output bundle)");
         }
       } catch { /* no usable receipt: perform the ordinary compile */ }
@@ -453,7 +442,7 @@ function detectArityFrame(target: TargetFacts, compiled: CompiledFacts): Finding
  * include/functions.h accumulates the signature of every matched function.
  */
 function knownDeclaration(callee: string): string | undefined {
-  const path = join(ROOT, "include/functions.h");
+  const path = join(projectRoot(), "include/functions.h");
   if (!existsSync(path)) return undefined;
   const pattern = new RegExp(`[\\s\\*]${callee}\\s*\\(.*\\)\\s*;`);
   return readFileSync(path, "utf-8")
@@ -1152,7 +1141,7 @@ function traceableSource(name: string): { path: string; how: string } | undefine
   }
   const winner = best(readLedger(name));
   if (!winner?.sourcePath) return undefined;
-  const preserved = join(ROOT, winner.sourcePath);
+  const preserved = join(projectRoot(), winner.sourcePath);
   if (!existsSync(preserved)) return undefined;
   return { path: preserved, how: `its preserved best attempt, key [${winner.key.join(",")}]` };
 }
@@ -1235,7 +1224,7 @@ function ownMechanisms(name: string): {
 
   const considered = winners.slice(0, MAX_OWN_VARIANTS);
   for (const entry of considered) {
-    const path = join(ROOT, entry.sourcePath!);
+    const path = join(projectRoot(), entry.sourcePath!);
     if (!existsSync(path)) { errors.push(`${entry.sourcePath} is no longer on disk`); continue; }
     try {
       /* Its own artifact slot: tracing these under the function's own key would
@@ -1828,7 +1817,7 @@ export function detectBackendPacket(target: TargetFacts): Finding[] {
 export function detectSearchDomain(
   name: string,
   srcText?: string,
-  searchRoot: string = join(ROOT, "build/residualSourceSearch"),
+  searchRoot: string = join(projectRoot(), "build/residualSourceSearch"),
 ): Finding[] {
   if (srcText === undefined) return [];
   const root = join(searchRoot, name);
@@ -2122,7 +2111,7 @@ function detectFlagFingerprint(name: string, srcText?: string): Finding[] {
   }
   if (pairs.length === 0) return [];
 
-  const hasOverride = (JSON.parse(readFileSync(join(ROOT, "toolchain.json"), "utf8")).fileFlags[name]?.length ?? 0) > 0;
+  const hasOverride = (loadFlagOverrides().get(name)?.length ?? 0) > 0;
   const see = [
     "prompts/reference/flags.md",
     "notes/research/func_800165D8-code-region-fold-and-allocation.md",
@@ -2233,7 +2222,7 @@ function detectCaptureRa(target: TargetFacts): Finding[] {
 
 /** Look up a function's vram, so the allowlist can be keyed either way. */
 function functionVram(name: string): string | undefined {
-  const path = join(ROOT, "build/callGraph.json");
+  const path = join(projectRoot(), "build/callGraph.json");
   if (!existsSync(path)) return undefined;
   try {
     const graph = JSON.parse(readFileSync(path, "utf-8"));
@@ -2242,7 +2231,7 @@ function functionVram(name: string): string | undefined {
 }
 
 function allowlistFor(name: string): string[] {
-  const policyPath = join(ROOT, ".pi/autoloop.json");
+  const policyPath = join(projectRoot(), ".pi/autoloop.json");
   if (!existsSync(policyPath)) return [];
   try {
     const policy = JSON.parse(readFileSync(policyPath, "utf-8"));
@@ -2263,7 +2252,7 @@ function allowlistFor(name: string): string[] {
 function detectAsmPolicy(name: string, srcText: string): Finding[] {
   const target = resolveFunctionTarget(name);
   const container = target.owner.id;
-  return sourceConstructFindings(srcText, loadConfig(ROOT), { name: target.owner.kind === "library" ? container : name, container }).map(f => ({
+  return sourceConstructFindings(srcText, loadConfig(projectRoot()), { name: target.owner.kind === "library" ? container : name, container }).map(f => ({
     detector: "asm-policy", severity: "blocker", summary: f.message,
     evidence: [f.text ?? `line ${f.line ?? "unknown"}`], see: ["AGENTS.md"],
   }));
@@ -2347,12 +2336,12 @@ export function detectBoundaryPremise(name: string): Finding[] {
   const index = segments.findIndex(s => s.name === name && (s.type === "c" || s.type === "asm"));
   if (index < 0) return [];
   const segment = segments[index]!;
-  const binaryPath = resolve(ROOT, container.targetPath);
+  const binaryPath = resolve(projectRoot(), container.targetPath);
   if (!existsSync(binaryPath) || segment.size <= 0) return [];
   const binary = readFileSync(binaryPath);
   if (segment.rom + segment.size > binary.length) return [];
   const next = segments[index + 1];
-  const following = next?.type === "o" && next.rom === segment.rom + segment.size ? followingTextObject(ROOT, next.name) : undefined;
+  const following = next?.type === "o" && next.rom === segment.rom + segment.size ? followingTextObject(projectRoot(), next.name) : undefined;
   const premise = boundaryPremise(binary.subarray(segment.rom, segment.rom + segment.size), segment.vram, following);
   if (!premise.missingTerminal && !premise.adjacentReturnPadding) return [];
   return [{
@@ -2420,7 +2409,8 @@ function main(): void {
   }
 
   const name = normalizeFunctionName(positional[0]);
-  const scratch = join(ROOT, "build/triage", name);
+  loadFlagOverrides(); /* malformed assignments must not become a swallowed compile failure */
+  const scratch = join(projectRoot(), "build/triage", name);
 
   let target: TargetFacts;
   try {

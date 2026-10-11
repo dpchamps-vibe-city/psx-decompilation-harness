@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * detectLibFunctions.ts — Detect PSY-Q library functions in the binary
  *
@@ -17,19 +18,19 @@ import * as fs from "fs";
 import * as path from "path";
 import { execFileSync, execSync } from "child_process";
 import { configuredTool, configuredSdk } from "../lib/toolchain.js";
-import { exeSymbolAddrsPath, loadPsxExeInfo, requireSectionLayout, ROOT } from "../lib/psxExeInfo.ts";
+import { exeSymbolAddrsPath, loadPsxExeInfo, requireSectionLayout } from "../lib/psxExeInfo.ts";
 import { hash, loadMemberMap } from "../lib/psyqMembers.js";
 import { acknowledgeFindings, scanSdkSignatures, type DetectionAcknowledgement, type DetectionReport } from "../lib/sdkDetection.js";
 
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 const _layout = requireSectionLayout();
-const BINARY_PATH = _info.binaryPath;
+const BINARY_PATH = () => (_info().binaryPath);
 const SDK = configuredSdk();
 const VERSION = SDK.version;
-const PAYLOAD_OFFSET = _info.payloadOffset;
-const LOAD_ADDR = _info.loadAddr;
-const TEXT_START = _layout.textStart - PAYLOAD_OFFSET + LOAD_ADDR;
-const TEXT_END = _layout.dataStart - PAYLOAD_OFFSET + LOAD_ADDR;
+const PAYLOAD_OFFSET = () => (_info().payloadOffset);
+const LOAD_ADDR = () => (_info().loadAddr);
+const TEXT_START = () => (_layout.textStart - PAYLOAD_OFFSET() + LOAD_ADDR());
+const TEXT_END = () => (_layout.dataStart - PAYLOAD_OFFSET() + LOAD_ADDR());
 
 interface SigLabel {
   name: string;
@@ -63,7 +64,7 @@ interface CandidateMatch {
 }
 
 function fileOffsetToVram(offset: number): number {
-  return offset - PAYLOAD_OFFSET + LOAD_ADDR;
+  return offset - PAYLOAD_OFFSET() + LOAD_ADDR();
 }
 
 interface Relocation {
@@ -76,7 +77,7 @@ interface Relocation {
 function getTextRelocations(oPath: string): Relocation[] {
   try {
     const output = execFileSync(configuredTool("readelf"), ["-r", oPath], {
-      encoding: "utf-8",
+      cwd: projectRoot(), encoding: "utf-8",
     });
     const relocs: Relocation[] = [];
     let inTextRelocs = false;
@@ -202,7 +203,7 @@ function verifyRelocations(
 function getSections(oPath: string): string[] {
   try {
     const output = execFileSync(configuredTool("readelf"), ["-S", oPath], {
-      encoding: "utf-8",
+      cwd: projectRoot(), encoding: "utf-8",
     });
     const sections: string[] = [];
     for (const line of output.split("\n")) {
@@ -216,24 +217,23 @@ function getSections(oPath: string): string[] {
 }
 
 function main() {
-  process.chdir(ROOT);
   const verbose = process.argv.includes("--verbose");
 
-  if (!fs.existsSync(BINARY_PATH)) {
-    console.error(`Binary not found: ${BINARY_PATH}`);
+  if (!fs.existsSync(BINARY_PATH())) {
+    console.error(`Binary not found: ${BINARY_PATH()}`);
     process.exit(1);
   }
 
-  const binary = fs.readFileSync(BINARY_PATH);
-  const searchStart = TEXT_START - LOAD_ADDR + PAYLOAD_OFFSET;
-  const searchEnd = TEXT_END - LOAD_ADDR + PAYLOAD_OFFSET;
+  const binary = fs.readFileSync(BINARY_PATH());
+  const searchStart = TEXT_START() - LOAD_ADDR() + PAYLOAD_OFFSET();
+  const searchEnd = TEXT_END() - LOAD_ADDR() + PAYLOAD_OFFSET();
 
   const versionDir = SDK.signatures;
 
   const { candidates, matchedButUnverifiable, rejectedPlacements } = scanSdkSignatures({
-    root: ROOT, sigDir: versionDir, map: loadMemberMap(ROOT, VERSION), convertedDir: path.relative(ROOT, SDK.convertedDir), binary, searchStart, searchEnd,
+    root: projectRoot(), sigDir: versionDir, map: loadMemberMap(projectRoot(), VERSION), convertedDir: path.relative(projectRoot(), SDK.convertedDir), binary, searchStart, searchEnd,
   });
-  const acknowledgementsPath = path.join(ROOT, "configs/library-detection.json");
+  const acknowledgementsPath = path.join(projectRoot(), "configs/library-detection.json");
   const acknowledgements: DetectionAcknowledgement[] =
     fs.existsSync(acknowledgementsPath) ? JSON.parse(fs.readFileSync(acknowledgementsPath, "utf8")).acknowledgements : [];
   const unacknowledged = acknowledgeFindings(matchedButUnverifiable, acknowledgements, VERSION, hash(binary));
@@ -348,7 +348,7 @@ function main() {
       deduped.push(largest[0].match);
     } else {
       // Tie in textSize — use relocation verification to break tie
-      const fileOffset = addr - LOAD_ADDR + PAYLOAD_OFFSET;
+      const fileOffset = addr - LOAD_ADDR() + PAYLOAD_OFFSET();
       let bestMatch = largest[0].match;
       let bestScore = -1;
 
@@ -434,7 +434,7 @@ function main() {
 
     // Check current placement
     const currentFileOffset =
-      placed[i].vramStart - LOAD_ADDR + PAYLOAD_OFFSET;
+      placed[i].vramStart - LOAD_ADDR() + PAYLOAD_OFFSET();
     const current = verifyRelocations(
       binary,
       currentFileOffset,

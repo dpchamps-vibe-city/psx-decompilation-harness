@@ -1,8 +1,9 @@
+import { ROOT } from "../../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import test from "node:test";
-import { ROOT } from "../decompToolchain.js";
+import { test } from "../../testing/runtimeTestContext.js";
+
 import { deterministicRunId, hashDirectoryFiles, preserveSource, stableJson, writeStableJson } from "./artifacts.js";
 import { classifyHypothesis } from "./classify-hypothesis.js";
 import { findGeneratedGlobalDefinitions, resolveHypotheses, validateManifest, validateVariantSource } from "./manifest.js";

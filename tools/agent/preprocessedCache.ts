@@ -1,3 +1,5 @@
+import { COMPONENT_CONTRACTS, stableHash } from "../lib/cacheIdentity.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /** The real target cpp, reused by content + transitive include/search identity.
  * Cached text is immutable; inference views receive their own declaration models. */
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -6,9 +8,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { digest, fileDigest, filesUnder, readCache, snapshot, writeCache } from "../lib/contentCache.js";
-import { ROOT } from "./decompToolchain.js";
+
 import { sourceFlagContext } from "../lib/targetAdapter.js";
-import { configuredFlags, configuredTool, executablePath, toolchainDigest, loadToolchain } from "../lib/toolchain.js";
+import { configuredCppFrontend, configuredFlags, configuredTool, executablePath, loadToolchain } from "../lib/toolchain.js";
 
 export function dependencyPaths(text: string, root: string): string[] {
   const first = text.replace(/\\\r?\n/g, " ").split("\n")[0] ?? "";
@@ -29,7 +31,7 @@ export function withPreprocessorMetadata<T>(task: () => T): T {
     for (const [dir, members] of state.members) if (JSON.stringify(members.filter((p) => includeCandidate(p, state.names))) !==
       JSON.stringify(filesUnder(dir).filter((p) => includeCandidate(p, state.names))))
       throw new Error("include search membership changed during request");
-    if (state.tools && (state.tools.config !== toolchainDigest() || JSON.stringify(state.tools.hashes) !== JSON.stringify([fileDigest(state.tools.cpp), fileDigest(state.tools.frontend)])))
+    if (state.tools && (state.tools.config !== cppConfiguration() || JSON.stringify(state.tools.hashes) !== JSON.stringify([fileDigest(state.tools.cpp), fileDigest(state.tools.frontend)])))
       throw new Error("cpp implementation changed during request");
   };
   return metadata.run(state, () => {
@@ -38,15 +40,16 @@ export function withPreprocessorMetadata<T>(task: () => T): T {
     validate(); return result;
   });
 }
+function cppConfiguration(): string { return stableHash({ cpp: configuredTool("cpp"), family: loadToolchain().compiler.family }); }
 function toolConfiguration(): { cpp: string; frontend: string; hashes: string[]; config: string } {
   const state = metadata.getStore();
   if (state?.tools) return state.tools;
   const command = configuredTool("cpp");
   const cpp = executablePath(command);
   if (!cpp) throw new Error(`Configured preprocessor not found: ${command}`);
-  const frontend = loadToolchain().compiler.family === "gcc"
-    ? executablePath(execFileSync(cpp, ["-print-prog-name=cc1"], { encoding: "utf8" }).trim()) ?? cpp : cpp;
-  const tools = { cpp, frontend, hashes: [fileDigest(cpp), fileDigest(frontend)], config: toolchainDigest() };
+  const frontend = configuredCppFrontend();
+  if (!frontend) throw new Error(`Configured preprocessor frontend not found: ${command}`);
+  const tools = { cpp, frontend, hashes: [fileDigest(cpp), fileDigest(frontend)], config: cppConfiguration() };
   if (state) state.tools = tools;
   return tools;
 }
@@ -61,7 +64,7 @@ export function preprocessingTools(): { tools: ReturnType<typeof toolConfigurati
     .map((p) => [p, process.env[p] ?? null])) };
 }
 export interface ProcessedBundle { text: string; dependencies: string[]; inputs: Record<string, string>; cache: "hit" | "miss" }
-export function cachedPreprocess(source: string, root = ROOT, flags = configuredFlags("cpp", sourceFlagContext(resolve(root, source), root), root)): ProcessedBundle {
+export function cachedPreprocess(source: string, root = projectRoot(), flags = configuredFlags("cpp", sourceFlagContext(resolve(root, source), root), root)): ProcessedBundle {
   source = resolve(root, source);
   const { tools, environment } = preprocessingTools();
   const { cpp } = tools;
@@ -91,7 +94,7 @@ export function cachedPreprocess(source: string, root = ROOT, flags = configured
     return search.map((dir): [string, string[]] => [dir, searchMembers(dir).filter((p) => includeCandidate(p, set))]);
   };
   const identity = { source, sourceHash: fileDigest(source), flags, cpp: searchKey,
-    implementation: snapshot(ROOT, ["tools/agent/preprocessedCache.ts", "tools/lib/contentCache.ts", "tools/agent/decompToolchain.ts"]) };
+    compatibility: COMPONENT_CONTRACTS.preprocess };
   const key = digest(JSON.stringify(identity));
   const path = join(root, "build/cache/preprocessed", `${digest(source)}.json`);
   type Cached = Omit<ProcessedBundle, "cache"> & { searchNames: string[]; membership: Array<[string, string[]]> };

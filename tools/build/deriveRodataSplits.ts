@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * deriveRodataSplits.ts — Derive the game-rodata subsegment block of a
  * container's splat config from first principles, so it is never hand-edited.
@@ -36,7 +37,7 @@
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { elf32SectionSizes } from "../lib/elfSections.js";
-import { ROOT } from "../lib/psxExeInfo.ts";
+
 import {
   EXE_CONTAINER_ID,
   containerPath,
@@ -160,13 +161,13 @@ export function existingRodataBlock(container: Container): string[] | null {
 }
 
 function objRodataSize(container: Container, fn: string): number | null {
-  const obj = join(ROOT, container.paths.objDir, `${fn}.c.o`);
+  const obj = join(projectRoot(), container.paths.objDir, `${fn}.c.o`);
   if (!existsSync(obj)) return null;
   return elf32SectionSizes(readFileSync(obj)).get(".rodata") ?? 0;
 }
 
 function isCompiledC(container: Container, fn: string): boolean {
-  const src = join(ROOT, container.paths.srcDir, `${fn}.c`);
+  const src = join(projectRoot(), container.paths.srcDir, `${fn}.c`);
   if (!existsSync(src)) return false;
   const text = readFileSync(src, "utf-8");
   const re = new RegExp(`INCLUDE_ASM\\([^)]*,\\s*${fn}\\s*\\)`);
@@ -252,8 +253,7 @@ function applyDerivation(d: Derivation): void {
   writeFileSync(path, [...before, ...d.derived, ...after].join("\n"));
 }
 
-function main(): void {
-  const argv = process.argv.slice(2);
+export function runRodataDerivation(argv: string[]): void {
   const write = argv.includes("--write");
   const all = argv.includes("--all");
   const idx = argv.indexOf("--container");
@@ -289,7 +289,7 @@ function main(): void {
 
   if (drift && !write) {
     console.log("run with --write to apply the derived block");
-    process.exitCode = 1;
+    throw new Error("Rodata attribution differs from configured blocks");
   }
 }
 
@@ -380,4 +380,7 @@ function jumpTableLength(
   return n;
 }
 
-if (process.argv[1]?.endsWith("deriveRodataSplits.ts")) main();
+if (process.argv[1]?.endsWith("deriveRodataSplits.ts")) {
+  try { runRodataDerivation(process.argv.slice(2)); }
+  catch (error) { console.error(String(error)); process.exitCode = 1; }
+}

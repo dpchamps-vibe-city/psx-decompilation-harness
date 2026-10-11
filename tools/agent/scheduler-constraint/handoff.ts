@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import type { TargetScheduleAnalysis } from "../target-schedule/types.js";
 import { validateSourceShapeSpec } from "../source-shape-search/schema.js";
 import { deriveSynthesisPlan, sourceShapeSpec } from "../source-shape-synthesis/planner.js";
@@ -26,8 +27,8 @@ export function deriveSchedulerSourceHandoff(
   sourcePath: string,
 ): SchedulerSourceHandoff | undefined {
   if (result.status !== "sat" || !result.witness) return undefined;
-  const absoluteSourcePath = isAbsolute(sourcePath) ? sourcePath : join(ROOT, sourcePath);
-  const modelSourcePath = isAbsolute(sourcePath) ? absoluteSourcePath.slice(ROOT.length + 1).replace(/\\/g, "/") : sourcePath;
+  const absoluteSourcePath = isAbsolute(sourcePath) ? sourcePath : join(projectRoot(), sourcePath);
+  const modelSourcePath = isAbsolute(sourcePath) ? absoluteSourcePath.slice(projectRoot().length + 1).replace(/\\/g, "/") : sourcePath;
   const source = readFileSync(absoluteSourcePath, "utf8");
   const model = buildSourceModel(input.model.function, modelSourcePath, source);
   const original = deriveSynthesisPlan({

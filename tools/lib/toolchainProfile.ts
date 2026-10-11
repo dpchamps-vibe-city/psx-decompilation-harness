@@ -1,3 +1,4 @@
+import { projectRoot } from "./runtimeContext.js";
 /**
  * toolchainProfile.ts — which SDK and linker built this game?
  *
@@ -24,7 +25,7 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { digest, readCache, snapshot, writeCache } from "./contentCache.js";
-import { ROOT, exeSplatYamlPath, loadPsxExeInfo } from "./psxExeInfo.js";
+import { exeSplatYamlPath, loadPsxExeInfo } from "./psxExeInfo.js";
 
 export interface ToolchainEvidence {
   source: "vendor-string" | "project-config" | "library-signatures";
@@ -134,7 +135,7 @@ export interface DetectOptions {
 }
 
 export function detectToolchain(options: DetectOptions = {}): ToolchainProfile {
-  const root = options.root ?? ROOT;
+  const root = options.root ?? projectRoot();
   const cachePath = join(root, CACHE_PATH);
   const evidence: ToolchainEvidence[] = [];
   let image: Buffer | null = null;

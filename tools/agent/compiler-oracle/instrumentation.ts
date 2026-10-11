@@ -1,12 +1,13 @@
+import { sourceDir } from "../compiler-source/index.js";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { ROOT } from "../decompToolchain.js";
+
 
 // This instrumentation and its Dockerfile support the pinned GCC 2.95.2
 // profile. Compiler inputs belong in vendor/, not project research/scratch.
-const GCC_SOURCE = join(ROOT, "tools/vendor/gcc/2.95.2/src/gcc");
-const LOCAL_REFERENCE = join(GCC_SOURCE, "local-alloc.c");
-const SCHED_REFERENCE = join(GCC_SOURCE, "sched.c");
+const GCC_SOURCE = () => join(sourceDir(), "gcc");
+const LOCAL_REFERENCE = () => (join(GCC_SOURCE(), "local-alloc.c"));
+const SCHED_REFERENCE = () => (join(GCC_SOURCE(), "sched.c"));
 
 function replaceOnce(source: string, find: string, replacement: string, label: string): string {
   const first = source.indexOf(find);
@@ -230,7 +231,7 @@ psx_oracle_log_schedule_edge (block, before, after, injected)
 }
 `;
 
-export function instrumentLocalAllocation(source = readFileSync(LOCAL_REFERENCE, "utf8")): string {
+export function instrumentLocalAllocation(source = readFileSync(LOCAL_REFERENCE(), "utf8")): string {
   let result = replaceOnce(
     source,
     "static void alloc_qty\t\tPROTO((int, enum machine_mode, int, int));\n",
@@ -348,7 +349,7 @@ export function instrumentLocalAllocation(source = readFileSync(LOCAL_REFERENCE,
   return result;
 }
 
-export function instrumentScheduler(source = readFileSync(SCHED_REFERENCE, "utf8")): string {
+export function instrumentScheduler(source = readFileSync(SCHED_REFERENCE(), "utf8")): string {
   let result = replaceOnce(
     source,
     '#include "insn-attr.h"\n',

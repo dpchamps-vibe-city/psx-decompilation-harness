@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * mergeFragments.ts — Detect and merge fall-through function fragments
  *
@@ -23,9 +24,9 @@
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync, statSync } from "fs";
 import { join } from "path";
-import { loadPsxExeInfo, vramToRom, ROOT, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, vramToRom, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
 
-const SRC_DIR = join(ROOT, "src");
+const SRC_DIR = () => (join(projectRoot(), "src"));
 const SYMBOL_ADDRS = exeSymbolAddrsPath();
 const SPLAT_YAML = exeSplatYamlPath();
 
@@ -310,8 +311,8 @@ function collectJumpTableRodataInserts(
      * missing at link time, far from the cause. Ask the compiled assembly
      * when it exists, and fall back to source state on a tree that has not
      * been built yet. */
-    const sourcePath = join(SRC_DIR, `${owner}.c`);
-    const compiledPath = join(ROOT, "build/src", `${owner}.s`);
+    const sourcePath = join(SRC_DIR(), `${owner}.c`);
+    const compiledPath = join(projectRoot(), "build/src", `${owner}.s`);
     /* Source state decides stub-versus-C, because it is always current; a
      * compiled artifact can be stale, and trusting it would keep the entry
      * after a revert to INCLUDE_ASM, leaving the extracted table dropped with
@@ -389,8 +390,8 @@ function syncSplatSubsegments(options: {
           if (adjacent) romEnd = parseInt(adjacent[1]!, 16);
         }
       }
-      const sourcePath = join(SRC_DIR, `${name}.c`);
-      const compiledPath = join(ROOT, "build/src", `${name}.s`);
+      const sourcePath = join(SRC_DIR(), `${name}.c`);
+      const compiledPath = join(projectRoot(), "build/src", `${name}.s`);
       const stillC = existsSync(sourcePath)
         && !/INCLUDE_ASM/.test(readFileSync(sourcePath, "utf-8"));
       const emitsTable = objectEmitsJumpTable(sourcePath, compiledPath) !== false;
@@ -535,8 +536,8 @@ function main() {
   const jtblOwners = new Map<number, number>(); // target addr → owner addr
   const jtblByOwnerFunc = new Map<number, JtblInfo[]>(); // owner addr → jtbl infos
   {
-    const ASM_DATA_DIR = join(ROOT, "build/asm/data");
-    const ASM_NM_DIR = join(ROOT, "build/asm/nonmatchings");
+    const ASM_DATA_DIR = join(projectRoot(), "build/asm/data");
+    const ASM_NM_DIR = join(projectRoot(), "build/asm/nonmatchings");
     // Include all known addresses (func_ and _prefixed labels) as potential jtbl targets
     const allKnownAddrs = new Set(allSorted.map((e) => e.addr));
 
@@ -878,7 +879,7 @@ function main() {
   for (const a of merges.flatMap((m) => m.absorbed)) {
     const addrHex = a.addr.toString(16).toUpperCase();
     for (const prefix of ["func_", "_"]) {
-      const srcFile = join(SRC_DIR, `${prefix}${addrHex}.c`);
+      const srcFile = join(SRC_DIR(), `${prefix}${addrHex}.c`);
       if (existsSync(srcFile)) {
         unlinkSync(srcFile);
         deletedSrc++;
@@ -897,7 +898,7 @@ function main() {
 
   let resetSrc = 0;
   for (const m of merges) {
-    const srcFile = join(SRC_DIR, `${m.head}.c`);
+    const srcFile = join(SRC_DIR(), `${m.head}.c`);
     if (existsSync(srcFile)) {
       const content = readFileSync(srcFile, "utf-8");
       // Only reset if it's an inline __asm__ block (not real C, not already a stub)

@@ -1,9 +1,11 @@
-import test from "node:test";
+import { fixtureContext } from "../testing/runtimeTestContext.js";
+import { ROOT } from "../testing/runtimeTestContext.js";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import { loadContainers, type Container } from "../lib/container.js";
 import { decodeMacroBytes, isCop2 } from "./macroInstructions.js";
 import { extractMacroTemplates, loadMacroHeaders } from "./macroTemplates.js";
@@ -31,8 +33,8 @@ const fixture = (body: string) => extractMacroTemplates([{ path: "fixture.h", so
 const read = (path: string): string => readFileSync(join(ROOT, path), "utf8");
 const headers = ["include/psyq/inline_c.h", "include/psyq/inline_o.h", "include/psyq/gtemac.h", "include/debughook.h"].map(path => ({ path, source: read(path) }));
 const sdk = extractMacroTemplates(headers);
-const productionExe = deriveRepoMacroEncodings(sdk, "exe");
-const productionOverlay = deriveRepoMacroEncodings(sdk, "overlay");
+const productionExe = fixtureContext(ROOT, () => (deriveRepoMacroEncodings(sdk, "exe")));
+const productionOverlay = fixtureContext(ROOT, () => (deriveRepoMacroEncodings(sdk, "overlay")));
 
 // Mechanical extraction goldens: text is retained, operands/register spaces
 // and asm block boundaries are part of the template, not copied opcode tables.
@@ -305,7 +307,7 @@ test("Tier B call/terminate/call spine respects delay slots and shared constants
 
 // Original-byte acceptance is conditional on local extracted inputs. Synthetic
 // tests above always run; missing binaries are visible skips, not fake passes.
-const containers = existsSync(join(ROOT, "extracted/iso/slus_011.15")) ? loadContainers() : [];
+const containers = fixtureContext(ROOT, () => (existsSync(join(ROOT, "extracted/iso/slus_011.15")) ? loadContainers() : []));
 const live = containers.length ? loadMacroFunctions(containers) : { functions: [], findings: [] };
 const byName = new Map(live.functions.map(f => [f.name, f]));
 test("original D6B8 entry, DFD4 inventory, both CAPTURE_RA sites, and clean control", { skip: !byName.has("func_8001D6B8") || !existsSync(join(ROOT, "build/functions.csv")) || !existsSync(join(ROOT, "build/functions/func_8001DFD4.s")) }, () => {

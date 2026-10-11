@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The prepared reconstruction bundle — the agent handoff as a product.
  *
@@ -34,7 +35,7 @@ import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import type { PacketSource, PreparationPacket } from "./packet.js";
-import { ROOT, configuredCc1FlagsForContainer, loadFlagOverrides } from "../decompToolchain.js";
+import { configuredCc1FlagsForContainer, loadFlagOverrides } from "../decompToolchain.js";
 import { requireFunctionLocation } from "../../lib/symbolIndex.js";
 import { recoverContext, renderContext, type RecoveredContext } from "../matching-reconstruction/context-product.js";
 import { buildMachineIr, renderMachineIr, type MachineIrReport } from "../machine-ir/index.js";
@@ -124,7 +125,7 @@ export function prepareBundle(functionName: string, preparation?: PreparationPac
   } : draftOf(loaded, bundleResult, ir, context);
   const primary: PacketSource | undefined = preparation?.primary ?? (draft.kind !== "none" && !isRefusal(loaded) ? {
     origin: "reconstruction", text: draft.source,
-    path: relative(ROOT, join(loaded.directory, draft.kind === "exact" ? "winner.c" : "best-effort.c")),
+    path: relative(projectRoot(), join(loaded.directory, draft.kind === "exact" ? "winner.c" : "best-effort.c")),
     sha256: createHash("sha256").update(draft.source).digest("hex"), declarationsRequired: [],
   } : undefined);
   const repair = safeRepairReport(functionName);
@@ -456,10 +457,10 @@ export function renderBundle(bundle: PreparedBundle): string[] {
 
 /** Where a function's prepared bundle is written. */
 export function bundlePath(functionName: string, extension: "md" | "json"): string {
-  return join(ROOT, "build/preparedBundles", `${functionName}.${extension}`);
+  return join(projectRoot(), "build/preparedBundles", `${functionName}.${extension}`);
 }
 
 /** True when the tree is configured enough to prepare a bundle. */
 export function bundlesAvailable(): boolean {
-  return existsSync(join(ROOT, "configs/splat"));
+  return existsSync(join(projectRoot(), "configs/splat"));
 }

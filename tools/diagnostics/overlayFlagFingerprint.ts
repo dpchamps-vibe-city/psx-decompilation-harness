@@ -52,14 +52,14 @@ function measureGp(bytes: Buffer, from: number, to: number): GpMeasurement {
   return { accesses, words, perThousand: words === 0 ? 0 : (accesses / words) * 1000 };
 }
 
-const exe = loadPsxExeInfo();
+const exe = () => (loadPsxExeInfo());
 const layout = requireSectionLayout();
-const exeBytes = readFileSync(exe.binaryPath);
-const exeGp = measureGp(exeBytes, layout.textStart, layout.dataStart);
+const exeBytes = () => (readFileSync(exe().binaryPath));
+const exeGp = () => (measureGp(exeBytes(), layout.textStart, layout.dataStart));
 
 const manifest = requireManifest();
 const profile = detectToolchain();
-const exeImage = { start: exe.loadAddr, end: exe.loadAddr + exe.payloadSize };
+const exeImage = () => ({ start: exe().loadAddr, end: exe().loadAddr + exe().payloadSize });
 
 let overlayAccesses = 0;
 let overlayWords = 0;
@@ -69,7 +69,7 @@ for (const member of codeMembers(manifest)) {
   if (member.base?.verdict !== "resolved" || member.base.base === null) continue;
   const bytes = readMemberBytes(manifest, member);
   const memberLayout = layoutFromConsensus(
-    deriveLayoutByStrategy({ id: member.id, bytes, exeImage }, profile, member.base.base),
+    deriveLayoutByStrategy({ id: member.id, bytes, exeImage: exeImage() }, profile, member.base.base),
     bytes.length
   );
   const measurement = measureGp(bytes, memberLayout.textStart, memberLayout.dataStart);
@@ -84,7 +84,7 @@ console.log("Overlay compiler-flag fingerprint: gp-relative addressing density i
 console.log();
 console.log(`${"BODY".padEnd(24)} ${"GP ACCESSES".padStart(12)} ${"WORDS".padStart(9)} ${"PER 1000".padStart(9)}`);
 console.log(
-  `${"exe .text".padEnd(24)} ${String(exeGp.accesses).padStart(12)} ${String(exeGp.words).padStart(9)} ${exeGp.perThousand.toFixed(2).padStart(9)}`
+  `${"exe .text".padEnd(24)} ${String(exeGp().accesses).padStart(12)} ${String(exeGp().words).padStart(9)} ${exeGp().perThousand.toFixed(2).padStart(9)}`
 );
 for (const m of perMember) {
   console.log(
@@ -97,9 +97,9 @@ console.log(
 
 console.log();
 const contrary = perMember.filter((m) => m.accesses > 0);
-if (overlayWords > 0 && overlayAccesses === 0 && exeGp.accesses > 0) {
+if (overlayWords > 0 && overlayAccesses === 0 && exeGp().accesses > 0) {
   console.log("FINDING: no gp-relative accesses observed in measured overlay .text.");
-  console.log(`  ${overlayWords} words across ${perMember.length} measured members; EXE has ${exeGp.accesses} accesses (${exeGp.perThousand.toFixed(2)} per 1000 words).`);
+  console.log(`  ${overlayWords} words across ${perMember.length} measured members; EXE has ${exeGp().accesses} accesses (${exeGp().perThousand.toFixed(2)} per 1000 words).`);
   console.log("  Small-data-disabled compilation is a candidate, not a uniquely identified -G threshold.");
   console.log("  Inspect TU ownership, library/assembly regions and runtime GP initialization before selecting flags.");
   console.log("  Record justified differences as explicitly selected toolchain.json profiles; this tool changes no configuration.");

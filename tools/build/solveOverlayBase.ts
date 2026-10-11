@@ -42,12 +42,12 @@ const probeIdx = args.indexOf("--probe");
 const probe = probeIdx >= 0 && args[probeIdx + 1] ? Number(args[probeIdx + 1]) : null;
 
 const manifest = requireManifest();
-const exe = loadPsxExeInfo();
-const exeImage = { start: exe.loadAddr, end: exe.loadAddr + exe.payloadSize };
+const exe = () => (loadPsxExeInfo());
+const exeImage = () => ({ start: exe().loadAddr, end: exe().loadAddr + exe().payloadSize });
 
 const members = codeMembers(manifest);
 const inputs = new Map<string, BaseSolverInput>(
-  members.map((m) => [m.id, { id: m.id, bytes: readMemberBytes(manifest, m), exeImage }])
+  members.map((m) => [m.id, { id: m.id, bytes: readMemberBytes(manifest, m), exeImage: exeImage() }])
 );
 
 const hex = (value: number) => `0x${value.toString(16).toUpperCase().padStart(8, "0")}`;
@@ -65,7 +65,7 @@ function externalCallAgreement(bytes: Buffer): { known: number; total: number } 
   for (let offset = 0; offset + 4 <= bytes.length; offset += 4) {
     const target = jalTarget(bytes.readUInt32LE(offset), 0x80000000);
     if (target === null || !isValidRamAddress(target)) continue;
-    if (target >= exeImage.start && target < exeImage.end) targets.add(target);
+    if (target >= exeImage().start && target < exeImage().end) targets.add(target);
   }
   const known = [...targets].filter((t) => knownExeFunctions.has(t)).length;
   return { known, total: targets.size };

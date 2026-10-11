@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { loadIndex, scanMachineDescription, collectDumpPasses, verifyTree, resolveVersion, vendoredVersions } from "./index.js";
 import { configuredGccVersion } from "../decompToolchain.js";
 import { definitionText, findDefinitions, findDumpPass, findPatterns, referencesIn } from "./query.js";

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { applyWebParityGate } from "./web-parity-gate.js";
 import type { AllocationRequirement, TargetScheduleRequirement } from "./types.js";
 

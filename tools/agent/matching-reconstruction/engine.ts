@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The reconstruction engine: original bytes in, exact candidate bundle or an
  * explicitly scoped unresolved result out (plan §1).
@@ -33,14 +34,7 @@
 
 import { readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import {
-  ROOT,
-  compileSource,
-  configuredCc1FlagsForContainer,
-  detectImplicitDeclarations,
-  loadFlagOverrides,
-  rejectionFromDiagnostics,
-} from "../decompToolchain.js";
+import { compileSource, configuredCc1FlagsForContainer, detectImplicitDeclarations, loadFlagOverrides, rejectionFromDiagnostics } from "../decompToolchain.js";
 import { containerTargetPath, loadContainer, vramToRom } from "../../lib/container.js";
 import { requireFunctionLocation, loadSymbolIndex, resolveAddress } from "../../lib/symbolIndex.js";
 import { compareFunction } from "../../lib/functionOracle.js";
@@ -109,7 +103,7 @@ export function reconstructFunction(options: ReconstructOptions): ResultBundle {
   const location = requireFunctionLocation(functionName);
   const container = location.container;
   const span = location.span;
-  const outputDirectory = options.outputDirectory ?? join(ROOT, "build/matchingReconstruction", functionName);
+  const outputDirectory = options.outputDirectory ?? join(projectRoot(), "build/matchingReconstruction", functionName);
   mkdirSync(outputDirectory, { recursive: true });
   const artifacts = new ArtifactRecorder(outputDirectory);
 

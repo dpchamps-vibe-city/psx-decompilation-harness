@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../tools/lib/installedScripts.js";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -76,7 +77,7 @@ export function functionPaths(projectRoot: string, name: string): {
 }
 
 export async function rebuildCallGraph(projectRoot: string, timeoutMs = 120_000): Promise<CallGraph> {
-  const result = await runCommand("npx", ["tsx", "tools/agent/callGraph.ts"], { cwd: projectRoot, timeoutMs });
+  const result = await runCommand(process.execPath, installedScriptArgs("tools/agent/callGraph.ts", [], projectRoot), { cwd: projectRoot, timeoutMs });
   if (result.code !== 0) throw new Error(`Call graph regeneration failed:\n${result.stderr || result.stdout}`);
   return loadCallGraph(projectRoot);
 }

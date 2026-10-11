@@ -29,15 +29,15 @@ fingerprints (decoded from original bytes, no source needed), a flag-matrix
 score of the current source, and nearby overrides (flags are per-TU, so
 neighbors share them). The evidence bar: a fingerprint, plus a flag column
 that dominates baseline, plus no contrary witness in the same region. When
-the bar is met, propose a human-reviewed change to `toolchain.json.fileFlags`,
-record its evidence in project metadata, and add the matching `flag-override`
-allowlist entry in `.pi/autoloop.json` in the same change. The allowlist is the
-audit trail the policy gate enforces; workers may not edit the toolchain or
-grant themselves an exception. Do not add an override without a fingerprint,
-and never switch off an optimization the target shows signs of using. A probe
-that shows baseline equal to the flag delta kills that flag hypothesis; measure
-a different source shape rather than treating historical examples as target
-evidence.
+the bar is met, apply the override yourself: add the `CC1FLAGS_<stem>` entry
+in `configs/flag_overrides.mk` with a comment stating the evidence, and add
+the matching `flag-override` allowlist entry in the project configuration in
+the same change — the allowlist entry is the audit trail the policy gate
+enforces. Do not stop at "proposing" an override the evidence already
+supports; do not add one without a fingerprint. A probe that shows baseline
+equal to the flag delta means the flag is NOT the answer and the source shape
+is (func_8001FF98: the probe's matrix exposed exactly this, killing a wrong
+override within minutes).
 
 ### Equivalent guarded stores can expose CSE skipping
 

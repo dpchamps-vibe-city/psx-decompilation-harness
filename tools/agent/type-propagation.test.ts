@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { ROOT, test } from "../testing/runtimeTestContext.js";
+
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -15,7 +16,7 @@ import { DEFAULT_BOUNDS, type EvidenceGraph } from "./type-propagation/model.js"
 import { buildEvidenceGraph } from "./type-propagation/graph.js";
 import { inspectType, slotsWithTypedefs, parameterReads, typeScopes, unspecifiedParameters, layoutFields } from "./type-propagation/c-types.js";
 import { prepareM2c } from "../build/prepareM2c.js";
-import { ROOT, compileSource } from "./decompToolchain.js";
+import { compileSource } from "./decompToolchain.js";
 import { parseRelocations, relocatedField } from "../lib/functionOracle.js";
 import { parseC, field } from "./residual-source-search/tree-sitter-c.js";
 

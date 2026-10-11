@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * flagProbe.ts — early per-file flag-hypothesis check for one function.
  *
@@ -39,19 +40,7 @@
 import { execSync } from "child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import {
-  ROOT,
-  compileSource,
-  configuredTool,
-  runTool,
-  loadFlagOverrides,
-  assembleTarget,
-  disassembleObject,
-  configuredGccVersion,
-  configuredToolchainIdentity,
-  resolveAsmSource,
-  sourcePathFor,
-} from "./decompToolchain.js";
+import { compileSource, configuredTool, runTool, loadFlagOverrides, assembleTarget, disassembleObject, configuredGccVersion, configuredToolchainIdentity, resolveAsmSource, sourcePathFor } from "./decompToolchain.js";
 import { sha256, stableJson } from "./variant-lab/artifacts.js";
 import { type Container } from "../lib/container.js";
 import { addressEncodedInName, locateFunction } from "../lib/symbolIndex.js";
@@ -147,7 +136,7 @@ export interface FlagProbeReport {
 }
 
 function run(cmd: string): string {
-  return execSync(cmd, { cwd: ROOT, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+  return execSync(cmd, { cwd: projectRoot(), encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
 }
 
 /**
@@ -266,7 +255,7 @@ function maskedDisassembly(insns: ReturnType<typeof disassembleObject>): string[
 
 function targetAsmPath(name: string): string | null {
   const resolved = resolveAsmSource(name);
-  return resolved ? resolved.slice(ROOT.length + 1) : null;
+  return resolved ? resolved.slice(projectRoot().length + 1) : null;
 }
 
 function assembleTargetInstrs(name: string): string[] | null {
@@ -284,19 +273,19 @@ function compileRow(
 ): FlagMatrixRow {
   configuredGccVersion(); // This probe's matrix is a GCC adapter, not a generic flag search.
   const dir = "build/flagProbe";
-  const src = sourcePath ?? sourcePathFor(name).slice(ROOT.length + 1);
+  const src = sourcePath ?? sourcePathFor(name).slice(projectRoot().length + 1);
   const flags = flagsFor(name);
   const row: FlagMatrixRow = {
     label, flags: extraFlags, source: sourceLabel,
     masked: null, instructions: null, targetInstructions: target.length,
   };
   try {
-    compileSource(src, dir, name, { assemble: true, useOverrides: false, extraCc1Flags: extraFlags.split(/\s+/).filter(Boolean) });
+    compileSource(src, dir, name, { assemble: true, extraCc1Flags: extraFlags.split(/\s+/).filter(Boolean) });
   } catch (error: any) {
     row.error = "compile failed";
     return row;
   }
-  const got = maskedDisassembly(disassembleObject(join(ROOT, dir, `${name}.c.o`)));
+  const got = maskedDisassembly(disassembleObject(join(projectRoot(), dir, `${name}.c.o`)));
   let matched = 0;
   const total = Math.max(target.length, got.length);
   for (let i = 0; i < total; i++) if (target[i] === got[i]) matched++;
@@ -431,7 +420,7 @@ export function nearbyOverrides(vram: number, container?: Container): string[] {
 export const CURRENT_SOURCE_LABEL = "current src";
 
 export function reportPath(name: string): string {
-  return join(ROOT, "build/flagProbe", name, "report.json");
+  return join(projectRoot(), "build/flagProbe", name, "report.json");
 }
 
 export function toolchainHash(): string {
@@ -442,7 +431,7 @@ export function toolchainHash(): string {
 export function targetHashOf(name: string): string | null {
   const relative = targetAsmPath(name);
   if (!relative) return null;
-  return sha256(readFileSync(join(ROOT, relative), "utf-8"));
+  return sha256(readFileSync(join(projectRoot(), relative), "utf-8"));
 }
 
 export interface ProbeResult {
@@ -457,7 +446,7 @@ export function probe(name: string, extraSources: string[] = []): ProbeResult {
   const info = getFuncInfo(name);
   if (!info || !info.size) throw new Error(`${name} has no sized subsegment in any container's splat config`);
 
-  const words = targetWordsOf(name).map(w => w.raw);
+  const words = targetWordsOf(name, info.container ? { container: info.container } : {}).map(w => w.raw);
   const fingerprints = fingerprintsOf(words);
   const sourcePath = sourcePathFor(name);
   const sourceHash = existsSync(sourcePath) ? sha256(readFileSync(sourcePath, "utf-8")) : null;
@@ -593,8 +582,9 @@ export function renderProbe(result: ProbeResult): string {
   lines.push(`
 Escalation bar (psx_reference flags, section 11): a fingerprint above
 PLUS a dominant flag column PLUS no contrary regional witness justifies
-proposing a per-file override in toolchain.json.fileFlags (human review required). Verify any
-adopted override with the byte verdict (\`diffFunc <func>\` must say MATCH).`);
+adding a directly preceded evidence comment and CC1FLAGS_<stem> := <extra cc1 flags>
+in configs/flag_overrides.mk, together with its flag-override allowlist entry in
+.pi/autoloop.json sourcePolicy.allowlist. Verify with psx_finalize_function({functionName: "<function>"}).`);
   return lines.join("\n");
 }
 
@@ -625,7 +615,7 @@ function main(): void {
   }
   const path = writeReport(result.report);
   if (json) console.log(stableJson(result.report));
-  else console.log(`${renderProbe(result)}\n\nReport: ${path.slice(ROOT.length + 1)}`);
+  else console.log(`${renderProbe(result)}\n\nReport: ${path.slice(projectRoot().length + 1)}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();

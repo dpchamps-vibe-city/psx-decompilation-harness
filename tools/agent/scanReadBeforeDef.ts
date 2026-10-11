@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * scanReadBeforeDef.ts — label-aware scanner for registers read before any
  * definition (or after call clobber) in target assembly.
@@ -39,7 +40,7 @@ import { resolveAsmSource } from "./decompToolchain.js";
 import { BRANCH_MNEMONICS, buildBlocks, defUse } from "./webAnalysis.js";
 import { chainRow, nestedFunctionCensus, scanChainFunction, type ChainRow } from "../diagnostics/nestedFunctionScan.js";
 
-const ROOT = new URL("../..", import.meta.url).pathname;
+
 
 /**
  * Every container's stubbed-function tree, in build order.
@@ -50,9 +51,9 @@ const ROOT = new URL("../..", import.meta.url).pathname;
  */
 function nonmatchingsTrees(): string[] {
   try {
-    return loadContainers().map((container) => join(ROOT, container.paths.asmDir, "nonmatchings"));
+    return loadContainers().map((container) => join(projectRoot(), container.paths.asmDir, "nonmatchings"));
   } catch {
-    return [join(ROOT, "build/asm/nonmatchings")];
+    return [join(projectRoot(), "build/asm/nonmatchings")];
   }
 }
 

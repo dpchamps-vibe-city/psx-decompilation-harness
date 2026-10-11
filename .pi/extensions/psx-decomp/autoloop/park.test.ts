@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { buildApprovalNote, canonicalStub, composeParkedSource, planPark, stripPreviousPark } from "./park.ts";
 import { isNotesPath, restoreDrift, snapshotFiles } from "./scope-guard.ts";
 import type { ParkRecord } from "./types.ts";

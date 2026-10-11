@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { prepareWorkspaceInputs } from "../lib/workspaceInputs.js";
+import { installedScriptArgs } from "../lib/installedScripts.js";
 /**
  * worktree.ts — Git worktree isolation for the orchestrator
  *
@@ -25,7 +28,7 @@ export class WorktreeManager {
    */
   create(funcName: string): WorktreeInfo {
     const branch = `decomp/${funcName}`;
-    const wtPath = resolve(this.mainRoot, "..", "btn-worktrees", funcName);
+    const wtPath = resolve(this.mainRoot, "..", "psx-worktrees", funcName);
 
     const info: WorktreeInfo = {
       funcName,
@@ -55,77 +58,9 @@ export class WorktreeManager {
   prepare(info: WorktreeInfo): void {
     console.log(`  Worktree: preparing ${info.path}`);
 
-    // Initialize submodules FIRST (before symlinks, since rmSync of submodule
-    // dirs would destroy symlinks placed inside them like old-gcc/build-gcc-2.8.1-psx)
-    console.log(`  Worktree: initializing submodules`);
-    const registeredSubs = execSync("git config --file .gitmodules --get-regexp path", {
-      cwd: info.mainRoot,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim().split("\n").map((line) => line.split(" ")[1]);
-
-    for (const sub of registeredSubs) {
-      // git worktree add creates empty submodule dirs that block clone;
-      // remove them so git submodule update --init can clone fresh
-      const subPath = join(info.path, sub);
-      if (existsSync(subPath)) {
-        rmSync(subPath, { recursive: true, force: true });
-      }
-      execSync(`git submodule update --init "${sub}"`, {
-        cwd: info.path,
-        stdio: ["pipe", "pipe", "pipe"],
-        timeout: 60000,
-      });
-    }
-
-    // Symlink gitignored paths AFTER submodule init (some symlinks go inside
-    // submodule dirs like tools/vendor/old-gcc/build-gcc-*-psx)
-    const symlinks: Array<{ target: string; link: string }> = [
-      { target: join(info.mainRoot, "extracted"), link: join(info.path, "extracted") },
-      { target: join(info.mainRoot, "node_modules"), link: join(info.path, "node_modules") },
-    ];
-
-    // Symlink all available compiler builds (build-gcc-*-psx)
-    const oldGccDir = join(info.mainRoot, "tools/vendor/old-gcc");
-    if (existsSync(oldGccDir)) {
-      for (const entry of readdirSync(oldGccDir)) {
-        if (entry.startsWith("build-gcc-") && entry.endsWith("-psx")) {
-          symlinks.push({
-            target: join(oldGccDir, entry),
-            link: join(info.path, "tools/vendor/old-gcc", entry),
-          });
-        }
-      }
-    }
-
-    // .env is optional
-    const envFile = join(info.mainRoot, ".env");
-    if (existsSync(envFile)) {
-      symlinks.push({ target: envFile, link: join(info.path, ".env") });
-    }
-
-    for (const { target, link } of symlinks) {
-      if (!existsSync(target)) {
-        console.log(`  Worktree: warning — ${target} does not exist, skipping symlink`);
-        continue;
-      }
-      // Remove existing file/symlink at destination if present
-      try {
-        const stat = lstatSync(link, { throwIfNoEntry: false });
-        if (stat?.isSymbolicLink() && readlinkSync(link) === target) continue;
-        if (stat) rmSync(link, { recursive: true, force: true });
-      } catch {
-        // doesn't exist — fine
-      }
-      symlinkSync(target, link);
-    }
-
-    // Run make split to generate build/ artifacts in the worktree
-    console.log(`  Worktree: running npm run split`);
-    execSync("npm run split",  {
-      cwd: info.path,
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: 120000,
+    prepareWorkspaceInputs(info.mainRoot, info.path);
+    execFileSync(process.execPath, installedScriptArgs("tools/build/pipeline.ts", ["split-all"], info.path), {
+      cwd: info.path, stdio: ["ignore", "pipe", "pipe"], timeout: 120000,
     });
   }
 

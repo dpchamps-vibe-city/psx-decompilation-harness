@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * engineApi.ts — the PS-X EXE surface that overlay code calls.
  *
@@ -18,7 +19,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import { scanOverlayReferences } from "../lib/overlayReferences.js";
 import { loadFunctionSpans, loadSymbolIndex } from "../lib/symbolIndex.js";
 
@@ -44,20 +45,20 @@ type Status = "matched" | "stub" | "handwritten" | "sdk";
 
 const spans = new Map(loadFunctionSpans().map((s) => [s.vram, s]));
 const symbols = loadSymbolIndex();
-const asmDir = join(ROOT, "build/asm/nonmatchings");
+const asmDir = () => (join(projectRoot(), "build/asm/nonmatchings"));
 
 function statusOf(address: number): { name: string; status: Status } {
   const span = spans.get(address);
   const name = span?.name ?? symbols.byAddress.get(address) ?? `func_${address.toString(16).toUpperCase()}`;
   if (!span) return { name, status: "sdk" };
 
-  const sFile = join(asmDir, span.name, `${span.name}.s`);
+  const sFile = join(asmDir(), span.name, `${span.name}.s`);
   if (existsSync(sFile) && readFileSync(sFile, "utf-8").includes("Handwritten function")) {
     return { name, status: "handwritten" };
   }
   if (span.kind !== "c") return { name, status: "stub" };
 
-  const cFile = join(ROOT, "src", `${span.name}.c`);
+  const cFile = join(projectRoot(), "src", `${span.name}.c`);
   if (!existsSync(cFile)) return { name, status: "stub" };
   return { name, status: readFileSync(cFile, "utf-8").includes("INCLUDE_ASM(") ? "stub" : "matched" };
 }
@@ -144,8 +145,8 @@ console.log();
 console.log(`${rows.length} entry points listed`);
 
 if (json) {
-  const out = join(ROOT, "build/engineApi.json");
-  mkdirSync(join(ROOT, "build"), { recursive: true });
+  const out = join(projectRoot(), "build/engineApi.json");
+  mkdirSync(join(projectRoot(), "build"), { recursive: true });
   writeFileSync(
     out,
     `${JSON.stringify(

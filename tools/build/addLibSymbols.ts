@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * addLibSymbols.ts — Add PSY-Q library function labels to symbol_addrs.txt
  *
@@ -15,15 +18,15 @@ import { execFileSync, execSync } from "child_process";
 import { configuredTool, configuredSdk } from "../lib/toolchain.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { loadPsxExeInfo, ROOT, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
 import { verifiedMatches, type DetectionReport } from "../lib/sdkDetection.js";
 import { staleSdkSymbols } from "../lib/sdkProvenance.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 const SYMBOLS_PATH = exeSymbolAddrsPath();
 const SPLAT_YAML = exeSplatYamlPath();
-const SRC_DIR = join(ROOT, "src");
+const SRC_DIR = () => (join(projectRoot(), "src"));
 
 interface LibMatch {
   vramStart: number;
@@ -41,9 +44,9 @@ function main() {
 
   // Run detectLibFunctions.ts and parse its JSON output
   console.log("Running detectLibFunctions.ts...");
-  const output = execSync("npx tsx tools/build/detectLibFunctions.ts", {
+  const output = installedExec(process.execPath, currentScriptArgs("tools/build/detectLibFunctions.ts", []), {
     encoding: "utf-8",
-    cwd: ROOT,
+    cwd: projectRoot(),
     maxBuffer: 10 * 1024 * 1024,
   });
 
@@ -64,9 +67,9 @@ function main() {
   // Also run findMissingLibDeps.ts to get cross-referenced symbols
   console.log("Running findMissingLibDeps.ts...");
   try {
-    const depsOutput = execSync("npx tsx tools/build/findMissingLibDeps.ts", {
+    const depsOutput = installedExec(process.execPath, currentScriptArgs("tools/build/findMissingLibDeps.ts", []), {
       encoding: "utf-8",
-      cwd: ROOT,
+      cwd: projectRoot(),
       maxBuffer: 10 * 1024 * 1024,
     });
 
@@ -102,9 +105,9 @@ function main() {
       dataSize?: number;
     }
 
-    const sectionsOutput = execSync("npx tsx tools/build/resolveLibSections.ts", {
+    const sectionsOutput = installedExec(process.execPath, currentScriptArgs("tools/build/resolveLibSections.ts", []), {
       encoding: "utf-8",
-      cwd: ROOT,
+      cwd: projectRoot(),
       maxBuffer: 10 * 1024 * 1024,
     });
     const libSections: LibSections[] = JSON.parse(sectionsOutput);
@@ -117,13 +120,13 @@ function main() {
         { secName: ".rdata", secRom: ls.rdataRom },
       ]) {
         if (secRom === undefined || secRom <= 0) continue;
-        const secVram = secRom - _info.payloadOffset + _info.loadAddr;
+        const secVram = secRom - _info().payloadOffset + _info().loadAddr;
 
         // Get global data/rdata symbols from nm
         try {
           const nmOutput = execFileSync(configuredTool("nm"), [ls.oPath], {
             encoding: "utf-8",
-            cwd: ROOT,
+            cwd: projectRoot(),
           });
           for (const line of nmOutput.split("\n")) {
             const m = line.match(/^([0-9a-f]+)\s+([DR])\s+(\S+)/);
@@ -151,7 +154,7 @@ function main() {
   let existingContent = readFileSync(SYMBOLS_PATH, "utf-8");
   // Retire SDK labels manufactured inside another independently verified member.
   // A generated exe.txt name is not evidence against that object's full bytes.
-  const stale = staleSdkSymbols(existingContent, matches, ROOT, configuredSdk().version, new Set(report.rejectedPlacements.map(r => r.oPath)));
+  const stale = staleSdkSymbols(existingContent, matches, projectRoot(), configuredSdk().version, new Set(report.rejectedPlacements.map(r => r.oPath)));
   if (stale.length) {
     for (const name of stale) console.log(`  Retiring stale SDK interior symbol: ${name}`);
     if (writeMode) {
@@ -234,8 +237,8 @@ function main() {
           writeFileSync(SPLAT_YAML, yamlContent);
           console.log(`  Reverted c segment: ${name} → ${genericName} in YAML`);
         }
-        const oldSrc = join(SRC_DIR, `${name}.c`);
-        const newSrc = join(SRC_DIR, `${genericName}.c`);
+        const oldSrc = join(SRC_DIR(), `${name}.c`);
+        const newSrc = join(SRC_DIR(), `${genericName}.c`);
         if (existsSync(oldSrc) && !existsSync(newSrc)) {
           let content = readFileSync(oldSrc, "utf-8");
           content = content.replace(new RegExp(name, "g"), genericName);
@@ -301,15 +304,15 @@ function main() {
     const cSegRe = /^(\s+- \[)(0x[0-9A-Fa-f]+)(,\s*c,\s*)(\S+?)(\].*)$/gm;
     yamlContent = yamlContent.replace(cSegRe, (match, pre, romHex, mid, name, post) => {
       const segRom = parseInt(romHex, 16);
-      const segVram = segRom - _info.payloadOffset + _info.loadAddr;
+      const segVram = segRom - _info().payloadOffset + _info().loadAddr;
       const symVram = symNameToVram.get(name);
       // If name is a known symbol but at a different VRAM, revert to generic
       if (symVram !== undefined && symVram !== segVram && !name.startsWith("func_")) {
         const genericName = `func_${segVram.toString(16).toUpperCase()}`;
         console.log(`  Fix c segment: ${name} at ROM ${romHex} → ${genericName} (symbol is at 0x${symVram.toString(16).toUpperCase()})`);
         // Also rename source file
-        const oldSrc = join(SRC_DIR, `${name}.c`);
-        const newSrc = join(SRC_DIR, `${genericName}.c`);
+        const oldSrc = join(SRC_DIR(), `${name}.c`);
+        const newSrc = join(SRC_DIR(), `${genericName}.c`);
         if (existsSync(oldSrc) && !existsSync(newSrc)) {
           let content = readFileSync(oldSrc, "utf-8");
           content = content.replace(new RegExp(name, "g"), genericName);
@@ -357,8 +360,8 @@ function main() {
       );
 
       // Rename src/func_XXXXXXXX.c → src/<realname>.c and update INCLUDE_ASM inside
-      const oldSrc = join(SRC_DIR, `${oldName}.c`);
-      const newSrc = join(SRC_DIR, `${l.name}.c`);
+      const oldSrc = join(SRC_DIR(), `${oldName}.c`);
+      const newSrc = join(SRC_DIR(), `${l.name}.c`);
       if (existsSync(oldSrc) && !existsSync(newSrc)) {
         let content = readFileSync(oldSrc, "utf-8");
         content = content.replace(

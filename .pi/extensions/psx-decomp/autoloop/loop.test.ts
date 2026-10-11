@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { installedCommandFixture } from "../../../../tools/testing/commandFixture.js";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { DEFAULT_LOOP_CONFIG } from "./config.ts";
 import { DOCUMENTATION_TOOLS, runFunction, runLoop, type LoopDeps } from "./loop.ts";
 import { createTurnGate } from "./turn-gate.ts";
 import { buildInputs, inputIdentity, type Completion } from "../tools/prepared-attempt.ts";
-import { configuredToolchainIdentity, ROOT } from "../../../../tools/agent/decompToolchain.ts";
+import { ROOT } from "../../../../tools/testing/runtimeTestContext.js";
+import { configuredToolchainIdentity } from "../../../../tools/agent/decompToolchain.ts";
 import { runCommand } from "../../shared/process.ts";
 import { seedProjectFixture } from "../../../../tools/testing/projectFixture.js";
 
@@ -39,8 +41,7 @@ test("a prep-led run does not start with old documentation or static finalizatio
   const root = mkdtempSync(join(tmpdir(), "autoloop-startup-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   seedProjectFixture(root);
-  for (const dir of [".pi", "src", "tools/agent", "build", "run_output"]) mkdirSync(join(root, dir), { recursive: true });
-  symlinkSync(join(ROOT, "node_modules"), join(root, "node_modules"));
+  for (const dir of [".pi", "src", "build", "run_output"]) mkdirSync(join(root, dir), { recursive: true });
   const pending = "func_80012345", fresh = "func_80012380";
   const source = `void ${fresh}(void) {}\n`;
   writeFileSync(join(root, "src", `${fresh}.c`), source);
@@ -50,7 +51,7 @@ test("a prep-led run does not start with old documentation or static finalizatio
     { name: pending, vram: "0x80012345", decompiled: true, handwritten: false, dead: false },
     { name: fresh, vram: "0x80012380", decompiled: false, handwritten: false, dead: false },
   ] }));
-  writeFileSync(join(root, "tools/agent/callGraph.ts"), "/* Fixture graph is already written. */\n");
+
   const packet = {
     schemaVersion: 1, identity: { functionName: fresh, container: "exe", destination: `src/${fresh}.c`,
       assembly: "build/original.s", data: [], inputs: {}, flags: [], tools: configuredToolchainIdentity() },
@@ -60,7 +61,7 @@ test("a prep-led run does not start with old documentation or static finalizatio
     comparison: { status: "exact" }, integration: { state: "live", blockers: [], destinationHash: "" },
     discovery: { unknowns: [], priorExperiments: [], preflight: [] }, finalization: { status: "not-attempted" },
   };
-  writeFileSync(join(root, "tools/agent/m2cFunc.ts"), `
+  installedCommandFixture(t, root, { "tools/agent/callGraph.ts": "/* Fixture graph is already written. */\n", "tools/agent/m2cFunc.ts": `
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 const packet = ${JSON.stringify(packet)};
@@ -71,7 +72,7 @@ packet.primary.text = readFileSync(packet.primary.path, 'utf8');
 packet.primary.sha256 = createHash('sha256').update(packet.primary.text).digest('hex');
 writeFileSync('build/packet.json', JSON.stringify(packet));
 console.log(JSON.stringify({ path: 'build/packet.json' }));
-`);
+` });
   const inputs = buildInputs(root);
   const state = { parked: {}, approvals: {}, completions: { [pending]: {
     origin: "static", inputs, verifiedIdentity: inputIdentity(inputs), verification: "passed",

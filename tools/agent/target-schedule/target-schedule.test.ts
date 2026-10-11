@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { deriveAllocationRequirements } from "./allocation-requirements.js";
 import { analyzeDelaySlots } from "./delay-slot.js";
 import { alignFinalRtlToMachine, isBlockMode, rtlCanonical } from "./emission-alignment.js";

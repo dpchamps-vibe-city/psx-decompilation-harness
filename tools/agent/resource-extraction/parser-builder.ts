@@ -1,14 +1,21 @@
 import ts from "typescript";
+import { installedDependency } from "../../lib/installedScripts.js";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { canonical, hash, safePath, Store } from "./storage.ts";
 import type { Request } from "./types.ts";
 
-export const PARSER_CONFIG = "tools/agent/resource-extraction/parser-plugins.ts";
-export const PARSER_ROOT = "tools/agent/resource-extraction/parsers/";
+export const PARSER_CONFIG = "tools/resource-parsers/parser-plugins.ts";
+export const PARSER_ROOT = "tools/resource-parsers/";
+export const PARSER_API = "psx-decompilation-harness/resource-parsers";
+export function prepareParserProject(root: string): void {
+  mkdirSync(safePath(root, PARSER_ROOT), { recursive: true });
+  const path = safePath(root, PARSER_CONFIG);
+  if (!existsSync(path)) writeFileSync(path, "export const EXTRA_PARSERS = [];\n", { flag: "wx" });
+}
 export function parserPath(path: string): boolean { return path === PARSER_CONFIG || new RegExp(`^${PARSER_ROOT}[a-z][a-z0-9-]*(?:\\.test)?\\.ts$`).test(path); }
 interface Baseline { files: Record<string, string> }
 function scopedFiles(root: string): string[] {
@@ -25,11 +32,11 @@ function registrations(text: string): Record<string, string> {
     if (ts.isImportDeclaration(statement)) {
       if (!ts.isStringLiteral(statement.moduleSpecifier) || !statement.importClause) throw new Error("Registration requires explicit imports");
       const clause = statement.importClause, module = statement.moduleSpecifier.text;
-      if (clause.isTypeOnly && module === "./registry.ts") continue;
-      if (!/^\.\/parsers\/[a-z][a-z0-9-]*\.ts$/.test(module) || clause.name || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) throw new Error("Registration imports only named parser plugins");
+      if (clause.isTypeOnly && module === PARSER_API) continue;
+      if (!/^\.\/[a-z][a-z0-9-]*\.ts$/.test(module) || clause.name || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) throw new Error("Registration imports only named parser plugins");
       for (const entry of clause.namedBindings.elements) {
         if (imports.has(entry.name.text)) throw new Error("Duplicate parser import");
-        imports.set(entry.name.text, PARSER_ROOT + module.slice("./parsers/".length));
+        imports.set(entry.name.text, PARSER_ROOT + module.slice(2));
       }
       continue;
     }
@@ -64,10 +71,10 @@ export function parserSourcePolicy(path: string, text: string): void {
     if (ts.isImportDeclaration(node)) {
       if (!ts.isStringLiteral(node.moduleSpecifier)) throw new Error("Nonliteral import");
       const spec = node.moduleSpecifier.text;
-      const pureLocal = /^\.\/[a-z][a-z0-9-]*\.ts$/.test(spec) || spec === "../formats.ts";
-      const types = node.importClause?.isTypeOnly && ["./registry.ts", "../registry.ts"].includes(spec);
-      const tests = test && ["node:test", "node:assert/strict", "node:assert", "../registry.ts"].includes(spec);
-      if (!pureLocal && !types && !tests && spec !== "node:buffer" && !(path === PARSER_CONFIG && /^\.\/parsers\/[a-z][a-z0-9-]*\.ts$/.test(spec))) throw new Error(`Parser import outside pure capability scope: ${spec}`);
+      const pureLocal = /^\.\/[a-z][a-z0-9-]*\.ts$/.test(spec);
+      const types = node.importClause?.isTypeOnly && spec === PARSER_API;
+      const tests = test && ["node:test", "node:assert/strict", "node:assert"].includes(spec);
+      if (!pureLocal && !types && !tests && spec !== "node:buffer") throw new Error(`Parser import outside pure capability scope: ${spec}`);
     }
     if (ts.isExportDeclaration(node) && node.moduleSpecifier) throw new Error("Re-export imports refused");
     ts.forEachChild(node, walk);
@@ -95,6 +102,7 @@ async function command(root: string, args: string[], signal?: AbortSignal): Prom
 export async function parserOperation(root: string, request: Request, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const store = new Store(root);
   if (request.action === "prepare") {
+    prepareParserProject(root);
     const files = Object.fromEntries(scopedFiles(root).map(p => [p, readFileSync(safePath(root, p), "utf8")]));
     const baseline: Baseline = { files };
     const token = randomBytes(12).toString("hex");
@@ -121,10 +129,13 @@ export async function parserOperation(root: string, request: Request, signal?: A
   if (!implementations.length || implementations.some(p => !changed.includes(p.replace(/\.ts$/, ".test.ts")))) throw new Error("Each new parser needs a changed corresponding test file");
   if (current.filter(p => !previous.includes(p)).some(p => !implementations.includes(currentEntries[p]!))) throw new Error("New registrations must reference a changed parser implementation");
   const here = dirname(fileURLToPath(import.meta.url)), repository = resolve(here, "../../..");
-  const tsx = resolve(repository, "node_modules/tsx/dist/cli.mjs"), tsc = resolve(repository, "node_modules/typescript/bin/tsc");
+  const tsx = installedDependency("tsx/cli", repository), tsc = installedDependency("typescript/bin/tsc", repository);
+  const typeRoots = dirname(dirname(installedDependency("@types/node/package.json", repository)));
   const sourceHash = hash(canonical(scopedFiles(root).map(p => [p, fingerprint(root, p)])));
-  const typecheck = await command(root, [tsc, "--noEmit", "--allowImportingTsExtensions", "--module", "nodenext", "--target", "esnext", "--typeRoots", resolve(repository, "node_modules/@types"), "--types", "node", "--strict", "--skipLibCheck", ...changed], signal);
-  const coreTests = safePath(root, "tools/agent/resource-extraction/resource-extraction.test.ts");
+  const config = safePath(root, `build/assets/cache/parser-builder/${request.baseline}.tsconfig.json`);
+  writeFileSync(config, JSON.stringify({ compilerOptions: { noEmit: true, allowImportingTsExtensions: true, module: "nodenext", target: "esnext", typeRoots: [typeRoots], types: ["node"], strict: true, skipLibCheck: true, paths: { [PARSER_API]: [resolve(here, "registry.ts")] } }, files: changed.map(path => safePath(root, path)) }));
+  const typecheck = await command(root, [tsc, "--project", config], signal);
+  const coreTests = resolve(here, "resource-extraction.test.ts");
   const results: Array<{ file: string; code: number; stdout: string; stderr: string; executed: number; passed: boolean }> = [];
   if (typecheck.code === 0) for (const file of [...scopedFiles(root).filter(p => p.endsWith(".test.ts")), existsSync(coreTests) ? coreTests : resolve(here, "resource-extraction.test.ts")]) {
     // Check every parser suite separately: a new capability must not regress
@@ -140,5 +151,5 @@ export async function parserOperation(root: string, request: Request, signal?: A
   if (hash(canonical(scopedFiles(root).map(p => [p, fingerprint(root, p)]))) !== sourceHash) throw new Error("Parser source drift during testing; refusing untested capability");
   store.json(`cache/parser-builder/tests/${request.baseline}.json`, report);
   if (report.outcome !== "tested" || request.action !== "accept") return report;
-  return { ...report, outcome: "parser-tested", note: "Capability tested; source/drafts remain in place. No commit performed. Run extract-assets to exercise registered formats." };
+  return { ...report, outcome: "parser-tested", note: "Capability tested; source/drafts remain in place. No commit performed. Use psx_resource_extract to exercise registered formats." };
 }

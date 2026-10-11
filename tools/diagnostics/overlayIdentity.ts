@@ -36,9 +36,9 @@ import { requireManifest, saveManifest } from "../lib/overlayManifest.js";
 
 const write = process.argv.includes("--write");
 
-const exe = loadPsxExeInfo();
-const image = readFileSync(exe.binaryPath);
-const payload = image.subarray(exe.payloadOffset, exe.payloadOffset + exe.payloadSize);
+const exe = () => (loadPsxExeInfo());
+const image = () => (readFileSync(exe().binaryPath));
+const payload = () => (image().subarray(exe().payloadOffset, exe().payloadOffset + exe().payloadSize));
 const manifest = requireManifest();
 const memberCount = manifest.members.length;
 
@@ -47,13 +47,13 @@ const hex = (value: number) => `0x${value.toString(16).toUpperCase().padStart(8,
 /** A NUL-terminated run of printable bytes at this offset, or null. */
 function stringAt(offset: number, maxLength: number): string | null {
   let end = offset;
-  while (end < offset + maxLength && end < payload.length && payload[end] !== 0) {
-    const byte = payload[end]!;
+  while (end < offset + maxLength && end < payload().length && payload()[end] !== 0) {
+    const byte = payload()[end]!;
     if (byte < 0x20 || byte > 0x7e) return null;
     end++;
   }
   if (end === offset || end >= offset + maxLength) return null;
-  return payload.subarray(offset, end).toString("latin1");
+  return payload().subarray(offset, end).toString("latin1");
 }
 
 interface AssetTable {
@@ -80,7 +80,7 @@ function findAssetTable(): AssetTable | null {
   let best: AssetTable | null = null;
 
   for (const stride of strides) {
-    for (let start = 0; start + stride * memberCount <= payload.length; start += 4) {
+    for (let start = 0; start + stride * memberCount <= payload().length; start += 4) {
       const first = stringAt(start, stride);
       if (!first || !PATH_LIKE(first)) continue;
 
@@ -92,7 +92,7 @@ function findAssetTable(): AssetTable | null {
       }
       if (names.length < memberCount) continue;
       if (!best || names.length > best.names.length) {
-        best = { vram: exe.loadAddr + start, stride, nameOffset: 0, names };
+        best = { vram: exe().loadAddr + start, stride, nameOffset: 0, names };
       }
       /* A longer run cannot start inside the one just accepted. */
       start += stride * (names.length - 1);
@@ -240,27 +240,27 @@ const spans = loadFunctionSpans().sort((a, b) => a.vram - b.vram);
 const owner = (vram: number) => spans.find((s) => vram >= s.vram && vram < s.vram + s.size)?.name ?? null;
 
 function stringVram(needle: string): number | null {
-  const at = image.indexOf(Buffer.from(needle, "latin1"));
-  return at < 0 ? null : at - exe.payloadOffset + exe.loadAddr;
+  const at = image().indexOf(Buffer.from(needle, "latin1"));
+  return at < 0 ? null : at - exe().payloadOffset + exe().loadAddr;
 }
 
 const archiveStrings = [manifest.archive.indexPath, manifest.archive.dataPath]
   .map((path) => `\\${path.split("/").pop()!.toUpperCase()};1`)
   .map((needle) => ({ needle, vram: stringVram(needle) }));
 
-const pairs = findLuiPairs(payload, 12);
+const pairs = () => (findLuiPairs(payload(), 12));
 const referencesOf = (address: number) =>
   new Set(
-    pairs
+    pairs()
       .filter((pair) => pair.address === address)
-      .map((pair) => owner(exe.loadAddr + pair.offset))
+      .map((pair) => owner(exe().loadAddr + pair.offset))
       .filter((name): name is string => name !== null)
   );
 
 const tableReaders = new Set<string>();
-for (const pair of pairs) {
+for (const pair of pairs()) {
   if (pair.address >= table.vram - 8 && pair.address < table.vram + table.stride * table.names.length) {
-    const name = owner(exe.loadAddr + pair.offset);
+    const name = owner(exe().loadAddr + pair.offset);
     if (name) tableReaders.add(name);
   }
 }

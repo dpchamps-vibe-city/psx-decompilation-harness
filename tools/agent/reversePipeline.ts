@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 
 /**
  * reversePipeline.ts — run the deterministic backward chain over one function.
@@ -10,7 +11,7 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { normalizeFunctionName } from "./decompToolchain.js";
 import { renderBacktest, runBacktest, type PerturbationKind } from "./pipeline-reversal/backtest.js";
 import { renderBlock, renderReversal } from "./pipeline-reversal/render-text.js";
 import { reversePipeline } from "./pipeline-reversal/reverse.js";
@@ -86,7 +87,7 @@ if (isCLI) {
       process.exit(0);
     }
     const text = renderReversal(artifacts.report);
-    const directory = join(ROOT, "build/pipelineReversal", options.functionName);
+    const directory = join(projectRoot(), "build/pipelineReversal", options.functionName);
     writeFileSync(join(directory, "report.txt"), `${text}\n`);
     console.log(options.json ? JSON.stringify(artifacts.report, null, 2) : text);
   } catch (error) {

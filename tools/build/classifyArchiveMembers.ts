@@ -33,21 +33,21 @@ const manifest: OverlayManifest = requireManifest();
  * so a different game supplies a different reference and the thresholds move
  * with it rather than being carried over.
  */
-const exe = loadPsxExeInfo();
+const exe = () => (loadPsxExeInfo());
 const layout = requireSectionLayout();
-const reference = measureCodeReference(
-  readFileSync(exe.binaryPath),
+const reference = () => (measureCodeReference(
+  readFileSync(exe().binaryPath),
   layout.textStart,
   layout.dataStart,
   "PS-X EXE .text"
-);
+));
 
 const profile = detectToolchain();
 
 console.log(`Toolchain profile: ${profile.id} (${profile.verdict})`);
 console.log(
-  `Reference (${reference.source}): ${(reference.decodeRatio * 100).toFixed(1)}% decode, ` +
-    `${reference.returnsPerKb.toFixed(2)} returns/KB`
+  `Reference (${reference().source}): ${(reference().decodeRatio * 100).toFixed(1)}% decode, ` +
+    `${reference().returnsPerKb.toFixed(2)} returns/KB`
 );
 console.log();
 
@@ -55,7 +55,7 @@ let changed = 0;
 for (const member of manifest.members) {
   const bytes = readMemberBytes(manifest, member);
   const before = JSON.stringify(member.classification ?? null);
-  member.classification = classifyMemberBytes(bytes, member.tag, { reference, profile });
+  member.classification = classifyMemberBytes(bytes, member.tag, { reference: reference(), profile });
   if (JSON.stringify(member.classification) !== before) changed++;
 }
 

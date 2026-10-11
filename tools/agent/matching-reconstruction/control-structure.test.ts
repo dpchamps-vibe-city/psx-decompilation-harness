@@ -3,7 +3,7 @@
  */
 
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { DagArena, canon, binary, constExpr } from "./exec.js";
 import { structureDag, computeDagStats, collectAllAtomsAndExprs, isSequentialGuard, sequentialGuardDepth, type DagArenaLike } from "./control-structure.js";
 import type { DagRef, Predicate, SymExpr, StoreEffect } from "./types.js";

@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * classifyGlobals.ts — Generate include/globals.h with correct extern declarations
  *
@@ -21,7 +22,7 @@ import { join } from "path";
 import { exeSplatYamlPath, loadPsxExeInfo, requireSectionLayout, type PsxExeInfo, type SectionLayout } from "../lib/psxExeInfo.js";
 import { field, namedChildren, parseC } from "../agent/residual-source-search/tree-sitter-c.js";
 
-const ROOT = new URL("../..", import.meta.url).pathname;
+
 const writeMode = process.argv.includes("--write");
 
 // --- Read gp_value from splat.yaml ---
@@ -46,7 +47,7 @@ export interface SymbolInfo {
 }
 
 function readSymbols(gpValue: number): SymbolInfo[] {
-  const symsPath = join(ROOT, "build/undefined_syms_auto.txt");
+  const symsPath = join(projectRoot(), "build/undefined_syms_auto.txt");
   if (!existsSync(symsPath)) {
     console.error("build/undefined_syms_auto.txt not found. Run 'npm run split' first.");
     process.exit(1);
@@ -191,7 +192,7 @@ export function inferTypesFromBinary(
  */
 function inferTypesFromAsm(symbols: SymbolInfo[]): void {
   /* Scan nonmatchings asm for GP-relative symbols */
-  const nonmatchingsDir = join(ROOT, "build/asm/nonmatchings");
+  const nonmatchingsDir = join(projectRoot(), "build/asm/nonmatchings");
   if (!existsSync(nonmatchingsDir)) return;
 
   const allAsm: string[] = [];
@@ -269,7 +270,7 @@ export function fileScopeDeclarations(source: string): Map<string, string> {
 
 function inferTypesFromSource(symbols: SymbolInfo[]): void {
   /* Scan decompiled C source for file-scope declarations (GP-relative only) */
-  const srcDir = join(ROOT, "src");
+  const srcDir = join(projectRoot(), "src");
   if (!existsSync(srcDir)) return;
 
   const symByName = new Map<string, SymbolInfo>();
@@ -317,16 +318,16 @@ function inferTypes(symbols: SymbolInfo[]): void {
 // --- Read override symbols ---
 
 function readOverrideSymbols(): Set<string> {
-  const overridePath = join(ROOT, "include/globals_override.h");
+  const overridePath = join(projectRoot(), "include/globals_override.h");
   const overridden = new Set<string>();
   if (!existsSync(overridePath)) return overridden;
 
   const effective = execFileSync(configuredTool("cpp"), [...configuredCppFlags(), "-P", "-dD", "-"], {
-    cwd: ROOT, encoding: "utf8", input: [...PREAMBLE_TYPES.values(), '#include "globals_override.h"'].join("\n"),
+    cwd: projectRoot(), encoding: "utf8", input: [...PREAMBLE_TYPES.values(), '#include "globals_override.h"'].join("\n"),
   });
   const supplied = overrideSymbolsFrom(effective);
   const sourceTypes = new Map<string, Set<string>>();
-  for (const path of sourceFiles(join(ROOT, "src"))) {
+  for (const path of sourceFiles(join(projectRoot(), "src"))) {
     for (const [name, type] of fileScopeDeclarations(readFileSync(path, "utf8"))) {
       if (!/^D_[0-9a-fA-F]{8}$/.test(name)) continue;
       const types = sourceTypes.get(name) ?? new Set<string>();
@@ -407,7 +408,7 @@ function generateHeader(symbols: SymbolInfo[], overridden: Set<string>): string 
 
 /** Compiler and decompiler views are projections of the same effective header.
  * Target preprocessing selects real overrides and macro-backed aliases first. */
-export function generateM2cContextFromHeader(header: string, names: string[], root = ROOT): string {
+export function generateM2cContextFromHeader(header: string, names: string[], root = projectRoot()): string {
   const preprocessed = execFileSync(configuredTool("cpp"), [...configuredCppFlags(), "-P", "-dD", "-"], {
     cwd: root, encoding: "utf8", input: [...PREAMBLE_TYPES.values(), header].join("\n"),
   });
@@ -445,11 +446,11 @@ const header = generateHeader(symbols, overridden);
 const m2cContext = generateM2cContextFromHeader(header, symbols.map((s) => s.name));
 
 if (writeMode) {
-  const headerPath = join(ROOT, "include/globals.h");
+  const headerPath = join(projectRoot(), "include/globals.h");
   writeFileSync(headerPath, header);
   console.log(`Wrote ${headerPath}`);
 
-  const m2cPath = join(ROOT, "build/m2c_globals.ctx");
+  const m2cPath = join(projectRoot(), "build/m2c_globals.ctx");
   writeFileSync(m2cPath, m2cContext);
   console.log(`Wrote ${m2cPath}`);
 } else {

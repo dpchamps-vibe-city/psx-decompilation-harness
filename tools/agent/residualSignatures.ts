@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * residualSignatures.ts — the same problem, written twice, in two functions.
  *
@@ -36,7 +37,7 @@
 
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { normalizeFunctionName } from "./decompToolchain.js";
 import {
   best,
   readLedger,
@@ -44,8 +45,8 @@ import {
   type LedgerEntry,
 } from "./experimentLedger.js";
 
-const LEDGER_DIR = join(ROOT, "build/experimentLedger");
-export const INDEX_PATH = join(ROOT, "build/residualSignatures.json");
+const LEDGER_DIR = () => (join(projectRoot(), "build/experimentLedger"));
+export const INDEX_PATH = () => (join(projectRoot(), "build/residualSignatures.json"));
 
 export interface SignatureCarrier {
   function: string;
@@ -149,8 +150,8 @@ export function buildIndex(): SignatureIndex {
   let ledgers = 0;
   let ledgersWithSignatures = 0;
 
-  if (existsSync(LEDGER_DIR)) {
-    for (const file of readdirSync(LEDGER_DIR).filter((name) => name.endsWith(".jsonl")).sort()) {
+  if (existsSync(LEDGER_DIR())) {
+    for (const file of readdirSync(LEDGER_DIR()).filter((name) => name.endsWith(".jsonl")).sort()) {
       const functionName = basename(file, ".jsonl");
       const entries = readLedger(functionName);
       if (entries.length === 0) continue;
@@ -284,9 +285,9 @@ if (isCLI) {
   };
   const index = buildIndex();
   if (args.includes("--write")) {
-    mkdirSync(dirname(INDEX_PATH), { recursive: true });
-    writeFileSync(INDEX_PATH, `${JSON.stringify(index, null, 2)}\n`);
-    console.log(`wrote ${INDEX_PATH.slice(ROOT.length + 1)}`);
+    mkdirSync(dirname(INDEX_PATH()), { recursive: true });
+    writeFileSync(INDEX_PATH(), `${JSON.stringify(index, null, 2)}\n`);
+    console.log(`wrote ${INDEX_PATH().slice(projectRoot().length + 1)}`);
   }
   const functionArgument = flag("function");
   const filter = {

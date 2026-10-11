@@ -1,13 +1,9 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 
 import { join } from "node:path";
 import { buildTraceReport } from "./compilerTrace.js";
-import {
-  ROOT,
-  assembleTarget,
-  disassembleObject,
-  normalizeFunctionName,
-} from "./decompToolchain.js";
+import { assembleTarget, disassembleObject, normalizeFunctionName } from "./decompToolchain.js";
 import { normalizeDisassembly } from "./variant-lab/compile.js";
 import { analyzeTargetScheduleFromArtifacts } from "./target-schedule/analyze.js";
 import { writeTargetScheduleArtifacts } from "./target-schedule/artifacts.js";
@@ -55,7 +51,7 @@ function parseCli(args: string[]): AnalyzeTargetScheduleOptions {
 }
 
 export function analyzeTargetSchedule(options: AnalyzeTargetScheduleOptions): TargetScheduleAnalysis {
-  const outputDirectory = join(ROOT, "build/targetSchedule", options.functionName);
+  const outputDirectory = join(projectRoot(), "build/targetSchedule", options.functionName);
   /* Keep target-schedule traces isolated from interactive compilerTrace runs. */
   const trace = buildTraceReport(
     options.functionName,

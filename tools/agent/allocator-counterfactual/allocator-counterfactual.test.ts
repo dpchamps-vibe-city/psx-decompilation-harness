@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { parseRtlInstructions } from "../compiler-trace/rtl-parser.js";
 import type { CompilerTraceReport, PseudoProvenance } from "../compiler-trace/types.js";
 import type { TargetScheduleAnalysis } from "../target-schedule/types.js";

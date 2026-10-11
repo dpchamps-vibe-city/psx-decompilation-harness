@@ -7,8 +7,12 @@ agent workflow is needed. No EXE or artificial RAM layout is required.
 
 ## Configure and bootstrap
 
-Copy `examples/library/project.json` to the repository root and change `$schema`
-to `./tools/lib/project.schema.json`. Select the authoritative inputs and headers:
+After `pi install --local`, run `/skill:psx-bootstrap-project library` to create
+the project source scaffold, empty input directories and `project.json`.
+See [bootstrap](bootstrap.md) for the required inputs and safe re-run behavior.
+Alternatively, copy `examples/library/project.json` to a cloned harness root and
+change `$schema` to `./tools/lib/project.schema.json`. Select the authoritative
+inputs and headers:
 
 - `target.archives`: root-relative globs for ar archives of ELF objects.
 - `target.standaloneObjects`: root-relative globs for individual ELF objects.
@@ -45,8 +49,9 @@ inherit base; supplied arrays replace rather than append. A project's
 from inventory to profiles and wins over that default. Otherwise the toolchain's
 exact-owner/kind (`library`) profile selection applies. Profiles share one
 configured compiler executable/version; mixed compiler versions still need an
-adapter. Per-TU `fileFlags` are keyed by **member ID**, require evidence and
-human policy approval, and must not be changed by matching workers.
+adapter. Per-TU overrides live in `configs/flag_overrides.mk`, require evidence
+and human policy approval, and must not be changed by matching workers. The JSON
+`fileFlags` channel is not supported.
 
 ```sh
 npm ci

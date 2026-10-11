@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * patchSplatForLibs.ts — Patch splat YAML to use `o` segments for PSY-Q library objects
  *
@@ -26,7 +29,7 @@ import { execSync } from "child_process";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { Buffer } from "buffer";
-import { loadPsxExeInfo, requireSectionLayout, ROOT, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, requireSectionLayout, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
 import {
   buildSegmentSpans,
   isStrictlyInsideSegmentSpan,
@@ -34,13 +37,13 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SPLAT_YAML = exeSplatYamlPath();
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 const _layout = requireSectionLayout();
-const LOAD_ADDR = _info.loadAddr;
-const PAYLOAD_OFFSET = _info.payloadOffset;
+const LOAD_ADDR = () => (_info().loadAddr);
+const PAYLOAD_OFFSET = () => (_info().payloadOffset);
 const DEFAULT_DATA_START = _layout.dataStart;
 const SDATA_START = _layout.sdataStart;
-const FILE_END = _info.fileEnd;
+const FILE_END = () => (_info().fileEnd);
 
 interface LibSections {
   oPath: string;
@@ -55,7 +58,7 @@ interface LibSections {
 }
 
 function vramToRom(vram: number): number {
-  return vram - LOAD_ADDR + PAYLOAD_OFFSET;
+  return vram - LOAD_ADDR() + PAYLOAD_OFFSET();
 }
 
 function romHex(rom: number): string {
@@ -210,7 +213,7 @@ function stripNonTextPatches(lines: string[], dataRomStart: number, sdataRomStar
     if (/^\s+- \[0x[0-9A-Fa-f]+, bss\]/i.test(line)) continue;
     if (/virtual BSS/.test(line)) {
       result.push(
-        `  - [${romHex(FILE_END)}]  # End of file`
+        `  - [${romHex(FILE_END())}]  # End of file`
       );
       continue;
     }
@@ -278,18 +281,18 @@ function main() {
 
   // Run resolveLibSections.ts
   console.log("Running resolveLibSections.ts...");
-  const sectionsOutput = execSync("npx tsx tools/build/resolveLibSections.ts", {
+  const sectionsOutput = installedExec(process.execPath, currentScriptArgs("tools/build/resolveLibSections.ts", []), {
     encoding: "utf-8",
-    cwd: ROOT,
+    cwd: projectRoot(),
     maxBuffer: 10 * 1024 * 1024,
   });
   const libSections: LibSections[] = JSON.parse(sectionsOutput);
   console.log(`Got ${libSections.length} library matches with section info`);
 
   // Cache for patchLinkerBss.ts to avoid re-running detection
-  mkdirSync(join(ROOT, "build"), { recursive: true });
+  mkdirSync(join(projectRoot(), "build"), { recursive: true });
   writeFileSync(
-    join(ROOT, "build/libSections.json"),
+    join(projectRoot(), "build/libSections.json"),
     JSON.stringify(libSections, null, 2)
   );
   console.log("Cached section info to build/libSections.json");
@@ -312,8 +315,8 @@ function main() {
   // Build match structures
   const sortedMatches = libSections
     .map((s) => ({
-      vramStart: s.textRom - PAYLOAD_OFFSET + LOAD_ADDR,
-      vramEnd: s.textRom - PAYLOAD_OFFSET + LOAD_ADDR + s.textSize,
+      vramStart: s.textRom - PAYLOAD_OFFSET() + LOAD_ADDR(),
+      vramEnd: s.textRom - PAYLOAD_OFFSET() + LOAD_ADDR() + s.textSize,
       oPath: s.oPath,
       textRom: s.textRom,
       textSize: s.textSize,
@@ -538,7 +541,7 @@ function main() {
         newLines.push(
           ...interleaveEntries(
             effectiveSdataStart,
-            FILE_END,
+            FILE_END(),
             "sdata",
             sdataDataEntries,
             indent
@@ -600,7 +603,7 @@ function main() {
     const m = line.match(subsegRe);
     if (m && m[4] === "c") {
       const romOffset = parseInt(m[2], 16);
-      const vram = romOffset - PAYLOAD_OFFSET + LOAD_ADDR;
+      const vram = romOffset - PAYLOAD_OFFSET() + LOAD_ADDR();
       const libMatch = findMatch(vram);
 
       if (libMatch) {
@@ -648,7 +651,7 @@ function main() {
   // the disassembler). Only ADD new c entries for addresses that fall in gaps
   // between o entries and existing c entries. Scan binary for function
   // boundaries within those true gaps.
-  const binaryData = readFileSync(_info.binaryPath);
+  const binaryData = readFileSync(_info().binaryPath);
 
   // Load all symbols by VRAM address for name lookups
   const symbolsByVram = loadSymbolsByVram();
@@ -676,7 +679,7 @@ function main() {
         existingSegRoms.add(rom);
         const cm = line.match(cSegNameRe);
         if (cm) {
-          const vram = rom - PAYLOAD_OFFSET + LOAD_ADDR;
+          const vram = rom - PAYLOAD_OFFSET() + LOAD_ADDR();
           existingSegNames.set(vram, cm[1]);
         }
       }
@@ -730,7 +733,7 @@ function main() {
   {
     const allFuncRoms = scanFuncBoundaries(binaryData, TEXT_ROM_START, TEXT_ROM_END);
     for (const fRom of allFuncRoms) {
-      const vram = fRom - PAYLOAD_OFFSET + LOAD_ADDR;
+      const vram = fRom - PAYLOAD_OFFSET() + LOAD_ADDR();
       // Skip addresses already in symbol_addrs.txt
       if (symbolsByVram.has(vram)) continue;
       // Skip addresses inside o ranges (library objects handle their own symbols)
@@ -752,8 +755,8 @@ function main() {
   // don't have c segments yet. This handles game-code functions that were
   // discovered by previous runs and exist in symbol_addrs.txt.
   const allTypeFuncSymbols = loadFuncAddrsInRange(
-    TEXT_ROM_START - PAYLOAD_OFFSET + LOAD_ADDR,
-    TEXT_ROM_END - PAYLOAD_OFFSET + LOAD_ADDR
+    TEXT_ROM_START - PAYLOAD_OFFSET() + LOAD_ADDR(),
+    TEXT_ROM_END - PAYLOAD_OFFSET() + LOAD_ADDR()
   );
   for (const sym of allTypeFuncSymbols) {
     const rom = vramToRom(sym.vram);
@@ -762,7 +765,7 @@ function main() {
     const inO = mergedORanges.some((r) => rom >= r.start && rom < r.end);
     if (inO) continue;
     gapFuncEntries.push({ rom, name: sym.name });
-    const srcPath = join(ROOT, "src", `${sym.name}.c`);
+    const srcPath = join(projectRoot(), "src", `${sym.name}.c`);
     if (!existsSync(srcPath)) {
       newSourceFiles.push({ name: sym.name });
     }
@@ -777,7 +780,7 @@ function main() {
       if (isCoveredByExistingSegment(fRom)) continue;
       if (gapFuncEntries.some((e) => e.rom === fRom)) continue;
 
-      const vram = fRom - PAYLOAD_OFFSET + LOAD_ADDR;
+      const vram = fRom - PAYLOAD_OFFSET() + LOAD_ADDR();
       const name = symbolsByVram.get(vram) || `func_${vram.toString(16).toUpperCase()}`;
 
       gapFuncEntries.push({ rom: fRom, name });
@@ -786,7 +789,7 @@ function main() {
         newSymbols.push({ name, vram });
       }
 
-      const srcPath = join(ROOT, "src", `${name}.c`);
+      const srcPath = join(projectRoot(), "src", `${name}.c`);
       if (!existsSync(srcPath)) {
         newSourceFiles.push({ name });
       }
@@ -897,7 +900,7 @@ function main() {
     for (const gap of trueGaps) {
       const funcRoms = scanFuncBoundaries(binaryData, gap.start, gap.end);
       for (const fRom of funcRoms) {
-        const vram = fRom - PAYLOAD_OFFSET + LOAD_ADDR;
+        const vram = fRom - PAYLOAD_OFFSET() + LOAD_ADDR();
         const name = symbolsByVram.get(vram);
         if (!name) continue;
 
@@ -933,7 +936,7 @@ function main() {
 
   // Create source files for gap functions
   if (newSourceFiles.length > 0) {
-    const srcDir = join(ROOT, "src");
+    const srcDir = join(projectRoot(), "src");
     for (const { name } of newSourceFiles) {
       const srcPath = join(srcDir, `${name}.c`);
       const content = [
@@ -959,7 +962,7 @@ function main() {
     if (m) cSegNames.add(m[1]);
   }
 
-  const srcFiles = readdirSync(join(ROOT, "src")).filter((f) =>
+  const srcFiles = readdirSync(join(projectRoot(), "src")).filter((f) =>
     f.endsWith(".c")
   );
 
@@ -983,7 +986,7 @@ function main() {
     const name = f.replace(/\.c$/, "");
     if (cSegNames.has(name)) continue;
 
-    const srcPath = join(ROOT, "src", f);
+    const srcPath = join(projectRoot(), "src", f);
     const content = readFileSync(srcPath, "utf-8");
 
     // INCLUDE_ASM stubs are regenerable by splat -- always safe to remove.
@@ -1000,7 +1003,7 @@ function main() {
       ? vramToCName.get(parseInt(funcMatch[1], 16))
       : undefined;
     if (renameTarget) {
-      const newPath = join(ROOT, "src", `${renameTarget}.c`);
+      const newPath = join(projectRoot(), "src", `${renameTarget}.c`);
       const targetContent = existsSync(newPath) ? readFileSync(newPath, "utf-8") : "";
       if (targetContent && !targetContent.includes("INCLUDE_ASM(")) {
         keptSrcCount++;

@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * The local allocator's observed quantity priorities and assignment order.
  *
@@ -12,7 +13,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { normalizeFunctionName } from "./decompToolchain.js";
 import { ensureLocalAllocationAnalysis, type LocalAllocationArtifact } from "./compiler-oracle/ensure.js";
 import { parseOracleEvents } from "./compiler-oracle/run.js";
 import { replayLocalAllocation } from "./compiler-oracle/local-allocation.js";
@@ -33,7 +34,7 @@ function usage(): never {
  * on disk regardless of the source it came from.
  */
 function analyzeNamedReport(functionName: string, requested: string): LocalAllocationArtifact {
-  const reportPath = requested.startsWith("/") ? requested : join(ROOT, requested);
+  const reportPath = requested.startsWith("/") ? requested : join(projectRoot(), requested);
   if (!existsSync(reportPath)) throw new Error(`report not found: ${requested}`);
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as CompilerOracleReport;
   if (report.function !== functionName) {
@@ -46,7 +47,7 @@ function analyzeNamedReport(functionName: string, requested: string): LocalAlloc
     throw new Error("compiler-oracle report lacks baseline/local counterfactual variants");
   }
   const readEvents = (artifactDirectory: string) => {
-    const path = join(ROOT, artifactDirectory, "events.jsonl");
+    const path = join(projectRoot(), artifactDirectory, "events.jsonl");
     return parseOracleEvents(existsSync(path) ? readFileSync(path, "utf8") : "");
   };
   return {
@@ -84,7 +85,7 @@ const reportIndex = args.indexOf("--report");
 const requestedReport = reportIndex >= 0 ? args[reportIndex + 1] : undefined;
 
 try {
-  const output = join(ROOT, "build/localAllocationOracle", functionName);
+  const output = join(projectRoot(), "build/localAllocationOracle", functionName);
   let text: string;
 
   if (requestedReport) {

@@ -28,6 +28,7 @@ export interface PreparationPacket {
   performance?: { phases: import("../../lib/contentCache.js").PhaseTiming[]; totalMs: number; cache: "hit" | "miss"; reason: string };
   diagnosticsIdentity?: string;
   identity: {
+    compatibility?: string;
     functionName: string; container: string; destination: string; assembly: string; data: string[];
     targetKind?: "relocatable-library"; symbol?: string;
     inputs: Record<string, string>; fingerprint: string; tools: unknown; flags: string[];

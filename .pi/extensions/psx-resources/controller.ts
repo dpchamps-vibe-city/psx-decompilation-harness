@@ -76,7 +76,7 @@ export function registerResourceCommand(pi: ExtensionAPI, rootOf: (cwd: string) 
           pi.sendUserMessage(`${skill}\n\nWork item: ${args}\nPrepared baseline: ${state.binding.baseline}. Finish with action=test, then action=accept. Success is a tested capability, not an asset note or a commit. Stop honestly if the required evidence is missing.`);
           const result = await waitForTurn({ gate, before, isIdle: () => ctx.isIdle(), isAborted: () => state.controller.signal.aborted, waitForIdle: () => ctx.waitForIdle(), startTimeoutMs: 120000, pollMs: 50, now: () => Date.now(), sleep: ms => new Promise(r => setTimeout(r, ms)) });
           if (result !== "settled") throw new Error(`Parser turn ${result}`);
-          if (state.alive) message(state.binding.finish ? "Parser capability tested. Run npm run extract-assets to regenerate supported exports; nothing committed." : "Parser work ended without an accepted test gate; drafts remain for inspection. Nothing committed.");
+          if (state.alive) message(state.binding.finish ? "Parser capability tested. Run psx_resource_extract({}) to regenerate supported exports; nothing committed." : "Parser work ended without an accepted test gate; drafts remain for inspection. Nothing committed.");
         } finally {
           if (timer) clearTimeout(timer);
           if (state.alive) { if (state.controller.signal.aborted && state.ownsTurn) await ctx.abort(); pi.setActiveTools(saved); }

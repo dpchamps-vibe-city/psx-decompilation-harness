@@ -9,6 +9,8 @@ fixture.put("src/fixture_scalar.c", "typedef int s32; s32 fixture_scalar(void) {
 fixture.put("src/fixture_sink.c", "void fixture_sink(int a, int b) {}\n");
 // Generated context is deliberately wrong: it must not become a witness.
 fixture.put("include/functions.h", "void fixture_scalar(int, int, int);\n");
+/* Explicitly supplied synthetic SDK contract; never borrow package SDK assets. */
+fixture.put("include/psyq/libgpu.h", "typedef struct { int fixture; } DISPENV;\nDISPENV *GetDispEnv(DISPENV *env);\n");
 const [exe, overlay] = fixture.containers();
 
 const ENTRY_A0: SymExpr = { kind: "entry", register: "a0" };
@@ -29,7 +31,7 @@ test("a defining source supplies real arity and return type, not the generated h
   assert.equal(result.source, "matched");
 });
 
-test("an SDK callee resolves from the vendored prototype", () => {
+test("an SDK callee resolves from the explicitly supplied prototype", () => {
   const result = resolveSignature("GetDispEnv", undefined, exe!);
   assert.ok(!("unknown" in result), JSON.stringify(result));
   if ("unknown" in result) return;

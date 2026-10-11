@@ -1,4 +1,7 @@
 #!/usr/bin/env npx tsx
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 
 import { spawnSync } from "node:child_process";
 import {
@@ -10,12 +13,7 @@ import {
 } from "node:fs";
 import { join, relative } from "node:path";
 import { analyzeTargetSchedule } from "./analyzeTargetSchedule.js";
-import {
-  ROOT,
-  configuredToolchainIdentity,
-  normalizeFunctionName,
-  resolveSource,
-} from "./decompToolchain.js";
+import { configuredToolchainIdentity, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { buildSourceModel } from "./source-shape-synthesis/source-model.js";
 import { deriveSynthesisPlan, sourceShapeSpec } from "./source-shape-synthesis/planner.js";
 import type { SynthesisSummary } from "./source-shape-synthesis/types.js";
@@ -88,18 +86,18 @@ function loadAnalysis(options: CliOptions): { analysis: TargetScheduleAnalysis; 
     maxInterventions: 8,
     json: false,
   });
-  return { analysis, path: projectPath(join(ROOT, "build/targetSchedule", options.functionName, "analysis.json")) };
+  return { analysis, path: projectPath(join(projectRoot(), "build/targetSchedule", options.functionName, "analysis.json")) };
 }
 
 function implementationHash(): string {
   const files = [
-    join(ROOT, "tools/agent/synthesizeSourceShapes.ts"),
-    ...readdirSync(join(ROOT, "tools/agent/source-shape-synthesis"))
+    join(HARNESS_ROOT, "tools/agent/synthesizeSourceShapes.ts"),
+    ...readdirSync(join(HARNESS_ROOT, "tools/agent/source-shape-synthesis"))
       .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
       .sort()
-      .map((name) => join(ROOT, "tools/agent/source-shape-synthesis", name)),
+      .map((name) => join(HARNESS_ROOT, "tools/agent/source-shape-synthesis", name)),
   ];
-  return sha256(files.map((path) => `${relative(ROOT, path)}:${sha256File(path)}`).join("\n"));
+  return sha256(files.map((path) => `${relative(projectRoot(), path)}:${sha256File(path)}`).join("\n"));
 }
 
 /**
@@ -111,7 +109,7 @@ function implementationHash(): string {
  * the base source and toolchain it was produced from; both must agree.
  */
 function findSearchSummary(functionName: string, specPath: string, baseSourcePath: string): string | undefined {
-  const root = join(ROOT, "build/sourceShapeSearch", functionName);
+  const root = join(projectRoot(), "build/sourceShapeSearch", functionName);
   if (!existsSync(root)) return undefined;
   const expectedSpec = projectPath(specPath);
   const expectedSource = sha256File(baseSourcePath);
@@ -177,7 +175,7 @@ async function main(): Promise<void> {
     maxVariants: options.maxVariants,
     maxDepth: options.maxDepth,
   })).slice(0, 16);
-  const runRoot = join(ROOT, "build/sourceShapeSynthesis", options.functionName, runId);
+  const runRoot = join(projectRoot(), "build/sourceShapeSynthesis", options.functionName, runId);
   mkdirSync(runRoot, { recursive: true });
   const sourceModelPath = join(runRoot, "source-model.json");
   const planPath = join(runRoot, "synthesis-plan.json");
@@ -198,22 +196,10 @@ async function main(): Promise<void> {
     validateSourceShapeSpec(spec, options.functionName);
     writeStableJson(specPath, spec);
     if (!options.deriveOnly) {
-      const args = [
-        "tsx",
-        "tools/agent/searchSourceShapes.ts",
-        options.functionName,
-        "--spec",
-        projectPath(specPath),
-        "--analysis",
-        loaded.path,
-        "--max-variants",
-        String(Math.min(options.maxVariants, plan.alternatives.length + 1)),
-        "--jobs",
-        String(options.jobs),
-      ];
+      const args = [options.functionName, "--spec", projectPath(specPath), "--analysis", loaded.path, "--max-variants", String(Math.min(options.maxVariants, plan.alternatives.length + 1)), "--jobs", String(options.jobs)];
       if (options.resume) args.push("--resume");
-      const result = spawnSync("npx", args, {
-        cwd: ROOT,
+      const result = spawnSync(process.execPath, currentScriptArgs("tools/agent/searchSourceShapes.ts", args), {
+        cwd: projectRoot(),
         encoding: "utf8",
         maxBuffer: 50 * 1024 * 1024,
         timeout: 30 * 60 * 1000,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import type { TargetScheduleAnalysis } from "../target-schedule/types.js";
 import { validateSourceShapeSpec } from "../source-shape-search/schema.js";
 import { buildSourceModel } from "./source-model.js";

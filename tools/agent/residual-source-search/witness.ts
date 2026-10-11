@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 
 /**
  * Discovery and source-level binding of SAT scheduler-constraint witnesses.
@@ -94,7 +95,7 @@ function bindPhantom(phantom: Record<string, unknown>, nodes: WitnessModelNode[]
  * lexicographically last run id is used and the others are named in a caveat.
  */
 export function discoverWitness(functionName: string, rootOverride?: string): DiscoveredWitness | undefined {
-  const base = rootOverride ?? join(ROOT, "build/schedulerConstraint", functionName);
+  const base = rootOverride ?? join(projectRoot(), "build/schedulerConstraint", functionName);
   if (!existsSync(base)) return undefined;
   const satRuns: string[] = [];
   for (const entry of readdirSync(base, { withFileTypes: true })) {
@@ -117,7 +118,7 @@ export function discoverWitness(functionName: string, rootOverride?: string): Di
   satRuns.sort();
   const runId = satRuns[satRuns.length - 1]!;
   const directory = join(base, runId);
-  const reportedDirectory = directory.startsWith(ROOT) ? relative(ROOT, directory) : directory;
+  const reportedDirectory = directory.startsWith(projectRoot()) ? relative(projectRoot(), directory) : directory;
   const caveats: string[] = [];
   if (satRuns.length > 1) {
     caveats.push(`Multiple SAT witnesses exist (${satRuns.join(", ")}); rule 4.7 uses ${runId}.`);

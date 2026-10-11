@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * bestCandidate.ts — Serve the engine's best-effort C for a function.
  *
@@ -15,7 +16,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "./decompToolchain.js";
+
 import type { ResultBundle } from "./matching-reconstruction/types.js";
 
 function main(): void {
@@ -25,7 +26,7 @@ function main(): void {
     process.exit(1);
   }
   const functionName = args[0]!;
-  const resultPath = join(ROOT, "build/matchingReconstruction", functionName, "result.json");
+  const resultPath = join(projectRoot(), "build/matchingReconstruction", functionName, "result.json");
 
   if (!existsSync(resultPath)) {
     console.error(`no reconstruction result for ${functionName} at ${resultPath}`);

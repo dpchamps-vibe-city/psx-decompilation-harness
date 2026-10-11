@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /** Original assembly inputs, including matched functions with no .s artifact.
  * This is assembly parsing, not C source analysis. */
 import { configuredTool } from "../../lib/toolchain.js";
@@ -6,7 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { containerTargetPath, vramToRom } from "../../lib/container.js";
 import { requireFunctionLocation, loadSymbolIndex } from "../../lib/symbolIndex.js";
-import { resolveAsmSource, ROOT } from "../decompToolchain.js";
+import { resolveAsmSource } from "../decompToolchain.js";
 
 export function originalAssembly(name: string, directory: string): { path: string; inputs: string[] } {
   const location = requireFunctionLocation(name), { span, container } = location;
@@ -21,7 +22,7 @@ export function originalAssembly(name: string, directory: string): { path: strin
   }
   const binary = join(directory, `${name}.original.bin`), assembly = join(directory, `${name}.original.s`);
   writeFileSync(binary, bytes);
-  const disassembly = execFileSync(configuredTool("objdump"), ["-D", "-b", "binary", "-m", "mips:3000", "-EL", "-M", "no-aliases", `--adjust-vma=${span.vram}`, binary], { cwd: ROOT, encoding: "utf8" });
+  const disassembly = execFileSync(configuredTool("objdump"), ["-D", "-b", "binary", "-m", "mips:3000", "-EL", "-M", "no-aliases", `--adjust-vma=${span.vram}`, binary], { cwd: projectRoot(), encoding: "utf8" });
   const index = loadSymbolIndex(container);
   const instructions = [...disassembly.matchAll(/^\s*([\da-f]+):\s+[\da-f]{8}\s+(\w+)\s*([^\n]*)/gm)];
   const labels = new Set<number>();

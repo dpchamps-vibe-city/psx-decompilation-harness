@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /** CLI + project adapter for the pure web-partition extractors.
  * Target-only needs original bytes/configs, never source or cc1. Candidate runs
  * retain fresh RTL dumps, hashes and effective flags under build/webPartition.
@@ -7,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { compileSource, resolveSource, ROOT, configuredCompilerPath } from "../agent/decompToolchain.js";
+import { compileSource, resolveSource, configuredCompilerPath } from "../agent/decompToolchain.js";
 import { compareFunction, targetWordsOf, renderedWordsEqual, type Verdict, type RenderedWord } from "../lib/functionOracle.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { loadLibraryProject } from "../lib/project.js";
@@ -70,7 +71,7 @@ export function fingerprintWebPartition(name: string, options: { source?: string
   if (options.targetOnly) return report;
   const source = resolveSource(name, options.source), sourceText = readFileSync(source, "utf8"), sourceHash = hash(sourceText);
   report.sourceConstructs = matchingConstructs(sourceText);
-  const directory = options.outputDirectory ?? join(ROOT, "build/webPartition", name, sourceHash.slice(0, 16));
+  const directory = options.outputDirectory ?? join(projectRoot(), "build/webPartition", name, sourceHash.slice(0, 16));
   mkdirSync(directory, { recursive: true });
   const artifacts = compileSource(source, directory, name, { dumps: true, assemble: true });
   const ctx = context(name), oracle = compareFunction(name, { objectPath: artifacts.object!, ...(ctx.container ? { container: ctx.container } : {}) });
@@ -109,7 +110,7 @@ export function fingerprintWebPartition(name: string, options: { source?: string
 export function probeRegisterPins(baseline: FingerprintReport): PinProbe | null {
   const source = baseline.provenance.source;
   if (!source || !baseline.sourceConstructs?.localRegisterBindings.length) return null;
-  const directory = join(ROOT, "build/webPartition", baseline.functionName, baseline.provenance.sourceHash!.slice(0, 16), "pin-probe");
+  const directory = join(projectRoot(), "build/webPartition", baseline.functionName, baseline.provenance.sourceHash!.slice(0, 16), "pin-probe");
   const path = join(directory, "pin-erased.c");
   try {
     const sourceText = readFileSync(source, "utf8");
@@ -130,7 +131,7 @@ function renderOracleEvidence(report: FingerprintReport): string[] {
   return lines;
 }
 export function renderFingerprint(report: FingerprintReport, probe: PinProbe | null = null): string[] {
-  const relativePath = (path: string): string => path.startsWith(`${ROOT}/`) ? path.slice(ROOT.length + 1) : path;
+  const relativePath = (path: string): string => path.startsWith(`${projectRoot()}/`) ? path.slice(projectRoot().length + 1) : path;
   const lines = [`${report.functionName}: ${report.status}, ${report.target.webs.length} target web(s)`];
   if (report.provenance.source) lines.push(`Source: ${relativePath(report.provenance.source)}`, `Oracle: ${report.oracleVerdict?.toUpperCase() ?? "UNDETERMINED"}`, ...renderOracleEvidence(report));
   const constructs = report.sourceConstructs;
@@ -195,19 +196,19 @@ function main(): void {
   }
   if (audit) {
     if (name || source || targetOnly || probePins) throw new Error("--audit does not take a function, source, --target-only or --probe-pins");
-    const names = pinAuditNames(JSON.parse(readFileSync(join(ROOT, ".pi/autoloop.json"), "utf8")));
+    const names = pinAuditNames(JSON.parse(readFileSync(join(projectRoot(), ".pi/autoloop.json"), "utf8")));
     const rows = names.map(functionName => {
       try {
         const source = resolveSource(functionName), variant = unpinDeclarations(readFileSync(source, "utf8"));
-        const path = join(ROOT, "build/webPartition/pin-audit", functionName, "pin-erased.c");
-        mkdirSync(join(ROOT, "build/webPartition/pin-audit", functionName), { recursive: true });
+        const path = join(projectRoot(), "build/webPartition/pin-audit", functionName, "pin-erased.c");
+        mkdirSync(join(projectRoot(), "build/webPartition/pin-audit", functionName), { recursive: true });
         writeFileSync(path, variant.source);
         const report = fingerprintWebPartition(functionName, { source: path });
         return { functionName, source: path, removedBindings: variant.removed, remainingDirectAsm: report.sourceConstructs?.otherAsm.length ?? null, remainingFileBindings: report.sourceConstructs?.fileRegisterBindings.length ?? null, status: report.status, oracleVerdict: report.oracleVerdict, oracleEvidence: report.oracleEvidence, reportArtifact: report.reportArtifact, facts: report.diff?.facts ?? [], assignments: report.diff?.assignments ?? [], undetermined: report.diff?.undetermined.length ?? 0, retirement: variant.removed === 0 ? "no-local-binding-erased" : report.oracleVerdict === "match" ? "exact-pin-erased-candidate-unintegrated" : "no-exact-pin-erased-candidate" };
       }
       catch (error) { return { functionName, status: "unavailable", reason: String(error), retirement: "not-attempted" }; }
     });
-    const artifact = join(ROOT, "build/webPartition/pin-audit.json"); mkdirSync(join(ROOT, "build/webPartition"), { recursive: true }); writeFileSync(artifact, JSON.stringify(rows, null, 2) + "\n");
+    const artifact = join(projectRoot(), "build/webPartition/pin-audit.json"); mkdirSync(join(projectRoot(), "build/webPartition"), { recursive: true }); writeFileSync(artifact, JSON.stringify(rows, null, 2) + "\n");
     console.log(json ? JSON.stringify(rows, null, 2) : rows.map(r => {
       if (!("facts" in r)) return `${r.functionName}: ${r.status} — ${r.reason}`;
       const words = r.oracleEvidence ? `${r.oracleEvidence.sameWords}/${r.oracleEvidence.totalWords}` : "unknown";

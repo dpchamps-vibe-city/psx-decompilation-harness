@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * The scheduler's own account of why a block came out in the order it did.
  *
@@ -35,12 +36,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import {
-  ROOT,
-  compileSource,
-  normalizeFunctionName,
-  resolveSource,
-} from "./decompToolchain.js";
+import { compileSource, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 
 /* sched.c's own constants (gcc/sched.c). LOW_PRIORITY_P is the compiler's
  * predicate for "this insn never got the birthing promotion", so classify with
@@ -342,7 +338,7 @@ function build(functionName: string, source: string, pass: string): SchedulerTra
 
   return {
     functionName,
-    source: source.startsWith(ROOT) ? source.slice(ROOT.length + 1) : source,
+    source: source.startsWith(projectRoot()) ? source.slice(projectRoot().length + 1) : source,
     pass,
     cc1Flags: artifacts.cc1Flags,
     blocks: blocks.map((block) => {

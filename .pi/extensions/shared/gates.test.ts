@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../../tools/testing/runtimeTestContext.js";
 import { parseFunctionDiffSummary } from "./gates.ts";
 
 test("parses the oracle's word count and verdict", () => {

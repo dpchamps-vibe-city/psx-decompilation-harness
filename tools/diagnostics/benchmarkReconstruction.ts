@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * benchmarkReconstruction.ts — run the automatic matching reconstruction
  * engine over a set of functions and report terminal states and costs
@@ -20,7 +21,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, compileSource } from "../agent/decompToolchain.js";
+import { compileSource } from "../agent/decompToolchain.js";
 import { loadContainers, vramToRom } from "../lib/container.js";
 import { loadFunctionSpans, requireFunctionLocation } from "../lib/symbolIndex.js";
 import { compareFunction } from "../lib/functionOracle.js";
@@ -45,7 +46,7 @@ function parkedFunctions(): string[] {
       }
     }
   };
-  visit(join(ROOT, "src"));
+  visit(join(projectRoot(), "src"));
   return names.sort();
 }
 
@@ -54,7 +55,7 @@ function unmatchedFunctions(): string[] {
   const names: string[] = [];
   for (const container of loadContainers()) {
     for (const span of loadFunctionSpans(container)) {
-      const sourcePath = join(ROOT, container.paths.srcDir, `${span.name}.c`);
+      const sourcePath = join(projectRoot(), container.paths.srcDir, `${span.name}.c`);
       if (!existsSync(sourcePath)) {
         names.push(span.name);
         continue;
@@ -145,14 +146,14 @@ function freezeManifest(): Manifest {
   const imageHashes: Record<string, string> = {};
   const heldOut: Manifest["heldOut"] = [];
   for (const container of loadContainers()) {
-    imageHashes[container.id] = sha256File(join(ROOT, container.targetPath));
+    imageHashes[container.id] = sha256File(join(projectRoot(), container.targetPath));
     /* Stratify matched functions by cheap byte-level features; take a small
      * deterministic sample per stratum. Known matching C stays evaluator-only:
      * the engine never reads it. */
-    const image = readFileSync(join(ROOT, container.targetPath));
+    const image = readFileSync(join(projectRoot(), container.targetPath));
     const perStratum = new Map<string, string[]>();
     for (const span of loadFunctionSpans(container)) {
-      const sourcePath = join(ROOT, container.paths.srcDir, `${span.name}.c`);
+      const sourcePath = join(projectRoot(), container.paths.srcDir, `${span.name}.c`);
       if (!existsSync(sourcePath)) continue;
       const content = readFileSync(sourcePath, "utf-8");
       if (content.includes("INCLUDE_ASM(") && content.includes(span.name)) continue;
@@ -180,19 +181,19 @@ function freezeManifest(): Manifest {
     challenge: parkedFunctions(),
     heldOut,
   };
-  writeStableJson(join(ROOT, MANIFEST_PATH), manifest);
+  writeStableJson(join(projectRoot(), MANIFEST_PATH), manifest);
   return manifest;
 }
 
 function loadManifestFile(): Manifest {
-  const path = join(ROOT, MANIFEST_PATH);
+  const path = join(projectRoot(), MANIFEST_PATH);
   if (!existsSync(path)) {
     console.error(`no manifest at ${MANIFEST_PATH}; run --freeze-manifest first`);
     process.exit(2);
   }
   const manifest = JSON.parse(readFileSync(path, "utf-8")) as Manifest;
   for (const container of loadContainers()) {
-    const hash = sha256File(join(ROOT, container.targetPath));
+    const hash = sha256File(join(projectRoot(), container.targetPath));
     if (manifest.imageHashes[container.id] && manifest.imageHashes[container.id] !== hash) {
       console.error(`input drift: ${container.id}'s image differs from the frozen manifest`);
       process.exit(2);
@@ -204,8 +205,8 @@ function loadManifestFile(): Manifest {
 /** Raw-m2c baseline: its draft compiled and byte-compared as-is (plan §5 B2). */
 async function m2cBaseline(name: string): Promise<{ verdict: string; detail: string }> {
   try {
-    const draft = await runM2c(name, ROOT);
-    const directory = join(ROOT, "build/matchingReconstruction/m2c-baseline", name);
+    const draft = await runM2c(name, projectRoot());
+    const directory = join(projectRoot(), "build/matchingReconstruction/m2c-baseline", name);
     mkdirSync(directory, { recursive: true });
     const sourcePath = join(directory, `${name}.c`);
     /* runM2c already prepends #include "common.h", which defines s16/u16/etc.
@@ -348,7 +349,7 @@ if (json) {
       console.log(`  ${result.functionName} (${result.sizeBytes} B) — ${note}`);
     }
   }
-  const artifact = join(ROOT, "build/matchingReconstruction/census.json");
+  const artifact = join(projectRoot(), "build/matchingReconstruction/census.json");
   writeStableJson(artifact, {
     generatedBy: "tools/diagnostics/benchmarkReconstruction.ts --census",
     functions: results.map((result) => ({

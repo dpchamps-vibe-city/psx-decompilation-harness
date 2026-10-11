@@ -1,3 +1,5 @@
+import { HARNESS_ROOT } from "../../lib/runtimeContext.js";
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The backward chain, end to end.
  *
@@ -14,20 +16,7 @@ import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
 import { configuredFlags, configuredFileFlags } from "../../lib/toolchain.js";
 import { filesUnder } from "../../lib/contentCache.js";
 import { requireLibraryFunction } from "../../lib/libraryTargets.js";
-import {
-  CPP_FLAGS,
-  ROOT,
-  compileSource,
-  containerForSymbol,
-  configuredAsFlagsForContainer,
-  configuredCc1FlagsForContainer,
-  configuredMaspsxFlags,
-  containerKindForSymbol,
-  loadFlagOverrides,
-  normalizeFunctionName,
-  resolveSource,
-  sourceDependencyFiles,
-} from "../decompToolchain.js";
+import { CPP_FLAGS, compileSource, containerForSymbol, configuredAsFlagsForContainer, configuredCc1FlagsForContainer, configuredMaspsxFlags, containerKindForSymbol, loadFlagOverrides, normalizeFunctionName, resolveSource, sourceDependencyFiles } from "../decompToolchain.js";
 import {
   type EnsuredArtifact,
   type ProvenanceInputs,
@@ -110,7 +99,7 @@ function sameOrder(left: MirProgram, right: MirProgram): boolean {
  * still carried the removed flag (recorded in
  * notes/research/ovl_11_func_800F13D8-embedded-table-origin.md).
  */
-export function candidateObjectInputs(functionName: string, source: string, root = ROOT): ProvenanceInputs {
+export function candidateObjectInputs(functionName: string, source: string, root = projectRoot()): ProvenanceInputs {
   const target = resolveFunctionTarget(functionName, root), context = target.flags;
   const member = context.kind === "library" ? requireLibraryFunction(functionName, root).member : undefined;
   return {
@@ -122,7 +111,7 @@ export function candidateObjectInputs(functionName: string, source: string, root
       cppFlags: configuredFlags("cpp", context, root),
       cc1Flags: [...configuredFlags("cc1", context, root), ...configuredFileFlags(member?.id ?? target.symbol, root)],
       asFlags: configuredFlags("as", context, root), maspsxFlags: configuredFlags("maspsx", context, root) },
-    implementation: [join(ROOT, "tools/agent/decompToolchain.ts"), join(ROOT, "tools/lib/compilerArtifacts.ts"), join(ROOT, "tools/lib/targetAdapter.ts")],
+    implementation: [join(HARNESS_ROOT, "tools/agent/decompToolchain.ts"), join(HARNESS_ROOT, "tools/lib/compilerArtifacts.ts"), join(HARNESS_ROOT, "tools/lib/targetAdapter.ts")],
   };
 }
 
@@ -187,7 +176,7 @@ function ensureCandidateObject(
       /* A stamp whose object has since been removed or altered is not a hit;
        * throwing here makes `ensureArtifact` fall through and recompile. */
       if (!value.object) throw new Error("stored candidate object has no path");
-      const absolute = isAbsolute(value.object) ? value.object : join(ROOT, value.object);
+      const absolute = isAbsolute(value.object) ? value.object : join(projectRoot(), value.object);
       if (!existsSync(absolute)) throw new Error("stored candidate object is missing");
       if (!value.objectSha256) throw new Error("stored candidate object predates content verification");
       if (sha256File(absolute) !== value.objectSha256) {
@@ -200,7 +189,7 @@ function ensureCandidateObject(
 
 export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
   const functionName = normalizeFunctionName(options.functionName);
-  const outputDirectory = options.outputDirectory ?? join(ROOT, "build/pipelineReversal", functionName);
+  const outputDirectory = options.outputDirectory ?? join(projectRoot(), "build/pipelineReversal", functionName);
   mkdirSync(outputDirectory, { recursive: true });
 
   /* The candidate object is always derived from a source in this call. It is

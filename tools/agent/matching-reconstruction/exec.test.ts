@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { decodeFunction } from "./decode.js";
 import { UnsupportedTarget, canon, computeLiveIn, executeFunction } from "./exec.js";
 import { assemble, type AsmLine } from "./fixture-asm.js";

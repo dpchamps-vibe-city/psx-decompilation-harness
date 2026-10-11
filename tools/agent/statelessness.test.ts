@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { UNEXPOSED_CLIS } from "../../.pi/extensions/psx-decomp/tools/diagnostics.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));

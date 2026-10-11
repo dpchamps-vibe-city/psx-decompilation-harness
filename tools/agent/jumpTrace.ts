@@ -1,8 +1,9 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Dump-pair attribution, not a log of jump.c's private decisions. */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, compileSource, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
+import { compileSource, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { projectPath, sha256, writeStableJson } from "./provenance.js";
 import { parseRtlInstructions } from "./compiler-trace/rtl-parser.js";
 
@@ -204,7 +205,7 @@ export function jumpTraceFromDumps(functionName: string, dumps: Record<string, s
 }
 export function jumpTrace(functionName: string, sourceOverride?: string): JumpTraceReport {
   const source = resolveSource(functionName, sourceOverride), text = readFileSync(source, "utf8");
-  const directory = join(ROOT, "build/jumpTrace", functionName, sha256(text).slice(0, 24));
+  const directory = join(projectRoot(), "build/jumpTrace", functionName, sha256(text).slice(0, 24));
   mkdirSync(directory, { recursive: true });
   /* GCC appends dumps. Never read an old function section as a fresh compile. */
   for (const file of readdirSync(directory)) if (file.startsWith(`${functionName}.i.`)) rmSync(join(directory, file));

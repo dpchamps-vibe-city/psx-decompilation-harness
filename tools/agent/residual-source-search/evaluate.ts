@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { configuredTool, CPP_FLAGS, ROOT, runToolAsync, compileSourceAsync, disassembleObject } from "../decompToolchain.js";
+import { configuredTool, CPP_FLAGS, runToolAsync, compileSourceAsync, disassembleObject } from "../decompToolchain.js";
 import { evaluateRequirements, functionObjectsEqual } from "../source-shape-search/evaluator.js";
 import { runWorkerPool } from "../source-shape-search/worker-pool.js";
 import type { TargetScheduleAnalysis } from "../target-schedule/types.js";
@@ -322,7 +323,7 @@ export async function evaluateDomain(options: EvaluateRunOptions): Promise<StopR
       const preprocessedPath = join(workDirectory, "source.i");
       writeFileSync(sourcePath, candidate.sourceText);
       try {
-        await runToolAsync(configuredTool("cpp"), [...CPP_FLAGS, sourcePath, "-o", preprocessedPath], ROOT, options.signal);
+        await runToolAsync(configuredTool("cpp"), [...CPP_FLAGS, sourcePath, "-o", preprocessedPath], projectRoot(), options.signal);
       } catch (error) {
         candidate.record.stage = "preprocess-failed";
         candidate.record.compileError = error instanceof Error ? (error.message.split("\n")[0] || error.message) : String(error);

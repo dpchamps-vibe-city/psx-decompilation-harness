@@ -1,3 +1,4 @@
+import { projectRoot } from "./runtimeContext.js";
 /**
  * container.ts — one binary the project builds, whatever kind it is.
  *
@@ -16,7 +17,7 @@
 
 import { existsSync } from "fs";
 import { join, resolve } from "path";
-import { ROOT, exeBasename, loadPsxExeInfo } from "./psxExeInfo.js";
+import { exeBasename, loadPsxExeInfo } from "./psxExeInfo.js";
 import { codeMembers, loadManifest, memberBinPath, type ManifestMember } from "./overlayManifest.js";
 
 export type ContainerKind = "exe" | "overlay";
@@ -166,17 +167,14 @@ function overlayContainer(member: ManifestMember, root: string): Container | nul
   };
 }
 
-const cache = new Map<string, Container[]>();
 
 /**
  * Every container the project builds: `exe` first, then one per code member
  * whose base is solved. A member whose base is `undetermined` is deliberately
  * absent — it is work to finish, not a container to build on a guessed base.
  */
-export function loadContainers(root = ROOT): Container[] {
+export function loadContainers(root = projectRoot()): Container[] {
   root = resolve(root);
-  const cached = cache.get(root);
-  if (cached) return cached;
   const containers = [exeContainer(root)];
   const manifest = loadManifest(root);
   if (manifest) {
@@ -185,7 +183,6 @@ export function loadContainers(root = ROOT): Container[] {
       if (container) containers.push(container);
     }
   }
-  cache.set(root, containers);
   return containers;
 }
 
@@ -196,11 +193,11 @@ export function unresolvedCodeMembers(): ManifestMember[] {
   return codeMembers(manifest).filter((m) => m.base?.verdict !== "resolved");
 }
 
-export function loadContainer(id: string, root = ROOT): Container | null {
+export function loadContainer(id: string, root = projectRoot()): Container | null {
   return loadContainers(root).find((container) => container.id === id) ?? null;
 }
 
-export function requireContainer(id: string, root = ROOT): Container {
+export function requireContainer(id: string, root = projectRoot()): Container {
   const container = loadContainer(id, root);
   if (!container) {
     const known = loadContainers(root).map((c) => c.id).join(", ");
@@ -215,11 +212,11 @@ export function exeContainerOf(containers = loadContainers()): Container {
 
 /** Absolute path for one of a container's paths. */
 export function containerPath(container: Container, key: keyof ContainerPaths): string {
-  return join(container.projectRoot ?? ROOT, container.paths[key]);
+  return join(container.projectRoot ?? projectRoot(), container.paths[key]);
 }
 
 export function containerTargetPath(container: Container): string {
-  return join(container.projectRoot ?? ROOT, container.targetPath);
+  return join(container.projectRoot ?? projectRoot(), container.targetPath);
 }
 
 /** File offset of an address inside this container's image. */
@@ -286,5 +283,5 @@ export function defaultFunctionName(container: Container, vram: number): string 
 
 /** Reset the module cache. Tests and long-lived processes need this after a re-split. */
 export function resetContainerCache(): void {
-  cache.clear();
+  /* Loaders read configuration on each call; no cross-invocation cache remains. */
 }

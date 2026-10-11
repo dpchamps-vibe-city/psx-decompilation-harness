@@ -1,8 +1,9 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 import { strict as assert } from "node:assert";
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT, assembleTarget, disassembleObject, resolveAsmSource } from "../decompToolchain.js";
+
+import { assembleTarget, disassembleObject, resolveAsmSource } from "../decompToolchain.js";
 import { targetLoopEmission, scoreTargetLoopEmission } from "../analyzeTargetLoopEmission.js";
 import { hoistKnobSweep } from "../hoistKnobSweep.js";
 import { detectLoopNesting, detectLoopPreheaderOrder, type TargetFacts } from "../triage.js";

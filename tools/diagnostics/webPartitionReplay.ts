@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Historical acceptance replay. All five functions remain in the denominator.
  * The approval's F3EF0 best attempt is a NEGATIVE birth control: 999 is already
  * early. An independently preserved cursor attempt supplies the positive
@@ -8,7 +9,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ROOT } from "../agent/decompToolchain.js";
+
 import { analyzeCSource, matchingConstructs } from "../agent/cSourceGuard.js";
 import { fingerprintWebPartition, type FingerprintReport } from "./fingerprintWebPartition.js";
 import { certifyCopyContractions, certifyRoleFusions } from "./webPartitionProof.js";
@@ -60,11 +61,11 @@ export function namedHistoricalRole(name: string, f: WebFact | undefined): boole
   }
 }
 export function runHistoricalWebReplay() {
-  const directory = join(ROOT, "build/webPartition/historical-replay"); mkdirSync(directory, { recursive: true });
+  const directory = join(projectRoot(), "build/webPartition/historical-replay"); mkdirSync(directory, { recursive: true });
   const rows = cohort.map(row => {
     const attempts = row.inputs.map((input, index) => {
       try {
-        const origin = join(ROOT, input.note ?? input.source!);
+        const origin = join(projectRoot(), input.note ?? input.source!);
         if (!existsSync(origin)) throw new Error(`Preserved attempt missing: ${origin}`);
         let source = readFileSync(origin, "utf8");
         if (input.note) {

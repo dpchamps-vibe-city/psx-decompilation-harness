@@ -1,10 +1,11 @@
+import { HARNESS_ROOT } from "../../lib/runtimeContext.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Language, Parser, type Node, type Tree } from "web-tree-sitter";
-import { ROOT, } from "../decompToolchain.js";
+
 import { sha256File } from "../variant-lab/artifacts.js";
 
-const VENDOR = join(ROOT, "tools/vendor/tree-sitter-c");
+const VENDOR = () => (join(HARNESS_ROOT, "tools/vendor/tree-sitter-c"));
 
 interface GrammarPin {
   name: string;
@@ -14,35 +15,36 @@ interface GrammarPin {
   languageAbi: number;
 }
 
-const pin = JSON.parse(readFileSync(join(VENDOR, "pin.json"), "utf8")) as GrammarPin;
-const wasmPath = join(VENDOR, pin.file);
-const wasmHash = sha256File(wasmPath);
-if (wasmHash !== pin.sha256) {
+const pin = () => (JSON.parse(readFileSync(join(VENDOR(), "pin.json"), "utf8")) as GrammarPin);
+const wasmPath = () => (join(VENDOR(), pin().file));
+const wasmHash = () => (sha256File(wasmPath()));
+if (wasmHash() !== pin().sha256) {
   throw new Error(
-    `${pin.name} grammar drift: ${pin.file} hashes ${wasmHash}, pin.json expects ${pin.sha256}. ` +
+    `${pin().name} grammar drift: ${pin().file} hashes ${wasmHash()}, pin.json expects ${pin().sha256}. ` +
     "Update the pin deliberately — the hash is part of every search run's identity.",
   );
 }
 
 await Parser.init();
-const language = await Language.load(wasmPath);
-if (language.abiVersion !== pin.languageAbi) {
-  throw new Error(`${pin.name} ABI drift: loaded ${language.abiVersion}, pin.json expects ${pin.languageAbi}`);
+const loadedLanguage = await Language.load(wasmPath());
+const language = () => loadedLanguage;
+if (language().abiVersion !== pin().languageAbi) {
+  throw new Error(`${pin().name} ABI drift: loaded ${language().abiVersion}, pin.json expects ${pin().languageAbi}`);
 }
 
 /**
  * Identity of the C front end. It enters the run identity next to the compiler
  * and the implementation, so a grammar change cannot silently move a result.
  */
-export const C_FRONTEND_IDENTITY = {
-  parser: pin.name,
-  version: pin.version,
-  languageAbi: language.abiVersion,
-  wasmSha256: wasmHash,
-} as const;
+export const C_FRONTEND_IDENTITY = () => ({
+  parser: pin().name,
+  version: pin().version,
+  languageAbi: language().abiVersion,
+  wasmSha256: wasmHash(),
+} as const);
 
 const parser = new Parser();
-parser.setLanguage(language);
+parser.setLanguage(language());
 
 /** Parse one complete translation unit. Never throws on malformed C. */
 export function parseC(source: string): Tree {

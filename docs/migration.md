@@ -20,6 +20,23 @@ example remains the initial working-tree snapshot.
 No destination commit was made. Git was initialized on `main`; only submodule
 registration staged `.gitmodules` and the four gitlinks.
 
+## Follow-up: installable onboarding and local library inputs
+
+The repository now declares a Pi package entrypoint for explicit bootstrap:
+`pi install --local` followed by `/skill:psx-bootstrap-project [exe|library]`.
+Bootstrap creates project-owned scaffolding while harness tools run from the
+installed package with explicit project/runtime roots. It obtains missing public
+tooling at the pins below without importing Git metadata into the consumer repo;
+private game/SDK inputs are never fetched.
+See `docs/bootstrap.md` for scope, supply instructions and re-run safety.
+
+All former contents of root `lib/` were removed. It is now a trackable local
+library-target/conversion directory, created empty by bootstrap. `library-input/`
+is the ignored original-library input boundary; `extracted/` remains the ignored
+game input boundary. Bootstrap does not copy retained `tools/vendor/psyq47/` reference SDK
+assets or `include/psyq/` headers. The initial duplication inventories below
+are historical, not a claim that those converted objects are still shipped.
+
 ## Follow-up: prune project history
 
 After the duplication audit, the user requested removing game planning/research

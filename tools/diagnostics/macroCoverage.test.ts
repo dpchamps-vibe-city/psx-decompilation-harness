@@ -1,8 +1,9 @@
-import test from "node:test";
+import { ROOT } from "../testing/runtimeTestContext.js";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import { loadContainers } from "../lib/container.js";
 import { compareFunction } from "../lib/functionOracle.js";
 import { compileSource } from "../agent/decompToolchain.js";

@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * diffFunc.ts — the per-function oracle: are these the right bytes?
  *
@@ -20,7 +21,8 @@
  * function (it needs a clean full build, so it is opt-in).
  */
 
-import { execSync } from "child_process";
+import { execFileSync } from "node:child_process";
+import { buildContainer } from "../build/pipeline.js";
 import { watchFile, existsSync, writeFileSync, readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -38,53 +40,9 @@ import { containerPath, containerTargetPath, vramToRom, type Container } from ".
 
 import { loadLibraryProject } from "../lib/project.js";
 import { measureLibraryFunction, renderLibraryComparison } from "./libraryTarget.js";
-const ROOT = new URL("../..", import.meta.url).pathname;
+
 
 // Compilation is shared with builds/analysis via toolchain.json.
-
-function run(cmd: string): string {
-  return execSync(cmd, { cwd: ROOT, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-}
-
-/**
- * GCC 2.95 exits 33 whenever it emitted any diagnostic, and it writes a `.s`
- * even for units it reported errors in. So the status cannot tell a warning
- * from an error, and the presence of output does not mean the unit compiled.
- *
- * Trusting the status let a translation unit through whose `libcd.h`
- * declaration had been mangled by the `fp` register macro from `asm.h`
- * (`CdlFILE *CdSearchFile(CdlFILE *$30, ...)`), and diffFunc reported a 70.4%
- * masked score for a program that does not build. Classify from the
- * diagnostic text instead.
- */
-function hasCompileError(output: string): boolean {
-  for (const raw of output.split("\n")) {
-    const line = raw.trim();
-    if (!line) continue;
-    /* Context lines locate the next diagnostic; they are not diagnostics. */
-    if (line.startsWith("In file included from")) continue;
-    if (/^from .+:\d+[:,]?$/.test(line)) continue;
-    if (/: In (function|constructor|destructor|member function)\b/.test(line)) continue;
-    if (/\bwarning:\b/.test(line)) continue;
-    /* `file:line: message` with no `warning:` is an error. */
-    if (/^.+:\d+:\s+\S/.test(line)) return true;
-    if (/^cc1: /.test(line)) return true;
-  }
-  return false;
-}
-
-function runStep(label: string, cmd: string): string {
-  try {
-    return execSync(cmd, { cwd: ROOT, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-  } catch (e: any) {
-    const output = `${e.stderr ?? ""}\n${e.stdout ?? ""}`;
-    if (label === "cc1" && e.status === 33 && !hasCompileError(output)) {
-      return output;
-    }
-    const msg = (e.stderr || e.stdout || e.message || "").trim();
-    throw new Error(`${label}: ${msg}`);
-  }
-}
 
 /**
  * Compile one source through the configured toolchain.
@@ -120,12 +78,12 @@ function mnemonicDelta(target: RenderedWord[], compiled: RenderedWord[]): string
 
 /** Side-by-side view via GNU diff over the two symbolised instruction streams. */
 function renderColumns(result: OracleResult): void {
-  const ltmp = "/tmp/diffFunc-target.txt";
-  const rtmp = "/tmp/diffFunc-compiled.txt";
+  const ltmp = join(projectRoot(), "build/diffFunc", `columns-${process.pid}-target.txt`);
+  const rtmp = join(projectRoot(), "build/diffFunc", `columns-${process.pid}-compiled.txt`);
   writeFileSync(ltmp, result.targetWords.map((word) => word.text).join("\n") + "\n");
   writeFileSync(rtmp, result.candidateWords.map((word) => word.text).join("\n") + "\n");
   try {
-    process.stdout.write(execSync(`diff --color=always -y -W 120 ${ltmp} ${rtmp}`, {
+    process.stdout.write(execFileSync("diff", ["--color=always", "-y", "-W", "120", ltmp, rtmp], {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     }));
@@ -180,7 +138,7 @@ function doDiff(funcName: string, src: string, container: Container): void {
 function verifyLinkedBytes(funcName: string, container: Container): boolean {
   const span = requireFunctionLocation(funcName, container.id).span;
   try {
-    run(`make -j1 ${container.paths.builtBin}`);
+    buildContainer(container);
   } catch (e: any) {
     console.log("BYTE VERIFY UNAVAILABLE: the full build does not link. The per-function");
     console.log("  verdict above does not depend on this; fix the build to check placement:");
@@ -190,6 +148,10 @@ function verifyLinkedBytes(funcName: string, container: Container): boolean {
   const offset = vramToRom(container, span.vram);
   const orig = readFileSync(containerTargetPath(container)).subarray(offset, offset + span.size);
   const built = readFileSync(containerPath(container, "builtBin")).subarray(offset, offset + span.size);
+  if (orig.length !== span.size || built.length !== span.size) {
+    console.log("BYTE VERIFY UNAVAILABLE: original or linked function bytes are truncated.");
+    return false;
+  }
   if (orig.equals(built)) {
     console.log("VERIFIED: byte-identical in the linked binary, at the original address.");
     return true;
@@ -250,14 +212,15 @@ try {
 const container = location.container;
 
 const src = srcOverride ?? join(container.paths.srcDir, `${funcName}.c`);
-if (!existsSync(join(ROOT, src)) && !existsSync(src)) {
+if (!existsSync(join(projectRoot(), src)) && !existsSync(src)) {
   console.error(`Not found: ${src}`);
   process.exit(1);
 }
 
 if (bytesMode) {
-  compile(src, funcName, container);
-  verifyLinkedBytes(funcName, container);
+  const object = compile(src, funcName, container);
+  const compared = compareFunction(funcName, { objectPath: object, container });
+  if (compared.verdict !== "match" || !verifyLinkedBytes(funcName, container)) process.exitCode = 1;
 } else {
   doDiff(funcName, src, container);
 }

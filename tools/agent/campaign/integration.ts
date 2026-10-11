@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * Transactional integration — promoting a candidate as one change that either
  * lands whole or not at all.
@@ -29,7 +30,7 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { ROOT, compileSource, preprocessOnly, sourcePathFor } from "../decompToolchain.js";
+import { compileSource, preprocessOnly, sourcePathFor } from "../decompToolchain.js";
 import { requireFunctionLocation } from "../../lib/symbolIndex.js";
 import { compareFunction } from "../../lib/functionOracle.js";
 import { analyzeCSource } from "../cSourceGuard.js";
@@ -63,7 +64,7 @@ export type IntegrationResult =
 
 /** Every name the project's umbrella header puts in scope for a unit. */
 function scopeOf(functionName: string, sourceText: string): Set<string> | null {
-  const directory = join(ROOT, "build/integration", functionName);
+  const directory = join(projectRoot(), "build/integration", functionName);
   mkdirSync(directory, { recursive: true });
   const probe = join(directory, "scope.c");
   writeFileSync(probe, `#include "common.h"\n`);
@@ -212,7 +213,7 @@ export function planIntegration(functionName: string): Transaction | { refused: 
   return {
     functionName,
     patches: [{
-      path: relative(ROOT, sourcePath),
+      path: relative(projectRoot(), sourcePath),
       before,
       after: rewritten.source,
       reason: before === null
@@ -281,12 +282,12 @@ export function applyTransaction(
   }
 
   const snapshots = transaction.patches.map((patch) => ({
-    path: join(ROOT, patch.path),
+    path: join(projectRoot(), patch.path),
     before: patch.before,
   }));
   try {
     for (const patch of transaction.patches) {
-      const path = join(ROOT, patch.path);
+      const path = join(projectRoot(), patch.path);
       mkdirSync(join(path, ".."), { recursive: true });
       writeFileSync(path, patch.after);
     }
@@ -320,7 +321,7 @@ function stageAndVerify(transaction: Transaction): { verified: string[] } | { re
   const patch = transaction.patches.find((candidate) => candidate.path.endsWith(`${transaction.functionName}.c`));
   if (!patch) return { refused: "the transaction contains no patch for the function's own source" };
   const location = requireFunctionLocation(transaction.functionName);
-  const directory = join(ROOT, "build/integration", transaction.functionName, "staged");
+  const directory = join(projectRoot(), "build/integration", transaction.functionName, "staged");
   mkdirSync(directory, { recursive: true });
   const staged = join(directory, `${transaction.functionName}.c`);
   writeFileSync(staged, patch.after);
@@ -348,7 +349,7 @@ function verifyInTree(transaction: Transaction): { verified: string[] } | { refu
     if (!existsSync(sourcePath)) {
       return { refused: `${functionName} has no source to verify after the change` };
     }
-    const directory = join(ROOT, "build/integration", functionName, "in-tree");
+    const directory = join(projectRoot(), "build/integration", functionName, "in-tree");
     mkdirSync(directory, { recursive: true });
     try {
       const artifacts = compileSource(sourcePath, directory, functionName, {

@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Original-word static-chain census. No source, compiler, or plausibility
  * inputs: only entry-$2 reads and call-boundary-dead frame-address setups.
  * Functions are loaded through the shared splat-text-bounded byte inventory.
@@ -7,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadContainers, unresolvedCodeMembers } from "../lib/container.js";
 import { loadLibraryProject } from "../lib/project.js";
-import { ROOT } from "../agent/decompToolchain.js";
+
 import { loadMacroFunctions, type MacroFunction, type CensusFinding } from "./macroIdentity.js";
 import { decodeMacroFunction, hex, REGISTER_NAMES, type MacroInstruction } from "./macroInstructions.js";
 
@@ -255,6 +256,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const args = process.argv.slice(2);
   if (args.some(a => !["--json", "--write"].includes(a))) throw new Error("Usage: npx tsx tools/diagnostics/nestedFunctionScan.ts [--json] [--write]");
   const report = nestedFunctionCensus();
-  if (args.includes("--write")) { mkdirSync(join(ROOT, "build"), { recursive: true }); writeFileSync(join(ROOT, "build/nestedFunctionCensus.json"), JSON.stringify(report, null, 2) + "\n"); }
+  if (args.includes("--write")) { mkdirSync(join(projectRoot(), "build"), { recursive: true }); writeFileSync(join(projectRoot(), "build/nestedFunctionCensus.json"), JSON.stringify(report, null, 2) + "\n"); }
   console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatChainCensus(report));
 }

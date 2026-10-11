@@ -1,19 +1,10 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { requireCompilerCapability } from "../../lib/toolchain.js";
 import { execFileSync } from "child_process";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { basename, join, relative } from "path";
-import {
-  ROOT,
-  assembleCompilerOutput,
-  assembleTarget,
-  compileSource,
-  configuredCompilerPath,
-  disassembleObject,
-  loadFlagOverrides,
-  preprocessOnly,
-  resolveSource,
-} from "../decompToolchain.js";
+import { assembleCompilerOutput, assembleTarget, compileSource, configuredCompilerPath, disassembleObject, loadFlagOverrides, preprocessOnly, resolveSource } from "../decompToolchain.js";
 import { configuredFlags } from "../../lib/toolchain.js";
 import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
 import { projectCompilerArtifacts, resetCompilerArtifacts, writeObjectFunctionView } from "../../lib/compilerArtifacts.js";
@@ -40,7 +31,7 @@ function sha256File(path: string): string {
 }
 
 function relativePath(path: string): string {
-  return relative(ROOT, path).replaceAll("\\", "/");
+  return relative(projectRoot(), path).replaceAll("\\", "/");
 }
 
 function uniqueBy<T>(values: T[], key: (value: T) => string): T[] {
@@ -224,7 +215,7 @@ export function runCompilerOracle(
   options: { forceBuild?: boolean; analysis?: AllocatorCounterfactualAnalysis } = {},
 ): CompilerOracleReport {
   const source = resolveSource(functionName);
-  const analysisPath = join(ROOT, "build/allocatorCounterfactual", functionName, "analysis.json");
+  const analysisPath = join(projectRoot(), "build/allocatorCounterfactual", functionName, "analysis.json");
   /* Callers reach this through `ensureCompilerOracleReport`, which produces the
    * allocator counterfactual and hands it over. The file read is the fallback
    * for a direct call; neither path asks the caller to run a tool first. */
@@ -240,7 +231,7 @@ export function runCompilerOracle(
   const runId = createHash("sha256").update(JSON.stringify({
     source: sha256File(source), compiler: sha256File(diagnostic.compiler), interventions,
   })).digest("hex").slice(0, 16);
-  const runDirectory = join(ROOT, "build/compilerOracle/runs", functionName, runId);
+  const runDirectory = join(projectRoot(), "build/compilerOracle/runs", functionName, runId);
   mkdirSync(runDirectory, { recursive: true });
 
   const production = compileSource(source, join(runDirectory, "production"), functionName, { dumps: true, assemble: true });

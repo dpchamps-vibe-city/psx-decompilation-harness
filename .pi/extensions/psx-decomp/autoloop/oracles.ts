@@ -152,7 +152,7 @@ export async function environmentIsIntact(ctx: OracleContext): Promise<{ ok: boo
   const build = await runBuildCheck(ctx.projectRoot, 10 * 60_000, ctx.signal);
   if (build.code === 0) return { ok: true, detail: "" };
   const tail = [build.stdout, build.stderr].filter(Boolean).join("\n").split("\n").slice(-40).join("\n");
-  return { ok: false, detail: `npm run check-all exited ${build.code}\n${tail}` };
+  return { ok: false, detail: `all-container verification exited ${build.code}\n${tail}` };
 }
 
 /**

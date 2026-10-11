@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * findMissingLibDeps.ts — Find unmatched library .o files needed by matched ones
  *
@@ -18,16 +21,16 @@ import { execFileSync, execSync } from "child_process";
 import { configuredTool, configuredSdk } from "../lib/toolchain.js";
 import { join, dirname, basename, relative } from "path";
 import { fileURLToPath } from "url";
-import { loadPsxExeInfo, ROOT } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo } from "../lib/psxExeInfo.ts";
 import { verifiedMatches } from "../lib/sdkDetection.js";
 import { loadMemberMap } from "../lib/psyqMembers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 
-const BINARY_PATH = _info.binaryPath;
-const PAYLOAD_OFFSET = _info.payloadOffset;
-const LOAD_ADDR = _info.loadAddr;
+const BINARY_PATH = () => (_info().binaryPath);
+const PAYLOAD_OFFSET = () => (_info().payloadOffset);
+const LOAD_ADDR = () => (_info().loadAddr);
 
 interface LibMatch {
   vramStart: number;
@@ -49,15 +52,15 @@ interface ResolvedSymbol {
 }
 
 function vramToFileOffset(vram: number): number {
-  return vram - LOAD_ADDR + PAYLOAD_OFFSET;
+  return vram - LOAD_ADDR() + PAYLOAD_OFFSET();
 }
 
 function main() {
   // Get matched .o files
   console.error("Running detectLibFunctions.ts...");
-  const detectOutput = execSync("npx tsx tools/build/detectLibFunctions.ts", {
+  const detectOutput = installedExec(process.execPath, currentScriptArgs("tools/build/detectLibFunctions.ts", []), {
     encoding: "utf-8",
-    cwd: ROOT,
+    cwd: projectRoot(),
     maxBuffer: 10 * 1024 * 1024,
   });
   const matches = verifiedMatches<LibMatch>(detectOutput);
@@ -74,7 +77,7 @@ function main() {
     // Also get all global symbols from the .o file itself
     try {
       const nm = execFileSync(configuredTool("nm"), ["--defined-only", m.oPath],
-        { encoding: "utf-8", cwd: ROOT }
+        { encoding: "utf-8", cwd: projectRoot() }
       );
       for (const line of nm.split("\n")) {
         const match = line.match(/[0-9a-f]+\s+[TDBRCS]\s+(\S+)/);
@@ -90,7 +93,7 @@ function main() {
     try {
       const nm = execFileSync(configuredTool("nm"), ["-u", m.oPath], {
         encoding: "utf-8",
-        cwd: ROOT,
+        cwd: projectRoot(),
       });
       for (const line of nm.split("\n")) {
         const match = line.match(/U\s+(\S+)/);
@@ -115,7 +118,7 @@ function main() {
 
   // Lost collision variants are absent even from the converted .a. Resolve
   // their exported symbols through the original-member map FIRST.
-  for (const member of loadMemberMap(ROOT, configuredSdk().version)?.members ?? []) {
+  for (const member of loadMemberMap(projectRoot(), configuredSdk().version)?.members ?? []) {
     for (const symbol of member.symbols) {
       if (undefSyms.has(symbol.name) && !symDefInfo.has(symbol.name)) {
         symDefInfo.set(symbol.name, { archive: member.source, member: member.member, oPath: member.oPath, type: "func" });
@@ -129,7 +132,7 @@ function main() {
   for (const archive of archives) {
     try {
       const nm = execFileSync(configuredTool("nm"), ["--print-file-name", archive],
-        { encoding: "utf-8", cwd: ROOT }
+        { encoding: "utf-8", cwd: projectRoot() }
       );
       for (const line of nm.split("\n")) {
         const m = line.match(
@@ -139,7 +142,7 @@ function main() {
         const [, archivePath, member, type, sym] = m;
         if (undefSyms.has(sym) && !symDefInfo.has(sym)) {
           const libDir = basename(archivePath, ".a");
-          const oPath = relative(ROOT, join(converted, libDir, member));
+          const oPath = relative(projectRoot(), join(converted, libDir, member));
           symDefInfo.set(sym, {
             archive: archivePath,
             member,
@@ -153,7 +156,7 @@ function main() {
 
   // Now resolve VRAM addresses by reading relocations from matched .o files
   // and decoding the corresponding instructions in the binary
-  const binary = readFileSync(BINARY_PATH);
+  const binary = readFileSync(BINARY_PATH());
   const resolved: ResolvedSymbol[] = [];
 
   for (const [sym, refs] of undefSyms) {
@@ -174,7 +177,7 @@ function main() {
       try {
         // Get relocations for this symbol in the referencing .o
         const relocs = execFileSync(configuredTool("readelf"), ["-r", refPath],
-          { encoding: "utf-8", cwd: ROOT }
+          { encoding: "utf-8", cwd: projectRoot() }
         );
 
         // Extract .text bytes from the .o file for reading addends
@@ -182,7 +185,7 @@ function main() {
         try {
           const tmpPath = "/tmp/findMissingLibDeps_text.bin";
           execFileSync(configuredTool("objcopy"), ["-O", "binary", "-j", ".text", refPath, tmpPath],
-            { cwd: ROOT }
+            { cwd: projectRoot() }
           );
           oTextBytes = readFileSync(tmpPath);
         } catch {}

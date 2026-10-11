@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { classifyMemberBytes, measureCodeReference, measureMemberBytes } from "./memberClassification.ts";
 import { UNKNOWN_TOOLCHAIN, type ToolchainProfile } from "./toolchainProfile.ts";
 

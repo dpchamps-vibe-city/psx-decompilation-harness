@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * genDisasmSymbols.ts — Generate build/disassembler_symbol_addrs.txt
  *
@@ -23,10 +24,10 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { loadPsxExeInfo, ROOT, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
 
 const SYMBOL_ADDRS = exeSymbolAddrsPath();
-const OUT_PATH = join(ROOT, "build", "disassembler_symbol_addrs.txt");
+const OUT_PATH = () => (join(projectRoot(), "build", "disassembler_symbol_addrs.txt"));
 
 function main() {
   const write = process.argv.includes("--write");
@@ -50,7 +51,7 @@ function main() {
   const out = lines.join("\n") + "\n";
 
   if (!write) {
-    console.log(`Would write ${lines.length} symbols to ${OUT_PATH}`);
+    console.log(`Would write ${lines.length} symbols to ${OUT_PATH()}`);
     console.log(lines.slice(0, 5).join("\n"));
     if (lines.length > 5) console.log(`... (${lines.length - 5} more)`);
     console.log("\n(dry run — pass --write to apply)");
@@ -60,9 +61,9 @@ function main() {
   /* First writer into the build directory on a cold tree — `make split` runs
      before anything has created it, which is the path every autonomous
      workspace takes. */
-  mkdirSync(dirname(OUT_PATH), { recursive: true });
-  writeFileSync(OUT_PATH, out);
-  console.log(`Wrote ${lines.length} symbols to ${OUT_PATH}`);
+  mkdirSync(dirname(OUT_PATH()), { recursive: true });
+  writeFileSync(OUT_PATH(), out);
+  console.log(`Wrote ${lines.length} symbols to ${OUT_PATH()}`);
 }
 
 main();

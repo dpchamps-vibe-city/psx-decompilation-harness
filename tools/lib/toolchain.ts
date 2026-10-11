@@ -1,31 +1,33 @@
-/** Shared, root-relative toolchain configuration. No shell parsing, Makefile
- * inference, or guessed container flags. Read on every request so Pi sessions
- * and content caches see edits made while they are running. */
+/** Configured argv and explicitly owned paths. Read on each request so edits
+ * and same-process project switches cannot borrow another target's settings. */
 import { createHash } from "node:crypto";
+import { installedDependency } from "./installedScripts.js";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { fileDigest } from "./contentCache.js";
+import { fileOverrideFlags } from "./flagOverrides.js";
+import { prepareSupportedCompiler } from "../build/prepareCompiler.js";
+import { contextForProject, projectRoot, resolveOwnedPath, type OwnedPath, type RuntimeContext } from "./runtimeContext.js";
+export { HARNESS_ROOT } from "./runtimeContext.js";
 
-export const HARNESS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const TOOLCHAIN_FILE = "toolchain.json";
 export const TOOL_NAMES = ["cc1", "cpp", "as", "ld", "objcopy", "objdump", "nm", "readelf", "python", "splat", "spimdisasm", "maspsx", "m2c"] as const;
 export type ToolName = typeof TOOL_NAMES[number] | "psyq2elf";
 export const FLAG_NAMES = ["cpp", "cc1", "as", "ld", "maspsx", "m2c", "spimdisasm"] as const;
 export type FlagName = typeof FLAG_NAMES[number];
+export type ConfiguredPath = string | OwnedPath;
 export interface ToolchainConfig {
   $schema?: string;
   schemaVersion: 1;
-  compiler: { family: string; version: string; source?: string; capabilities: string[] };
-  tools: Record<typeof TOOL_NAMES[number], string> & { psyq2elf?: string };
+  compiler: { family: string; version: string; source?: ConfiguredPath; capabilities: string[] };
+  tools: Record<typeof TOOL_NAMES[number], ConfiguredPath> & { psyq2elf?: ConfiguredPath };
   includeDirs: string[];
   flags: Record<FlagName, string[]>;
   /** A profile replaces the named flag arrays; omitted arrays inherit base. */
   profiles: Record<string, Partial<Record<FlagName, string[]>> & { includeDirs?: string[] }>;
-  /** Exact owner id first, then kind (exe/overlay/library). No implicit selection. */
   containerProfiles: Record<string, string>;
-  /** Additional cc1 flags, keyed by source/function stem. */
-  fileFlags: Record<string, string[]>;
-  sdk: { version: string; convertedDir: string; originalDir: string; signatures: string };
+  sdk: { version: string; convertedDir: ConfiguredPath; originalDir: ConfiguredPath; signatures: ConfiguredPath; headers?: ConfiguredPath };
 }
 function object(value: unknown, at: string): Record<string, any> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${TOOLCHAIN_FILE}: ${at} must be an object`);
@@ -34,27 +36,34 @@ function object(value: unknown, at: string): Record<string, any> {
 function keys(value: Record<string, any>, allowed: readonly string[], at: string): void {
   for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new Error(`${TOOLCHAIN_FILE}: unknown ${at}.${key}`);
 }
-function string(value: unknown, at: string): void {
+function string(value: unknown, at: string): asserts value is string {
   if (typeof value !== "string" || !value.trim() || value.includes("\0")) throw new Error(`${TOOLCHAIN_FILE}: ${at} must be a non-empty string`);
+}
+function ownedPath(value: unknown, at: string, root: string): void {
+  if (typeof value === "string") { string(value, at); return; }
+  const path = object(value, at); keys(path, ["origin", "path"], at);
+  string(path.origin, `${at}.origin`); string(path.path, `${at}.path`);
+  resolveOwnedPath(path as OwnedPath, contextForProject(root));
 }
 function strings(value: unknown, at: string): void {
   if (!Array.isArray(value)) throw new Error(`${TOOLCHAIN_FILE}: ${at} must be an array of arguments, not a shell command`);
   for (const item of value) string(item, at);
 }
-export function loadToolchain(root = HARNESS_ROOT): ToolchainConfig {
+export function loadToolchain(root = projectRoot()): ToolchainConfig {
   let value: any;
   try { value = JSON.parse(readFileSync(join(root, TOOLCHAIN_FILE), "utf8")); }
   catch (error) { throw new Error(`Cannot load ${join(root, TOOLCHAIN_FILE)}: ${String(error)}`); }
   object(value, "config");
-  keys(value, ["$schema", "schemaVersion", "compiler", "tools", "includeDirs", "flags", "profiles", "containerProfiles", "fileFlags", "sdk"], "config");
+  if (Object.hasOwn(value, "fileFlags")) throw new Error(`${TOOLCHAIN_FILE}: fileFlags is unsupported; use configs/flag_overrides.mk`);
+  keys(value, ["$schema", "schemaVersion", "compiler", "tools", "includeDirs", "flags", "profiles", "containerProfiles", "sdk"], "config");
   if (value.schemaVersion !== 1) throw new Error(`${TOOLCHAIN_FILE}: unsupported schemaVersion ${value.schemaVersion}`);
   object(value.compiler, "compiler"); keys(value.compiler, ["family", "version", "source", "capabilities"], "compiler");
   string(value.compiler.family, "compiler.family"); string(value.compiler.version, "compiler.version");
-  if (value.compiler.source !== undefined) string(value.compiler.source, "compiler.source");
+  if (value.compiler.source !== undefined) ownedPath(value.compiler.source, "compiler.source", root);
   strings(value.compiler.capabilities, "compiler.capabilities");
   object(value.tools, "tools"); keys(value.tools, [...TOOL_NAMES, "psyq2elf"], "tools");
-  for (const name of TOOL_NAMES) string(value.tools[name], `tools.${name}`);
-  if (value.tools.psyq2elf !== undefined) string(value.tools.psyq2elf, "tools.psyq2elf");
+  for (const name of TOOL_NAMES) ownedPath(value.tools[name], `tools.${name}`, root);
+  if (value.tools.psyq2elf !== undefined) ownedPath(value.tools.psyq2elf, "tools.psyq2elf", root);
   strings(value.includeDirs, "includeDirs");
   object(value.flags, "flags"); keys(value.flags, FLAG_NAMES, "flags");
   for (const name of FLAG_NAMES) strings(value.flags[name], `flags.${name}`);
@@ -66,31 +75,46 @@ export function loadToolchain(root = HARNESS_ROOT): ToolchainConfig {
   object(value.containerProfiles, "containerProfiles");
   for (const [id, name] of Object.entries(value.containerProfiles)) {
     string(name, `containerProfiles.${id}`);
-    if (!Object.hasOwn(value.profiles, name as string)) throw new Error(`${TOOLCHAIN_FILE}: container ${id} selects unknown profile ${name}`);
+    if (!Object.hasOwn(value.profiles, name)) throw new Error(`${TOOLCHAIN_FILE}: container ${id} selects unknown profile ${name}`);
   }
-  object(value.fileFlags, "fileFlags");
-  for (const [name, args] of Object.entries(value.fileFlags)) strings(args, `fileFlags.${name}`);
-  object(value.sdk, "sdk"); keys(value.sdk, ["version", "convertedDir", "originalDir", "signatures"], "sdk");
-  for (const name of ["version", "convertedDir", "originalDir", "signatures"]) string(value.sdk[name], `sdk.${name}`);
+  object(value.sdk, "sdk"); keys(value.sdk, ["version", "convertedDir", "originalDir", "signatures", "headers"], "sdk");
+  string(value.sdk.version, "sdk.version");
+  for (const name of ["convertedDir", "originalDir", "signatures"]) ownedPath(value.sdk[name], `sdk.${name}`, root);
+  if (value.sdk.headers !== undefined) ownedPath(value.sdk.headers, "sdk.headers", root);
   return value as ToolchainConfig;
 }
-/** Paths containing '/' are anchored to the template root; bare names use PATH. */
-export function configuredTool(name: ToolName, root = HARNESS_ROOT): string {
+function preparePinnedPath(value: ConfiguredPath, path: string, context: RuntimeContext): string {
+  if (typeof value !== "object" || value.origin !== "runtime" || existsSync(path)) return path;
+  if (value.path === "dependencies/compiler/gcc-2.95.2-psx/cc1") return prepareSupportedCompiler(context.projectRoot);
+  const match = /^dependencies\/(m2c|maspsx|psx_psyq_signatures)\/([a-f0-9]{40})(?:\/|$)/.exec(value.path);
+  if (!match) return path;
+  const manifest = JSON.parse(readFileSync(join(context.harnessRoot, "templates/vendor-sources.json"), "utf8"));
+  if (!manifest.sources.some((source: { name: string; revision: string }) => source.name === match[1] && source.revision === match[2])) throw new Error(`Unknown public dependency pin: ${value.path}`);
+  execFileSync(process.execPath, ["--import", installedDependency("tsx", context.harnessRoot), join(context.harnessRoot, "tools/lib/scriptHost.ts"), join(context.harnessRoot, "tools/build/prepareDependencies.ts"), "--project", context.projectRoot], { cwd: context.projectRoot, stdio: "inherit" });
+  if (!existsSync(path)) throw new Error(`Pinned dependency did not provide configured path: ${path}`);
+  return path;
+}
+/** Bare configured commands use PATH; relative paths have exactly one owner. */
+export function configuredTool(name: ToolName, root = projectRoot()): string {
   const value = loadToolchain(root).tools[name];
   if (!value) throw new Error(`${TOOLCHAIN_FILE}: tools.${name} is not configured`);
-  if (value.includes("/") || isAbsolute(value)) return resolve(root, value);
-  if (name === "maspsx" || name === "m2c") return executablePath(value, root) ?? resolve(root, value);
-  return value;
+  if (typeof value === "object") {
+    const context = contextForProject(root);
+    return preparePinnedPath(value, resolveOwnedPath(value, context), context);
+  }
+  return value.includes("/") || isAbsolute(value) ? resolve(root, value) : value;
+}
+export function configuredCompilerSource(root = projectRoot()): string | undefined {
+  const value = loadToolchain(root).compiler.source;
+  return value === undefined ? undefined : resolveOwnedPath(value, contextForProject(root));
 }
 export interface FlagContext { id?: string | undefined; kind: "exe" | "overlay" | "library"; profile?: string }
-export function configuredFlags(name: FlagName, container?: FlagContext, root = HARNESS_ROOT): string[] {
+export function configuredFlags(name: FlagName, container?: FlagContext, root = projectRoot()): string[] {
   const config = loadToolchain(root);
   const profile = container ? container.profile ?? config.containerProfiles[container.id ?? ""] ?? config.containerProfiles[container.kind] : undefined;
   if (profile && !config.profiles[profile]) throw new Error(`${TOOLCHAIN_FILE}: unknown profile ${profile}`);
   const selected = profile ? config.profiles[profile] : undefined;
   const flags = [...(selected?.[name] ?? config.flags[name])];
-  // Includes are shared between production and diagnostics. Preserve one argv
-  // item per path, including paths with spaces; never join them into a shell.
   if (name === "cpp" || name === "as") flags.unshift(...(selected?.includeDirs ?? config.includeDirs).map(p => `-I${resolve(root, p)}`));
   for (let i = 0; i < flags.length; i++) {
     if (flags[i] === "-I" && flags[i + 1]) flags[++i] = resolve(root, flags[i]!);
@@ -98,27 +122,36 @@ export function configuredFlags(name: FlagName, container?: FlagContext, root = 
   }
   return flags;
 }
-export function configuredFileFlags(stem: string, root = HARNESS_ROOT): string[] {
-  return [...(loadToolchain(root).fileFlags[stem] ?? [])];
+export function configuredFileFlags(stem: string, root = projectRoot()): string[] { return fileOverrideFlags(root, stem); }
+export function configuredSdk(root = projectRoot()): { version: string; convertedDir: string; originalDir: string; signatures: string } {
+  const sdk = loadToolchain(root).sdk, context = contextForProject(root);
+  return { version: sdk.version, convertedDir: resolveOwnedPath(sdk.convertedDir, context), originalDir: resolveOwnedPath(sdk.originalDir, context), signatures: preparePinnedPath(sdk.signatures, resolveOwnedPath(sdk.signatures, context), context) };
 }
-export function configuredSdk(root = HARNESS_ROOT): ToolchainConfig["sdk"] {
-  const sdk = loadToolchain(root).sdk;
-  return { ...sdk, convertedDir: resolve(root, sdk.convertedDir), originalDir: resolve(root, sdk.originalDir), signatures: resolve(root, sdk.signatures) };
+export function configuredSdkHeaders(root = projectRoot()): string[] {
+  const headers = loadToolchain(root).sdk.headers;
+  return headers ? [resolveOwnedPath(headers, contextForProject(root))] : [];
 }
-export function requireCompilerCapability(capability: string, root = HARNESS_ROOT): void {
+export function requireCompilerCapability(capability: string, root = projectRoot()): void {
   const compiler = loadToolchain(root).compiler;
   if (!compiler.capabilities.includes(capability)) throw new Error(`${capability} is not supported by configured ${compiler.family} ${compiler.version}; use ordinary compilation/byte verification or configure a supported analysis toolchain`);
 }
-export function executablePath(command: string, root = HARNESS_ROOT): string | null {
+export function executablePath(command: string, root = projectRoot()): string | null {
   const candidates = command.includes("/") ? [resolve(root, command)] : (process.env.PATH ?? "").split(delimiter).map(p => resolve(root, p, command));
   return candidates.find(p => existsSync(p) && statSync(p).isFile()) ?? null;
 }
-export function toolchainDigest(root = HARNESS_ROOT): string {
-  return createHash("sha256").update(readFileSync(join(root, TOOLCHAIN_FILE))).digest("hex");
+/** GCC's configured preprocessor driver delegates to a separate cc1 binary.
+ * Its bytes are an input even when the driver itself did not change. */
+export function configuredCppFrontend(root = projectRoot()): string | null {
+  const cpp = executablePath(configuredTool("cpp", root), root);
+  if (!cpp) return null;
+  return loadToolchain(root).compiler.family === "gcc"
+    ? executablePath(execFileSync(cpp, ["-print-prog-name=cc1"], { cwd: root, encoding: "utf8" }).trim(), root)
+    : cpp;
 }
-export function toolchainExecutables(root = HARNESS_ROOT): Record<string, { command: string; path: string | null; sha256: string | null }> {
+export function toolchainDigest(root = projectRoot()): string { return createHash("sha256").update(readFileSync(join(root, TOOLCHAIN_FILE))).digest("hex"); }
+export function toolchainExecutables(root = projectRoot()): Record<string, { command: string; path: string | null; sha256: string | null }> {
   return Object.fromEntries(Object.keys(loadToolchain(root).tools).map(name => {
     const command = configuredTool(name as ToolName, root), path = executablePath(command, root);
-    return [name, { command, path, sha256: path ? createHash("sha256").update(readFileSync(path)).digest("hex") : null }];
+    return [name, { command, path, sha256: path ? fileDigest(path) : null }];
   }));
 }

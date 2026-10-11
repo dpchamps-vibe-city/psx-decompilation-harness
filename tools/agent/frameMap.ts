@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * frameMap.ts — decompose a target function's stack frame and read its
  * signature off the ABI.
@@ -29,14 +30,7 @@
 
 import { existsSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
-import {
-  ROOT,
-  type DisassembledInstruction,
-  assembleTarget,
-  disassembleFunctionObject,
-  normalizeFunctionName,
-  resolveAsmSource,
-} from "./decompToolchain.js";
+import { type DisassembledInstruction, assembleTarget, disassembleFunctionObject, normalizeFunctionName, resolveAsmSource } from "./decompToolchain.js";
 import { BRANCH_MNEMONICS, buildBlocks, defUse } from "./webAnalysis.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 
@@ -520,7 +514,7 @@ function scanCallSites(callee: string, content: string): CallSiteVerdict[] {
 }
 
 function callersOf(name: string): string[] {
-  const path = join(ROOT, "build/callGraph.json");
+  const path = join(projectRoot(), "build/callGraph.json");
   if (!existsSync(path)) return [];
   try {
     const graph = JSON.parse(readFileSync(path, "utf-8"));
@@ -766,7 +760,7 @@ function main(): void {
   }
 
   const name = normalizeFunctionName(positional[0]);
-  const scratch = join(ROOT, "build/triage", `${name}-frame`);
+  const scratch = join(projectRoot(), "build/triage", `${name}-frame`);
   let instructions: DisassembledInstruction[];
   try {
     instructions = disassembleFunctionObject(assembleTarget(name, scratch), name);

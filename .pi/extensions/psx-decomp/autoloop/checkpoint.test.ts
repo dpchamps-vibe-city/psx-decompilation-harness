@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_LOOP_CONFIG } from "./config.ts";
 import { type ContextReading } from "./context.ts";

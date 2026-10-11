@@ -1,3 +1,4 @@
+import { projectRoot } from "./runtimeContext.js";
 /**
  * overlayManifest.ts — the archive member manifest every later tool reads.
  *
@@ -10,7 +11,7 @@
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, writeFileSync } from "fs";
 import { join } from "path";
-import { ROOT } from "./psxExeInfo.js";
+
 
 export const MANIFEST_PATH = "configs/overlays.json";
 
@@ -77,11 +78,11 @@ export function memberId(index: number): string {
   return `ovl_${String(index).padStart(2, "0")}`;
 }
 
-export function manifestPath(root = ROOT): string {
+export function manifestPath(root = projectRoot()): string {
   return join(root, MANIFEST_PATH);
 }
 
-export function loadManifest(root = ROOT): OverlayManifest | null {
+export function loadManifest(root = projectRoot()): OverlayManifest | null {
   const path = manifestPath(root);
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, "utf-8")) as OverlayManifest;
@@ -107,7 +108,7 @@ export function codeMembers(manifest: OverlayManifest): ManifestMember[] {
 }
 
 /** Where extractArchive.ts writes a member's bytes. */
-export function memberBinPath(member: ManifestMember, root = ROOT): string {
+export function memberBinPath(member: ManifestMember, root = projectRoot()): string {
   return join(root, "extracted/overlays", `${member.id}.bin`);
 }
 
@@ -120,7 +121,7 @@ export function readMemberBytes(manifest: OverlayManifest, member: ManifestMembe
   const extracted = memberBinPath(member);
   if (existsSync(extracted)) return readFileSync(extracted);
 
-  const archive = join(ROOT, manifest.archive.dataPath);
+  const archive = join(projectRoot(), manifest.archive.dataPath);
   const fd = openSync(archive, "r");
   try {
     const buffer = Buffer.allocUnsafe(member.size);

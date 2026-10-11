@@ -1,14 +1,10 @@
+import { fixtureContext } from "../testing/runtimeTestContext.js";
+import { ROOT, test } from "../testing/runtimeTestContext.js";
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import {
-  ROOT,
-  CC1_FLAGS,
-  AS_FLAGS,
-  CPP_FLAGS,
-  configuredMaspsxFlags,
-} from "./decompToolchain.js";
+import { CC1_FLAGS, AS_FLAGS, CPP_FLAGS, configuredMaspsxFlags } from "./decompToolchain.js";
 
 /**
  * The diagnostic tools must preprocess, compile and assemble exactly as the
@@ -21,7 +17,7 @@ import {
  * both sides derive from the same line, so it passes by construction. What can
  * still break is the parsing, and the discipline that keeps a single source.
  */
-const ALL = { CC1_FLAGS, AS_FLAGS, CPP_FLAGS, MASPSX_FLAGS: configuredMaspsxFlags() };
+const ALL = fixtureContext(ROOT, () => ({ CC1_FLAGS, AS_FLAGS, CPP_FLAGS, MASPSX_FLAGS: configuredMaspsxFlags() }));
 
 test("toolchain parity: no Makefile expansion residue survives parsing", () => {
   for (const [name, flags] of Object.entries(ALL)) {

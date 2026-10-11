@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * bootstrapOverlay.ts — generate an overlay container's configs from scratch.
  *
@@ -23,7 +24,7 @@ import { configuredTool, configuredFlags } from "../lib/toolchain.js";
 import { execFileSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import {
   containerPath,
   containerTargetPath,
@@ -57,12 +58,12 @@ const only = containerIdx >= 0 ? args[containerIdx + 1] : undefined;
 
 const manifest = requireManifest();
 const profile = detectToolchain();
-const exeInfo = loadPsxExeInfo();
-const exeImage = { start: exeInfo.loadAddr, end: exeInfo.loadAddr + exeInfo.payloadSize };
+const exeInfo = () => (loadPsxExeInfo());
+const exeImage = () => ({ start: exeInfo().loadAddr, end: exeInfo().loadAddr + exeInfo().payloadSize });
 
-const containers = only
+const containers = () => (only
   ? [requireContainer(only)]
-  : loadContainers().filter((container) => container.kind === "overlay");
+  : loadContainers().filter((container) => container.kind === "overlay"));
 
 function hex(value: number): string {
   return `0x${value.toString(16).toUpperCase()}`;
@@ -80,7 +81,7 @@ function ensureDir(path: string): void {
  * container prefix that makes `(container, vram)` one token.
  */
 function writeDisasmSymbols(container: Container, ownFunctions: readonly OverlayFunction[]): void {
-  const enginePath = join(ROOT, ENGINE_EXPORT_PATH);
+  const enginePath = join(projectRoot(), ENGINE_EXPORT_PATH);
   const engineLines: string[] = [];
   if (existsSync(enginePath)) {
     for (const line of readFileSync(enginePath, "utf-8").split("\n")) {
@@ -99,9 +100,9 @@ function runSpimdisasm(
   outDir: string,
   options: { unknown: boolean; csv: string; splitFunctions?: string; context?: string }
 ): void {
-  mkdirSync(join(ROOT, outDir), { recursive: true });
+  mkdirSync(join(projectRoot(), outDir), { recursive: true });
   const sectionSplits = join(container.paths.disasmDir, "section_splits.csv");
-  writeFileSync(join(ROOT, sectionSplits), overlaySectionSplits(container.loadAddr, layout));
+  writeFileSync(join(projectRoot(), sectionSplits), overlaySectionSplits(container.loadAddr, layout));
   const argv = [
     "singleFileDisasm",
     ...configuredFlags("spimdisasm", container),
@@ -121,9 +122,9 @@ function runSpimdisasm(
     "--symbol-addrs",
     container.paths.disasmSymbolAddrs,
   ];
-  execFileSync(configuredTool("spimdisasm"), argv, { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
+  execFileSync(configuredTool("spimdisasm"), argv, { cwd: projectRoot(), stdio: ["ignore", "ignore", "inherit"] });
 
-  const dir = join(ROOT, outDir);
+  const dir = join(projectRoot(), outDir);
   for (const entry of readdirSync(dir)) {
     if (entry.endsWith(".text.s")) rmSync(join(dir, entry));
   }
@@ -144,7 +145,7 @@ function sha1Of(path: string): string {
  * base are never resident together, so one can never call the other.
  */
 function crossSlotSymbolFiles(container: Container, bytes: Buffer): string[] {
-  const refs = collectSelfReferences({ id: container.id, bytes, exeImage });
+  const refs = collectSelfReferences({ id: container.id, bytes, exeImage: exeImage() });
   const targets = [...refs.calls, ...refs.jumps];
   const files: string[] = [];
   for (const other of loadContainers()) {
@@ -269,7 +270,7 @@ function writeExports(container: Container): void {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(0x[0-9A-Fa-f]+)\s*;/);
     if (match) lines.push(`${match[1]} = ${match[2]};`);
   }
-  const path = join(ROOT, container.paths.disasmDir, "exports.txt");
+  const path = join(projectRoot(), container.paths.disasmDir, "exports.txt");
   ensureDir(path);
   writeFileSync(path, lines.join("\n") + "\n");
 }
@@ -280,7 +281,7 @@ for (const container of loadContainers()) writeExports(container);
 
 let failures = 0;
 
-for (const container of containers) {
+for (const container of containers()) {
   const member = manifest.members.find((m) => m.id === container.id);
   if (!member) {
     console.error(`${container.id}: no manifest member`);
@@ -290,7 +291,7 @@ for (const container of containers) {
 
   const bytes = readMemberBytes(manifest, member);
   const consensus = deriveLayoutByStrategy(
-    { id: container.id, bytes, exeImage },
+    { id: container.id, bytes, exeImage: exeImage() },
     profile,
     container.loadAddr
   );
@@ -326,7 +327,7 @@ for (const container of containers) {
 
   const entries = parseCSV(containerPath(container, "functionsCsv"));
   const functions = overlayFunctionsFromContext(
-    entries, readFileSync(join(ROOT, contextPath), "utf-8"), symbolPrefix(container),
+    entries, readFileSync(join(projectRoot(), contextPath), "utf-8"), symbolPrefix(container),
     container.loadAddr + layout.textStart, container.loadAddr + layout.dataStart,
     overlayDirectCalls(bytes, container.loadAddr, layout),
   );
@@ -382,7 +383,7 @@ for (const container of containers) {
 
   const splatPath = containerPath(container, "splat");
   ensureDir(splatPath);
-  const crossSlot = crossSlotSymbolFiles(container, bytes).filter((path) => existsSync(join(ROOT, path)));
+  const crossSlot = crossSlotSymbolFiles(container, bytes).filter((path) => existsSync(join(projectRoot(), path)));
   if (crossSlot.length > 0) {
     console.log(`  cross-slot symbol files: ${crossSlot.join(", ")}`);
   }
@@ -403,7 +404,7 @@ for (const container of containers) {
       return `INCLUDE "${other.paths.disasmDir}/exports.txt"`;
     }),
   ];
-  const includesPath = join(ROOT, container.paths.disasmDir, "ld_includes.txt");
+  const includesPath = join(projectRoot(), container.paths.disasmDir, "ld_includes.txt");
   ensureDir(includesPath);
   writeFileSync(includesPath, includes.join("\n") + "\n");
 

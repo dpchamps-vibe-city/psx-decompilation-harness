@@ -1,10 +1,13 @@
+import { fixtureContext } from "../../testing/runtimeTestContext.js";
+import { ROOT } from "../../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { installedScriptArgs } from "../../lib/installedScripts.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
-import { ROOT, compileSource, configuredCompilerPath } from "../decompToolchain.js";
+import { test } from "../../testing/runtimeTestContext.js";
+import { compileSource, configuredCompilerPath } from "../decompToolchain.js";
 import { parseCc1Assembly } from "../variant-lab/compile.js";
 import type { NormalizedInstruction } from "../variant-lab/types.js";
 import { compareResidual, residualIsExact, residualKey } from "./align.js";
@@ -37,8 +40,8 @@ import { mismatchedIndexes } from "./source-input.js";
 import { discoverWitness, type DiscoveredWitness } from "./witness.js";
 import { RESIDUAL_SEARCH_SCHEMA_VERSION, type CausalClosure, type ValueWeb } from "./types.js";
 
-const registry = loadMacroRegistry();
-const compilerAvailable = existsSync(configuredCompilerPath());
+const registry = fixtureContext(ROOT, () => (loadMacroRegistry()));
+const compilerAvailable = fixtureContext(ROOT, () => (existsSync(configuredCompilerPath())));
 
 function graphOf(source: string, functionName = "fixture") {
   return buildSemanticGraph(functionName, `${functionName}.c`, source, registry);
@@ -1342,13 +1345,13 @@ test("the projection is N x (1 - d) x c / jobs and degrades instead of lying", (
 });
 
 test("the CLI surface is one function name plus --derive-only, --source, and --json", () => {
-  const cli = join(ROOT, "tools/agent/searchResidualSourceSpace.ts");
+  const cli = "tools/agent/searchResidualSourceSpace.ts";
   for (const removed of ["--jobs", "--shard", "--start", "--resume", "--max-candidates", "--max-partitions"]) {
-    const result = spawnSync("npx", ["tsx", cli, "fixture", removed, "2"], { cwd: ROOT, encoding: "utf8" });
+    const result = spawnSync(process.execPath, installedScriptArgs(cli, ["fixture", removed, "2"], ROOT), { cwd: ROOT, encoding: "utf8" });
     assert.equal(result.status, 1, `${removed} should no longer be accepted`);
     assert.match(result.stderr, new RegExp(`unknown option: ${removed}`));
   }
-  const noName = spawnSync("npx", ["tsx", cli, "--derive-only"], { cwd: ROOT, encoding: "utf8" });
+  const noName = spawnSync(process.execPath, installedScriptArgs(cli, ["--derive-only"], ROOT), { cwd: ROOT, encoding: "utf8" });
   assert.equal(noName.status, 1);
   assert.match(noName.stderr, /missing function name/);
 });

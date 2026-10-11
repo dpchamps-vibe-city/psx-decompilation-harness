@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { DEFAULT_CHECKPOINT_AT_TOKENS, DEFAULT_LADDER, loadLoopConfig, parseLadder } from "./config.ts";
 import { parseArgs } from "./commands.ts";
 

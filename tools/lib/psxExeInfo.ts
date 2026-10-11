@@ -1,3 +1,4 @@
+import { projectRoot } from "./runtimeContext.js";
 /**
  * psxExeInfo.ts — Shared constants module for PSX-EXE binaries
  *
@@ -8,11 +9,11 @@
  */
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "fs";
-import { basename, join, dirname } from "path";
+import { basename, join, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-export const ROOT = join(__dirname, "../..");
+
 
 export interface PsxExeInfo {
   binaryPath: string;
@@ -41,13 +42,13 @@ export interface SectionLayout {
  * here rather than through tools/lib/container.ts because the container model
  * reads this module, not the other way round.
  */
-export function exeSplatYamlPath(root = ROOT): string {
+export function exeSplatYamlPath(root = projectRoot()): string {
   const moved = join(root, "configs/splat/exe.yaml");
   return existsSync(moved) ? moved : join(root, "configs/splat.yaml");
 }
 
 /** The PS-X EXE's `NAME = 0xADDR;` table, at whichever of the two paths exists. */
-export function exeSymbolAddrsPath(root = ROOT): string {
+export function exeSymbolAddrsPath(root = projectRoot()): string {
   const moved = join(root, "configs/symbols/exe.txt");
   return existsSync(moved) ? moved : join(root, "configs/symbol_addrs.txt");
 }
@@ -76,7 +77,7 @@ function parseSplatYamlHeader(root: string): { targetPath?: string; gpValue?: nu
 }
 
 /** splat's `basename` for the main executable, from the project config. */
-export function exeBasename(root = ROOT): string {
+export function exeBasename(root = projectRoot()): string {
   const configured = parseSplatYamlHeader(root).basename;
   if (configured) return configured;
   /* Fall back to the target file's own stem rather than a literal: the
@@ -108,7 +109,7 @@ function isPsxExe(path: string): boolean {
  * hardcoded filename: the executable's name is a fact about one game, and the
  * magic is a fact about the platform.
  */
-export function discoverPsxExe(root = join(ROOT, "extracted")): string | null {
+export function discoverPsxExe(root = join(projectRoot(), "extracted")): string | null {
   const stack = [root];
   while (stack.length > 0) {
     const dir = stack.pop()!;
@@ -170,9 +171,10 @@ function discoverGp(binary: Buffer, entryFileOffset: number): number | null {
  * Load PSX-EXE info from the binary and splat.yaml header.
  * Throws if binary not found or invalid.
  */
-export function loadPsxExeInfo(root = ROOT): PsxExeInfo {
+const exeInfoCache = new Map<string, { identity: string; info: PsxExeInfo }>();
+export function loadPsxExeInfo(root = projectRoot()): PsxExeInfo {
   const yaml = parseSplatYamlHeader(root);
-  const binaryPath = yaml.targetPath ? join(root, yaml.targetPath) : discoverPsxExe(join(root, "extracted"));
+  const binaryPath = yaml.targetPath ? resolve(root, yaml.targetPath) : discoverPsxExe(join(root, "extracted"));
 
   if (!binaryPath || !existsSync(binaryPath)) {
     throw new Error(
@@ -182,6 +184,10 @@ export function loadPsxExeInfo(root = ROOT): PsxExeInfo {
     );
   }
 
+  const stat = statSync(binaryPath, { bigint: true });
+  const identity = JSON.stringify([yaml, binaryPath, ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String)]);
+  const cached = exeInfoCache.get(resolve(root));
+  if (cached?.identity === identity) return { ...cached.info };
   const buf = readFileSync(binaryPath);
 
   if (buf.length < 0x800) {
@@ -206,7 +212,7 @@ export function loadPsxExeInfo(root = ROOT): PsxExeInfo {
     gpValue = yaml.gpValue ?? 0;
   }
 
-  return {
+  const info = {
     binaryPath,
     loadAddr,
     entryPoint,
@@ -215,13 +221,16 @@ export function loadPsxExeInfo(root = ROOT): PsxExeInfo {
     gpValue,
     fileEnd,
   };
+  if (exeInfoCache.size > 64) exeInfoCache.clear();
+  exeInfoCache.set(resolve(root), { identity, info });
+  return { ...info };
 }
 
 /**
  * Load section layout from build/sectionLayout.json.
  * Returns null if the file doesn't exist.
  */
-export function loadSectionLayout(root = ROOT): SectionLayout | null {
+export function loadSectionLayout(root = projectRoot()): SectionLayout | null {
   const layoutPath = join(root, "build/sectionLayout.json");
   if (!existsSync(layoutPath)) return null;
   return JSON.parse(readFileSync(layoutPath, "utf-8"));
@@ -230,7 +239,7 @@ export function loadSectionLayout(root = ROOT): SectionLayout | null {
 /**
  * Require section layout — throws if not available.
  */
-export function requireSectionLayout(root = ROOT): SectionLayout {
+export function requireSectionLayout(root = projectRoot()): SectionLayout {
   const layout = loadSectionLayout(root);
   if (!layout) {
     throw new Error(

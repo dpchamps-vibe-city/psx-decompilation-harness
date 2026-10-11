@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * Cold context: what the reconstruction can do without previously recovered C.
  *
@@ -17,8 +18,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { contextMode, describeContextMode, setContextMode, warmContextAllowed, withContextMode } from "./context-mode.js";
 import { resolveSignature } from "./callee-signature.js";
 import { reconstructFunction } from "./engine.js";

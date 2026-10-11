@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 import { execFileSync, spawn, spawnSync } from "child_process";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
@@ -13,6 +14,7 @@ import { loadLibraryProject, libraryContext } from "../lib/project.js";
 import { requireLibraryFunction } from "../lib/libraryTargets.js";
 import { compilerAssemblyOrigin, objectFunctionView, projectCompilerArtifacts, resetCompilerArtifacts, writeObjectFunctionView } from "../lib/compilerArtifacts.js";
 import type { FlagContext } from "../lib/toolchain.js";
+import { readFlagOverrides } from "../lib/flagOverrides.js";
 function compilationContext(stem: string, kind?: FlagContext["kind"], id?: string): FlagContext {
   if (kind === "library") return libraryContext(id ?? "");
   if (kind) return { kind, ...(id ? { id } : {}) };
@@ -24,7 +26,7 @@ function overrideKey(stem: string, context: FlagContext): string {
   return context.kind === "library" ? context.id! : stem;
 }
 
-export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
 
 /** Compatibility API for GCC analyses; configuration is not original-game evidence. */
 export function configuredGccVersion(): string {
@@ -66,17 +68,17 @@ export const CPP_FLAGS = liveFlags(configuredCppFlags);
  * all (an unconfigured tree, a fixture), so callers fall back to the
  * single-binary layout rather than failing.
  */
-export function containerForSymbol(name: string, root = ROOT): Container | null {
+export function containerForSymbol(name: string, root = projectRoot()): Container | null {
   return loadLibraryProject(root) ? null : imageContainerFor(name, root);
 }
 
 /** Container kind for a symbol; `exe` whenever the name does not say otherwise. */
-export function containerKindForSymbol(name: string, root = ROOT): "exe" | "overlay" {
+export function containerKindForSymbol(name: string, root = projectRoot()): "exe" | "overlay" {
   return containerForSymbol(name, root)?.kind ?? "exe";
 }
 
 /** The directory a symbol's translation unit belongs in. */
-export function sourceDirFor(name: string, root = ROOT): string {
+export function sourceDirFor(name: string, root = projectRoot()): string {
   return dirname(sourcePathFor(name, root));
 }
 
@@ -87,7 +89,7 @@ export function sourceDirFor(name: string, root = ROOT): string {
  * the callers that have to decide whether it exists at all — a stub check, an
  * m2c first pass, a policy sweep.
  */
-export function sourcePathFor(name: string, root = ROOT): string {
+export function sourcePathFor(name: string, root = projectRoot()): string {
   return join(root, resolveFunctionTarget(name, root).source);
 }
 
@@ -129,7 +131,7 @@ function commandError(tool: string, error: any): Error {
   return new Error(`${tool} failed${detail ? `: ${detail}` : ""}`);
 }
 
-export function runTool(command: string, args: string[], cwd: string = ROOT): string {
+export function runTool(command: string, args: string[], cwd: string = projectRoot()): string {
   try {
     return execFileSync(command, args, {
       cwd,
@@ -152,7 +154,7 @@ export function runTool(command: string, args: string[], cwd: string = ROOT): st
 export function runToolCapturing(
   command: string,
   args: string[],
-  cwd: string = ROOT,
+  cwd: string = projectRoot(),
 ): { stdout: string; stderr: string } {
   const result = spawnSync(command, args, {
     cwd,
@@ -168,7 +170,7 @@ export function runToolCapturing(
 export function runToolAsync(
   command: string,
   args: string[],
-  cwd: string = ROOT,
+  cwd: string = projectRoot(),
   signal?: AbortSignal,
 ): Promise<string> {
   return new Promise((resolvePromise, reject) => {
@@ -189,7 +191,7 @@ export function runToolAsync(
 export function runToolAsyncCapturingStderr(
   command: string,
   args: string[],
-  cwd: string = ROOT,
+  cwd: string = projectRoot(),
   signal?: AbortSignal,
 ): Promise<string> {
   return new Promise((resolvePromise, reject) => {
@@ -243,7 +245,7 @@ export function configuredToolchainIdentity() {
 }
 
 function relativePath(path: string): string {
-  return path.startsWith(`${ROOT}/`) ? path.slice(ROOT.length + 1) : path;
+  return path.startsWith(`${projectRoot()}/`) ? path.slice(projectRoot().length + 1) : path;
 }
 
 export function normalizeFunctionName(value: string): string {
@@ -252,7 +254,7 @@ export function normalizeFunctionName(value: string): string {
 
 export function resolveSource(funcName: string, requested?: string): string {
   const source = requested || resolveFunctionTarget(funcName).source;
-  const absolute = isAbsolute(source) ? source : join(ROOT, source);
+  const absolute = isAbsolute(source) ? source : join(projectRoot(), source);
   if (!existsSync(absolute)) throw new Error(`Source file not found: ${source}`);
   return absolute;
 }
@@ -325,8 +327,8 @@ export function rejectionFromDiagnostics(stderr: string): string | null {
   return `${first}${rest}`;
 }
 
-export function loadFlagOverrides(): Map<string, string[]> {
-  return new Map(Object.entries(loadToolchain().fileFlags));
+export function loadFlagOverrides(root = projectRoot()): Map<string, string[]> {
+  return readFlagOverrides(root);
 }
 
 export function assembleCompilerOutput(
@@ -374,7 +376,7 @@ export function detectImplicitDeclarations(preprocessed: string, stem: string): 
     "-Wimplicit",
   ];
   const result = spawnSync(configuredTool("cc1"), [...flags, preprocessed, "-o", "/dev/null"], {
-    cwd: ROOT,
+    cwd: projectRoot(),
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 64 * 1024 * 1024,
@@ -393,7 +395,7 @@ export function detectImplicitDeclarations(preprocessed: string, stem: string): 
  * any header it read changed, and a dependency list that omits headers is a
  * staleness hole (the Phase A1 failure in plans/automatic-matching-reconstruction.md).
  */
-export function sourceDependencyFiles(source: string, context?: FlagContext, root = ROOT): string[] {
+export function sourceDependencyFiles(source: string, context?: FlagContext, root = projectRoot()): string[] {
   const absoluteSource = isAbsolute(source) ? source : join(root, source);
   const output = runTool(configuredTool("cpp", root), [...configuredFlags("cpp", context ?? sourceFlagContext(absoluteSource, root), root), "-MM", "-MG", absoluteSource], root);
   const files: string[] = [];
@@ -421,8 +423,8 @@ export function sourceDependencyFiles(source: string, context?: FlagContext, roo
  * with the project configuration, and it would drift silently.
  */
 export function preprocessOnly(source: string, outputDir: string, stem: string, context?: FlagContext): string {
-  const absoluteSource = isAbsolute(source) ? source : join(ROOT, source);
-  const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(ROOT, outputDir);
+  const absoluteSource = isAbsolute(source) ? source : join(projectRoot(), source);
+  const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(projectRoot(), outputDir);
   mkdirSync(absoluteOutput, { recursive: true });
   const preprocessed = join(absoluteOutput, `${stem}.i`);
   runTool(configuredTool("cpp"), [...configuredFlags("cpp", context ?? sourceFlagContext(absoluteSource) ?? compilationContext(stem)), absoluteSource, "-o", preprocessed]);
@@ -458,8 +460,8 @@ export function compileSource(
     containerId?: string;
   } = {},
 ): CompileArtifacts {
-  const absoluteSource = isAbsolute(source) ? source : join(ROOT, source);
-  const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(ROOT, outputDir);
+  const absoluteSource = isAbsolute(source) ? source : join(projectRoot(), source);
+  const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(projectRoot(), outputDir);
   mkdirSync(absoluteOutput, { recursive: true });
 
   const preprocessed = join(absoluteOutput, `${stem}.i`);
@@ -520,15 +522,15 @@ export async function compileSourceAsync(
     containerId?: string;
   } = {},
 ): Promise<CompileArtifacts> {
-  const absoluteSource = isAbsolute(source) ? source : join(ROOT, source);
-  const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(ROOT, outputDir);
+  const absoluteSource = isAbsolute(source) ? source : join(projectRoot(), source);
+  const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(projectRoot(), outputDir);
   mkdirSync(absoluteOutput, { recursive: true });
   const preprocessed = join(absoluteOutput, `${stem}.i`);
   const assembly = join(absoluteOutput, `${stem}.s`);
   const object = join(absoluteOutput, `${stem}.c.o`);
   const context = compilationContext(stem, options.containerKind, options.containerId);
   resetCompilerArtifacts(absoluteOutput, stem);
-  await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", context), absoluteSource, "-o", preprocessed], ROOT, options.signal);
+  await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", context), absoluteSource, "-o", preprocessed], projectRoot(), options.signal);
   const overrides = options.useOverrides === false ? [] : (loadFlagOverrides().get(overrideKey(stem, context)) || []);
   const cc1Flags = [...configuredFlags("cc1", context), ...overrides];
   if (options.dumps) { requireCompilerCapability("gcc-rtl-dumps"); cc1Flags.push("-da"); }
@@ -538,7 +540,7 @@ export async function compileSourceAsync(
     await runToolAsync(configuredTool("python"), [
       configuredTool("maspsx"), ...configuredMaspsxFlags(context),
       "--gnu-as-path", configuredTool("as"), "-o", object, ...configuredFlags("as", context), assembly,
-    ], ROOT, options.signal);
+    ], projectRoot(), options.signal);
   }
   const result: CompileArtifacts = {
     source: absoluteSource, preprocessed, assembly, outputDir: absoluteOutput, stem, cc1Flags, diagnostics,
@@ -548,7 +550,7 @@ export async function compileSourceAsync(
   return result;
 }
 
-export function resolveAsmSource(funcName: string, root = ROOT): string | null {
+export function resolveAsmSource(funcName: string, root = projectRoot()): string | null {
   const path = join(root, resolveFunctionTarget(funcName, root).assembly.function);
   return existsSync(path) ? path : null;
 }
@@ -556,7 +558,7 @@ export function resolveAsmSource(funcName: string, root = ROOT): string | null {
 export function assembleTarget(funcName: string, outputDir: string): string {
   if (loadLibraryProject()) {
     const { member, fn, key } = requireLibraryFunction(funcName);
-    const directory = resolve(ROOT, outputDir); mkdirSync(directory, { recursive: true });
+    const directory = resolve(projectRoot(), outputDir); mkdirSync(directory, { recursive: true });
     const object = join(directory, `${key}.target.o`);
     const temporary = `${object}.${process.pid}.${assembleTargetSequence++}`;
     writeFileSync(temporary, member.bytes); renameSync(temporary, object);
@@ -576,11 +578,11 @@ export function assembleTarget(funcName: string, outputDir: string): string {
   const owner = containerForSymbol(funcName);
   const asFlags = configuredAsFlagsForContainer(owner?.kind ?? "exe", owner?.id);
 
-  const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(ROOT, outputDir);
+  const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(projectRoot(), outputDir);
   mkdirSync(absoluteOutput, { recursive: true });
   const wrapper = join(absoluteOutput, `${funcName}.target.s`);
   const object = join(absoluteOutput, `${funcName}.target.o`);
-  const relativeAsm = asmSource.slice(ROOT.length + 1);
+  const relativeAsm = asmSource.slice(projectRoot().length + 1);
 
   /*
    * Built under private names and moved into place, because these paths are

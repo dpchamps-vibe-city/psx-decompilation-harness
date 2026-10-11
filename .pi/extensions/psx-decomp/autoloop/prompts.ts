@@ -177,8 +177,8 @@ export function matchReport(diff: DiffResult, residual?: ResidualReading | null)
             "their terms are an artifact of the unresolved relocation, and no source edit moves them. "
           : "") +
         "This is a configuration defect, not a source one. The usual cause is a jump table with no " +
-        "`.rodata` attribution in the container's splat config — `npx tsx tools/build/deriveRodataSplits.ts " +
-        "--container <id>` says so, and the build's link rule rederives it. Fix that before rewriting anything.",
+        "`.rodata` attribution in the container's splat config — `psx_split_project(" +
+        "{container: \"<id>\", repairRodata: true})` says so, and the build's link rule rederives it. Fix that before rewriting anything.",
       );
     }
     if ((population > 0 || controlFlow > 0) && !(population === 0 && blind.length > 0)) {

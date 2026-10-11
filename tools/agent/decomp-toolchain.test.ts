@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { join } from "node:path";
 import { projectFixture } from "../testing/projectFixture.js";
 import {

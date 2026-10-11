@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { claimsEmptiness, readClosed, recordClosed, renderClosed, sourceSidePremise, searchedPremise, type ClosedDirection } from "./closedDirections.js";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

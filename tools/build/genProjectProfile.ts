@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * genProjectProfile.ts — Generate configs/project-profile.md from machine-readable sources
  *
@@ -28,11 +31,11 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { execSync } from "node:child_process";
-import { loadPsxExeInfo, exeBasename, ROOT } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, exeBasename } from "../lib/psxExeInfo.ts";
 import { digest, snapshot, readCache, writeCache, writeIfChanged } from "../lib/contentCache.js";
 
-const INFO_PATH = join(ROOT, "configs/project-info.json");
-const OUT_PATH = join(ROOT, "configs/project-profile.md");
+const INFO_PATH = () => (join(projectRoot(), "configs/project-info.json"));
+const OUT_PATH = () => (join(projectRoot(), "configs/project-profile.md"));
 import { configuredFlags, configuredSdk, loadToolchain, type FlagContext } from "../lib/toolchain.js";
 import { libraryContext, loadLibraryProject } from "../lib/project.js";
 
@@ -67,8 +70,8 @@ interface ProjectInfo {
 }
 
 function loadProjectInfo(): ProjectInfo {
-  if (!existsSync(INFO_PATH)) return {};
-  return JSON.parse(readFileSync(INFO_PATH, "utf-8"));
+  if (!existsSync(INFO_PATH())) return {};
+  return JSON.parse(readFileSync(INFO_PATH(), "utf-8"));
 }
 
 interface ToolchainFacts {
@@ -89,7 +92,7 @@ function parseToolchain(context: FlagContext): ToolchainFacts {
   return { family: config.compiler.family, gccVersion: config.compiler.version, cc1Flags: flags.join(" "),
     gThreshold: threshold ? Number(threshold.slice(2)) : null,
     aspsxVersion: aspsx >= 0 ? shim[aspsx + 1] ?? null : null,
-    builtBin: context.kind === "library" ? null : join(ROOT, "build", `${exeBasename()}.bin`) };
+    builtBin: context.kind === "library" ? null : join(projectRoot(), "build", `${exeBasename()}.bin`) };
 }
 
 /** Hash the built binary against the original payload — the byte-identity
@@ -118,16 +121,16 @@ function verifyByteIdentity(
  *  Formats raw dir names: 470 → "4.7", 3610 → "3.6.10". */
 function detectSdkVersion(): { version: string; detail: string } | null {
   try {
-    const key = digest(JSON.stringify(snapshot(ROOT, [loadPsxExeInfo().binaryPath, "build/sectionLayout.json", "configs/splat/exe.yaml",
+    const key = digest(JSON.stringify(snapshot(projectRoot(), [loadPsxExeInfo().binaryPath, "build/sectionLayout.json", "configs/splat/exe.yaml",
       dirname(configuredSdk().signatures), "toolchain.json", "tools/diagnostics/matchSignatures.ts", "tools/lib/psxExeInfo.ts",
       "tools/lib/container.ts", "tools/lib/overlayManifest.ts", "tools/lib/contentCache.ts", "tools/build/genProjectProfile.ts", "package-lock.json"],
       (p) => !p.includes("/.git/") && (p.endsWith(".json") || p.endsWith(".ts") || p.endsWith(".yaml")))));
-    const cache = join(ROOT, "build/cache/sdk-detection.json");
+    const cache = join(projectRoot(), "build/cache/sdk-detection.json");
     const hit = readCache<{ version: string; detail: string }>(cache, key);
     if (hit) { console.error("SDK detection: cache hit (inputs unchanged)"); return hit; }
     console.error("SDK detection: cache miss (absent, corrupt or changed inputs)");
-    const out = execSync("npx tsx tools/diagnostics/matchSignatures.ts", {
-      cwd: ROOT,
+    const out = installedExec(process.execPath, currentScriptArgs("tools/diagnostics/matchSignatures.ts", []), {
+      cwd: projectRoot(),
       encoding: "utf-8",
       timeout: 120_000,
       stdio: ["ignore", "pipe", "ignore"],
@@ -150,7 +153,7 @@ function detectSdkVersion(): { version: string; detail: string } | null {
  *  Derive the column rather than letting configs/project-info.json assert it,
  *  so a header that stops being generated cannot keep a stale label. */
 function headerEditability(path: string): string {
-  const full = join(ROOT, path);
+  const full = join(projectRoot(), path);
   if (!existsSync(full)) return "**MISSING** — configured but not present";
   if (statSync(full).isDirectory()) return "hand-edited directory (inspect file banners)";
   const banner = readFileSync(full, "utf-8").split("\n").slice(0, 6).join("\n");
@@ -187,8 +190,8 @@ required — see the small-data threshold above.
 
 /* --- main --- */
 
-function main() {
-  const write = process.argv.includes("--write");
+export function generateProjectProfile(args: string[] = []) {
+  const write = args.includes("--write");
 
   const project = loadLibraryProject();
   const exe = project ? null : loadPsxExeInfo();
@@ -280,10 +283,10 @@ ${exe ? `- Structural classification: \`npx tsx tools/agent/explainDiff.ts <func
     return;
   }
 
-  writeIfChanged(OUT_PATH, out);
-  console.log(`Wrote ${OUT_PATH}`);
+  writeIfChanged(OUT_PATH(), out);
+  console.log(`Wrote ${OUT_PATH()}`);
   console.log(`  compiler: GCC ${mk.gccVersion}-psx, -G threshold: ${mk.gThreshold ?? "?"}, aspsx: ${mk.aspsxVersion ?? "?"}`);
   console.log(`  byte-identity: ${check.verified ? "VERIFIED" : "NOT VERIFIED"} (${check.detail})`);
 }
 
-main();
+if (process.argv[1]?.endsWith("genProjectProfile.ts")) generateProjectProfile(process.argv.slice(2));

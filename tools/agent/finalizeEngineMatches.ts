@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * finalizeEngineMatches.ts — automated, reproducible finalization of the
  * reconstruction engine's byte-exact matches into the source tree.
@@ -39,7 +40,7 @@
 
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, compileSource } from "./decompToolchain.js";
+import { compileSource } from "./decompToolchain.js";
 import { requireFunctionLocation } from "../lib/symbolIndex.js";
 import { compareFunction } from "../lib/functionOracle.js";
 import { loadContainers, containerOfSymbol, EXE_CONTAINER_ID } from "../lib/container.js";
@@ -78,25 +79,25 @@ function srcPathFor(functionName: string): string | null {
   const container = containerOfSymbol(functionName, containers)
     ?? containers.find((c) => c.id === EXE_CONTAINER_ID);
   if (!container) return null;
-  return join(ROOT, container.paths.srcDir, `${functionName}.c`);
+  return join(projectRoot(), container.paths.srcDir, `${functionName}.c`);
 }
 
 /** All functions the engine matched exactly. Prefer the authoritative census
  *  (the current run's exact-candidate set); fall back to scanning persisted
  *  results when no census is present. */
 function exactCandidates(): string[] {
-  const censusPath = join(ROOT, RECON_DIR, "census.json");
+  const censusPath = join(projectRoot(), RECON_DIR, "census.json");
   if (existsSync(censusPath)) {
     try {
       const census = JSON.parse(readFileSync(censusPath, "utf-8"));
       return census.functions
         .filter((f: { state: string }) => f.state === "exact-candidate")
         .map((f: { functionName: string }) => f.functionName)
-        .filter((fn: string) => existsSync(join(ROOT, RECON_DIR, fn, "winner.c")))
+        .filter((fn: string) => existsSync(join(projectRoot(), RECON_DIR, fn, "winner.c")))
         .sort();
     } catch { /* fall through to a directory scan */ }
   }
-  const base = join(ROOT, RECON_DIR);
+  const base = join(projectRoot(), RECON_DIR);
   if (!existsSync(base)) return [];
   const names: string[] = [];
   for (const dir of readdirSync(base)) {
@@ -115,7 +116,7 @@ function exactCandidates(): string[] {
 function oracleVerdict(functionName: string, integrated: string, tag: string): { verdict: string } | { error: string } {
   try {
     const location = requireFunctionLocation(functionName);
-    const dir = join(ROOT, "build/finalizeEngineMatches", functionName, tag);
+    const dir = join(projectRoot(), "build/finalizeEngineMatches", functionName, tag);
     mkdirSync(dir, { recursive: true });
     const staged = join(dir, `${functionName}.c`);
     writeFileSync(staged, integrated);
@@ -164,7 +165,7 @@ export function finalizeTransactional(functionName: string, write: boolean): Fin
 }
 
 export function finalizeMatch(functionName: string, write: boolean): FinalizeOutcome {
-  const winnerPath = join(ROOT, RECON_DIR, functionName, "winner.c");
+  const winnerPath = join(projectRoot(), RECON_DIR, functionName, "winner.c");
   if (!existsSync(winnerPath)) return { functionName, status: "no-winner" };
   const srcPath = srcPathFor(functionName);
   if (!srcPath || !existsSync(srcPath)) return { functionName, status: "no-src" };

@@ -1,4 +1,6 @@
 #!/usr/bin/env npx tsx
+import { compatibleDomains, stableHash, type ComparisonDomain } from "../lib/cacheIdentity.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * experimentLedger.ts — what has already been measured, and what it cost.
  *
@@ -25,7 +27,7 @@
 
 import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { normalizeFunctionName } from "./decompToolchain.js";
 import { readClosed as readClosedRows, renderClosed } from "./closedDirections.js";
 import { objectHandsSymbolToAssembler } from "../lib/functionOracle.js";
 import { projectPath, sha256 } from "./provenance.js";
@@ -65,6 +67,8 @@ export interface LedgerEntry {
   sourcePath?: string;
   /** SHA-256 of the relocated words. Equal hashes are one experiment. */
   outputHash: string;
+  comparisonDomain?: ComparisonDomain;
+  producer?: { package?: string; location?: string };
   /** The staged residual key: [control-flow, population, schedule, allocation]. */
   key: number[];
   /**
@@ -105,12 +109,12 @@ export interface LedgerEntry {
 }
 
 function ledgerPath(functionName: string): string {
-  return join(ROOT, "build/experimentLedger", `${functionName}.jsonl`);
+  return join(projectRoot(), "build/experimentLedger", `${functionName}.jsonl`);
 }
 
 /** Where a measured source is preserved, keyed by its own hash. */
 export function variantPath(functionName: string, sourceHash: string): string {
-  return join(ROOT, "build/experimentLedger/sources", functionName, `${sourceHash.slice(0, 16)}.c`);
+  return join(projectRoot(), "build/experimentLedger/sources", functionName, `${sourceHash.slice(0, 16)}.c`);
 }
 
 /**
@@ -130,7 +134,7 @@ export function preserveVariant(functionName: string, sourceHash: string, source
 
 /** The preserved text of a ledger row, when it has one. */
 export function variantText(entry: LedgerEntry): string | undefined {
-  const path = entry.sourcePath ? join(ROOT, entry.sourcePath) : variantPath(entry.function, entry.sourceHash);
+  const path = entry.sourcePath ? join(projectRoot(), entry.sourcePath) : variantPath(entry.function, entry.sourceHash);
   return existsSync(path) ? readFileSync(path, "utf8") : undefined;
 }
 
@@ -151,6 +155,8 @@ export function readLedger(functionName: string): LedgerEntry[] {
 
 export interface RecordInput {
   functionName: string;
+  comparisonDomain?: ComparisonDomain;
+  producer?: { package?: string; location?: string };
   source: string;
   sourceText: string;
   /**
@@ -181,6 +187,15 @@ export interface RecordInput {
  * opposite: that is the repeat worth keeping, because it is the one that looks
  * like a new idea from the source side.
  */
+/** Legacy rows stay accessible, but missing semantic witnesses cannot license
+ * a cross-domain comparison. Never rewrite their hashes or retire their evidence. */
+export function domainsAgree(a: { comparisonDomain?: ComparisonDomain | undefined }, b: { comparisonDomain?: ComparisonDomain | undefined }): boolean {
+  return a.comparisonDomain || b.comparisonDomain ? compatibleDomains(a.comparisonDomain, b.comparisonDomain) : true;
+}
+export function comparisonIndex(entries: LedgerEntry[], domain: ComparisonDomain): { compatible: LedgerEntry[]; undetermined: LedgerEntry[] } {
+  return { compatible: entries.filter(e => compatibleDomains(e.comparisonDomain, domain)),
+    undetermined: entries.filter(e => !e.comparisonDomain) };
+}
 export function recordExperiment(input: RecordInput): LedgerEntry | undefined {
   /* A stub is the assembly measured against itself. Recording it writes a
      perfect score no source can ever beat, and `best()` then reports the
@@ -196,7 +211,7 @@ export function recordExperiment(input: RecordInput): LedgerEntry | undefined {
      was cleaned away is exactly when it is missing. */
   const preserved = preserveVariant(input.functionName, sourceHash, input.sourceText);
   if (readLedger(input.functionName).some((entry) =>
-    entry.sourceHash === sourceHash && entry.outputHash === input.outputHash)) {
+    entry.sourceHash === sourceHash && entry.outputHash === input.outputHash && domainsAgree(entry, input))) {
     return undefined;
   }
   return appendExperiment(input, sourceHash, preserved);
@@ -221,6 +236,8 @@ function appendExperiment(input: RecordInput, sourceHash: string, sourcePath: st
     sourceHash,
     sourcePath,
     outputHash: input.outputHash,
+    ...(input.comparisonDomain ? { comparisonDomain: input.comparisonDomain } : {}),
+    ...(input.producer ? { producer: input.producer } : {}),
     key: input.objective.key,
     exact: input.objective.exact === true,
     /* Only the blocks that are actually open, and only those the residual can
@@ -262,9 +279,10 @@ export interface AnnotatedEntry extends LedgerEntry {
 export function annotateRespellings(entries: LedgerEntry[]): AnnotatedEntry[] {
   const firstReached = new Map<string, string>();
   return entries.map((entry) => {
-    const first = firstReached.get(entry.outputHash);
+    const equality = entry.comparisonDomain ? `${stableHash(entry.comparisonDomain)}:${entry.outputHash}` : `legacy-unscoped:${entry.outputHash}`;
+    const first = firstReached.get(equality);
     if (first === undefined) {
-      firstReached.set(entry.outputHash, entry.at);
+      firstReached.set(equality, entry.at);
       return { ...entry };
     }
     return { ...entry, respellingOf: first };
@@ -288,11 +306,13 @@ export function priorMeasurement(
   functionName: string,
   sourceText: string,
   outputHash: string,
+  domain?: ComparisonDomain,
 ): PriorMeasurement {
   const sourceHash = sha256(sourceText);
   const entries = readLedger(functionName);
   const result: PriorMeasurement = {};
   for (const entry of entries) {
+    if (!domainsAgree(entry, { comparisonDomain: domain })) continue;
     if (!result.sameOutput && entry.outputHash === outputHash) result.sameOutput = entry;
     if (!result.sameSource && entry.sourceHash === sourceHash) result.sameSource = entry;
   }
@@ -313,8 +333,12 @@ export function isUnprovenZero(entry: LedgerEntry): boolean {
   return entry.exact !== true && entry.key.every((term) => term === 0);
 }
 
+export function currentDomainEntries(entries: LedgerEntry[]): LedgerEntry[] {
+  const domain = entries.at(-1)?.comparisonDomain;
+  return entries.filter(entry => domainsAgree(entry, { comparisonDomain: domain }));
+}
 export function best(entries: LedgerEntry[]): LedgerEntry | undefined {
-  return [...entries].sort((left, right) => {
+  return currentDomainEntries(entries).sort((left, right) => {
     if ((left.exact === true) !== (right.exact === true)) return left.exact === true ? -1 : 1;
     const leftZero = isUnprovenZero(left);
     const rightZero = isUnprovenZero(right);
@@ -396,6 +420,7 @@ const keyTotal = (key: number[]): number => key.reduce((total, term) => total + 
  * them as twenty would make any well-explored ledger look isolated.
  */
 export function valley(entries: LedgerEntry[]): Valley | undefined {
+  entries = currentDomainEntries(entries);
   const winner = best(entries);
   if (!winner || winner.exact === true) return undefined;
   const bestTotal = keyTotal(winner.key);
@@ -490,9 +515,10 @@ export function renderLedger(functionName: string, entries: LedgerEntry[]): stri
 
   const distinct = new Map<string, LedgerEntry[]>();
   for (const entry of entries) {
-    const group = distinct.get(entry.outputHash) ?? [];
+    const equality = `${entry.comparisonDomain ? stableHash(entry.comparisonDomain) : "legacy-unscoped"}:${entry.outputHash}`;
+    const group = distinct.get(equality) ?? [];
     group.push(entry);
-    distinct.set(entry.outputHash, group);
+    distinct.set(equality, group);
   }
 
   const lines = [
@@ -502,6 +528,9 @@ export function renderLedger(functionName: string, entries: LedgerEntry[]): stri
     `  ${entries.length} measurement(s), ${distinct.size} distinct compiled output(s)`,
   ];
 
+  const comparable = currentDomainEntries(entries);
+  if (comparable.length !== entries.length) lines.push(`  ${entries.length - comparable.length} historical row(s) remain visible but are not comparable in the current target/compiler/context/interpretation domain.`);
+  if (entries.some(e => !e.comparisonDomain)) lines.push("  Legacy rows lack target/compiler/context witnesses: cross-release compatibility is undetermined; historical hashes are retained unchanged.");
   const winner = best(entries);
   if (winner) {
     const mark = winner.exact === true ? " EXACT" : isUnprovenZero(winner) ? "  (zero residual, bytes still differ)" : "";

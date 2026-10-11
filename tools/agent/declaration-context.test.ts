@@ -1,6 +1,7 @@
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from "node:fs";
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations, globalViews } from "./declarationContext.js";
@@ -67,6 +68,7 @@ test("aliased backing arrays, pointer-to-array views and byte-biased views retai
 });
 test("private recursive tags remain scoped through context export", (t) => {
   const root = mkdtempSync(join(tmpdir(), "scoped-tags-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  copyFileSync(join(HARNESS_ROOT, "toolchain.json"), join(root, "toolchain.json"));
   mkdirSync(join(root, "include")); mkdirSync(join(root, "src/overlays/o"), { recursive: true });
   writeFileSync(join(root, "src/a.c"), "typedef struct Node { struct Node *next; int x; } Local; void a(Local *p) {}\n");
   writeFileSync(join(root, "src/overlays/o/b.c"), "typedef struct Node { struct Node *next; short y; } Local; void b(Local *p) {}\n");
@@ -80,6 +82,7 @@ test("private recursive tags remain scoped through context export", (t) => {
 });
 test("nested overlay local names are distinct and target preprocessing selects effective definitions", (t) => {
   const root = mkdtempSync(join(tmpdir(), "scoped-context-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  copyFileSync(join(HARNESS_ROOT, "toolchain.json"), join(root, "toolchain.json"));
   mkdirSync(join(root, "include")); mkdirSync(join(root, "src/overlays/ovl_1"), { recursive: true });
   writeFileSync(join(root, "include/shared.h"), "#define COUNT 7\ntypedef struct { int slots[COUNT]; } Shared;\n");
   writeFileSync(join(root, "src/a.c"), '#include "shared.h"\ntypedef struct { Shared *s; } Local;\nvoid a(Local *p) {}\n');

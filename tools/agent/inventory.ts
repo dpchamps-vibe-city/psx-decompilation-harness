@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * inventory.ts — order-independent content comparison between a target
  * function and the current source's compiled output.
@@ -30,15 +31,7 @@
 
 import { rmSync } from "fs";
 import { join } from "path";
-import {
-  ROOT,
-  type DisassembledInstruction,
-  assembleTarget,
-  compileSource,
-  disassembleFunctionObject,
-  normalizeFunctionName,
-  resolveSource,
-} from "./decompToolchain.js";
+import { type DisassembledInstruction, assembleTarget, compileSource, disassembleFunctionObject, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { defUse } from "./webAnalysis.js";
 
 /** Immediates below this are loop counters and indices — noise, not content. */
@@ -222,7 +215,7 @@ function main(): void {
   }
 
   const name = normalizeFunctionName(positional[0]);
-  const scratch = join(ROOT, "build/triage", `${name}-inventory`);
+  const scratch = join(projectRoot(), "build/triage", `${name}-inventory`);
   try {
     const target = disassembleFunctionObject(assembleTarget(name, scratch), name);
     const artifacts = compileSource(resolveSource(name, srcOverride), scratch, name, { assemble: true });

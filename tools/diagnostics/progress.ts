@@ -24,7 +24,7 @@
 
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import { computeLiveness, isOverlayOnlyReference } from "../lib/liveness.js";
 import { containerPath, loadContainers, requireContainer, type Container } from "../lib/container.js";
 import { loadFunctionSpans } from "../lib/symbolIndex.js";
@@ -69,8 +69,8 @@ interface ContainerTotals {
 }
 
 const liveness = computeLiveness();
-const containers = onlyContainer ? [requireContainer(onlyContainer)] : loadContainers();
-const macroCensus = detectMacroIdentities({ containers });
+const containers = () => (onlyContainer ? [requireContainer(onlyContainer)] : loadContainers());
+const macroCensus = detectMacroIdentities({ containers: containers() });
 const macroReports = new Map(macroCensus.functions.map(f => [f.name, macroRouteSummary(f)]));
 
 function measure(container: Container): ContainerTotals {
@@ -142,7 +142,7 @@ function measure(container: Container): ContainerTotals {
   return { container, funcs, totalFuncs, decompFuncs, totalBytes, decompBytes };
 }
 
-const measured = containers.map(measure);
+const measured = () => (containers().map(measure));
 
 function percent(part: number, whole: number): string {
   return whole > 0 ? ((part / whole) * 100).toFixed(2) : "0.00";
@@ -186,22 +186,22 @@ if (!liveness.overlaysIncluded) {
 }
 console.log();
 
-for (const totals of measured) reportContainer(totals);
+for (const totals of measured()) reportContainer(totals);
 
-if (measured.length > 1) {
-  const totalFuncs = measured.reduce((s, m) => s + m.totalFuncs, 0);
-  const decompFuncs = measured.reduce((s, m) => s + m.decompFuncs, 0);
-  const totalBytes = measured.reduce((s, m) => s + m.totalBytes, 0);
-  const decompBytes = measured.reduce((s, m) => s + m.decompBytes, 0);
+if (measured().length > 1) {
+  const totalFuncs = measured().reduce((s, m) => s + m.totalFuncs, 0);
+  const decompFuncs = measured().reduce((s, m) => s + m.decompFuncs, 0);
+  const totalBytes = measured().reduce((s, m) => s + m.totalBytes, 0);
+  const decompBytes = measured().reduce((s, m) => s + m.decompBytes, 0);
   console.log();
-  console.log(`TOTAL across ${measured.length} containers`);
+  console.log(`TOTAL across ${measured().length} containers`);
   console.log(`  Decompiled: ${decompFuncs} / ${totalFuncs} functions (${percent(decompFuncs, totalFuncs)}%)`);
   console.log(`  Decompiled: ${decompBytes} / ${totalBytes} bytes (${percent(decompBytes, totalBytes)}%)`);
 }
 
 // Detailed list
 if (showList || showRemaining || showDone || showMarkdown) {
-  const filtered = measured
+  const filtered = measured()
     .flatMap((m) => m.funcs)
     .filter((f) => {
       if (f.handwritten === "asm") return false;
@@ -215,7 +215,7 @@ if (showList || showRemaining || showDone || showMarkdown) {
     console.log("| Status | Container | VRAM | Size | Source | ASM | Macro verdict |");
     console.log("|--------|-----------|------|------|--------|-----|---------------|");
     for (const f of filtered) {
-      const container = containers.find((c) => c.id === f.container)!;
+      const container = containers().find((c) => c.id === f.container)!;
       const status = f.dead ? "DEAD" : f.decompiled ? "OK" : f.overlayOnly ? "API" : "";
       const srcPath = `${container.paths.srcDir}/${f.name}.c`;
       const asmPath = `${container.paths.asmDir}/nonmatchings/${f.name}/${f.name}.s`;

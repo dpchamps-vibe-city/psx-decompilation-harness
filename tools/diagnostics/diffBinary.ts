@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * diffBinary.ts — Diagnostic tool for comparing built binary against original
  *
@@ -11,23 +12,23 @@
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { loadPsxExeInfo, requireSectionLayout, exeBasename, ROOT, exeSplatYamlPath } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, requireSectionLayout, exeBasename, exeSplatYamlPath } from "../lib/psxExeInfo.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 const _layout = requireSectionLayout();
-const _basename = exeBasename();
+const _basename = () => (exeBasename());
 
-const ORIGINAL = _info.binaryPath;
-const BUILT = join(ROOT, "build", `${_basename}.bin`);
-const MAP_FILE = join(ROOT, "build", `${_basename}.map`);
-const LIB_SECTIONS = join(ROOT, "build/libSections.json");
+const ORIGINAL = () => (_info().binaryPath);
+const BUILT = () => (join(projectRoot(), "build", `${_basename()}.bin`));
+const MAP_FILE = () => (join(projectRoot(), "build", `${_basename()}.map`));
+const LIB_SECTIONS = () => (join(projectRoot(), "build/libSections.json"));
 const SPLAT_YAML = exeSplatYamlPath();
 
-const PAYLOAD_OFFSET = _info.payloadOffset;
-const PAYLOAD_SIZE = _info.payloadSize;
-const LOAD_ADDR = _info.loadAddr;
+const PAYLOAD_OFFSET = () => (_info().payloadOffset);
+const PAYLOAD_SIZE = () => (_info().payloadSize);
+const LOAD_ADDR = () => (_info().loadAddr);
 const TEXT_START_ROM = _layout.textStart;
 const TEXT_END_ROM = _layout.dataStart;
 
@@ -36,7 +37,7 @@ function hex(n: number): string {
 }
 
 function romToVram(rom: number): number {
-  return rom - PAYLOAD_OFFSET + LOAD_ADDR;
+  return rom - PAYLOAD_OFFSET() + LOAD_ADDR();
 }
 
 interface LibSection {
@@ -77,8 +78,8 @@ function parseSplatYaml(): SplatEntry[] {
 }
 
 function parseMapSymbols(): Map<number, string> {
-  if (!existsSync(MAP_FILE)) return new Map();
-  const map = readFileSync(MAP_FILE, "utf-8");
+  if (!existsSync(MAP_FILE())) return new Map();
+  const map = readFileSync(MAP_FILE(), "utf-8");
   const symbols = new Map<number, string>();
   // Parse linker map format: address symbol lines
   const symRe =
@@ -87,7 +88,7 @@ function parseMapSymbols(): Map<number, string> {
     const m = line.match(symRe);
     if (m) {
       const addr = parseInt(m[1], 16);
-      if (addr >= LOAD_ADDR && addr < LOAD_ADDR + 0x100000) {
+      if (addr >= LOAD_ADDR() && addr < LOAD_ADDR() + 0x100000) {
         symbols.set(addr, m[2]);
       }
     }
@@ -97,36 +98,36 @@ function parseMapSymbols(): Map<number, string> {
 
 function main() {
   // === Load binaries ===
-  if (!existsSync(ORIGINAL)) {
-    console.error("Original binary not found:", ORIGINAL);
+  if (!existsSync(ORIGINAL())) {
+    console.error("Original binary not found:", ORIGINAL());
     process.exit(1);
   }
-  if (!existsSync(BUILT)) {
-    console.error("Built binary not found:", BUILT);
+  if (!existsSync(BUILT())) {
+    console.error("Built binary not found:", BUILT());
     process.exit(1);
   }
 
-  const origBuf = readFileSync(ORIGINAL);
-  const builtBuf = readFileSync(BUILT);
+  const origBuf = readFileSync(ORIGINAL());
+  const builtBuf = readFileSync(BUILT());
 
   console.log("=== Binary Comparison ===\n");
   console.log(`Original file size: ${origBuf.length} (${hex(origBuf.length)})`);
   console.log(`Built file size:    ${builtBuf.length} (${hex(builtBuf.length)})`);
 
   // Extract payloads
-  const origPayload = origBuf.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + PAYLOAD_SIZE);
-  const builtPayload = builtBuf.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + PAYLOAD_SIZE);
+  const origPayload = origBuf.subarray(PAYLOAD_OFFSET(), PAYLOAD_OFFSET() + PAYLOAD_SIZE());
+  const builtPayload = builtBuf.subarray(PAYLOAD_OFFSET(), PAYLOAD_OFFSET() + PAYLOAD_SIZE());
 
   console.log(`\nOriginal payload: ${origPayload.length} bytes`);
-  console.log(`Built payload:    ${builtPayload.length} bytes (expected ${PAYLOAD_SIZE})`);
+  console.log(`Built payload:    ${builtPayload.length} bytes (expected ${PAYLOAD_SIZE()})`);
 
-  if (builtPayload.length < PAYLOAD_SIZE) {
-    console.log(`\n*** BUILT BINARY TOO SHORT by ${PAYLOAD_SIZE - builtPayload.length} bytes ***`);
-    console.log(`Built file only has ${builtBuf.length - PAYLOAD_OFFSET} payload bytes available`);
+  if (builtPayload.length < PAYLOAD_SIZE()) {
+    console.log(`\n*** BUILT BINARY TOO SHORT by ${PAYLOAD_SIZE() - builtPayload.length} bytes ***`);
+    console.log(`Built file only has ${builtBuf.length - PAYLOAD_OFFSET()} payload bytes available`);
   }
 
   // === Size analysis ===
-  const builtPayloadAvail = Math.min(builtPayload.length, PAYLOAD_SIZE);
+  const builtPayloadAvail = Math.min(builtPayload.length, PAYLOAD_SIZE());
   const compareLen = Math.min(origPayload.length, builtPayloadAvail);
 
   // === Byte-level comparison ===
@@ -159,7 +160,7 @@ function main() {
   console.log(`Total different bytes: ${diffCount} / ${compareLen} (${(diffCount * 100 / compareLen).toFixed(1)}%)`);
 
   if (firstDiffOffset >= 0) {
-    const rom = firstDiffOffset + PAYLOAD_OFFSET;
+    const rom = firstDiffOffset + PAYLOAD_OFFSET();
     const vram = romToVram(rom);
     console.log(`First difference at payload offset ${hex(firstDiffOffset)} (ROM ${hex(rom)}, VRAM ${hex(vram)})`);
     // Show context around first diff
@@ -176,7 +177,7 @@ function main() {
     for (let i = 0; i < Math.min(diffBlocks.length, showMax); i++) {
       const b = diffBlocks[i];
       const size = b.end - b.start;
-      const rom = b.start + PAYLOAD_OFFSET;
+      const rom = b.start + PAYLOAD_OFFSET();
       console.log(
         `  ${hex(rom)}..${hex(rom + size - 1)} (${size} bytes, VRAM ${hex(romToVram(rom))})`
       );
@@ -202,8 +203,8 @@ function main() {
     const nextRom = i + 1 < textEntries.length ? textEntries[i + 1].rom : TEXT_END_ROM;
     const size = nextRom - entry.rom;
     let diffs = 0;
-    const payStart = entry.rom - PAYLOAD_OFFSET;
-    const payEnd = nextRom - PAYLOAD_OFFSET;
+    const payStart = entry.rom - PAYLOAD_OFFSET();
+    const payEnd = nextRom - PAYLOAD_OFFSET();
     for (let j = payStart; j < Math.min(payEnd, compareLen); j++) {
       if (origPayload[j] !== builtPayload[j]) diffs++;
     }
@@ -237,8 +238,8 @@ function main() {
 
   // Load libSections
   let libSections: LibSection[] = [];
-  if (existsSync(LIB_SECTIONS)) {
-    libSections = JSON.parse(readFileSync(LIB_SECTIONS, "utf-8"));
+  if (existsSync(LIB_SECTIONS())) {
+    libSections = JSON.parse(readFileSync(LIB_SECTIONS(), "utf-8"));
   }
 
   // Build sorted list of all text region segments from splat
@@ -268,8 +269,8 @@ function main() {
 
     if (oEnd < nextRom) {
       // Check if the gap has non-zero bytes (actual code)
-      const gapPayStart = oEnd - PAYLOAD_OFFSET;
-      const gapPayEnd = nextRom - PAYLOAD_OFFSET;
+      const gapPayStart = oEnd - PAYLOAD_OFFSET();
+      const gapPayEnd = nextRom - PAYLOAD_OFFSET();
       let hasCode = false;
       for (let j = gapPayStart; j < Math.min(gapPayEnd, origPayload.length); j++) {
         if (origPayload[j] !== 0) {
@@ -335,19 +336,19 @@ function main() {
   const rodataEnd = TEXT_START_ROM;
   const dataStart = TEXT_END_ROM;
   const sdataStart = _layout?.sdataStart ?? 0x4dbd8;
-  const fileEnd = _info.fileEnd;
+  const fileEnd = _info().fileEnd;
 
   // Compare rodata region
   let rodataDiffs = 0;
-  for (let i = 0; i < rodataEnd - PAYLOAD_OFFSET; i++) {
+  for (let i = 0; i < rodataEnd - PAYLOAD_OFFSET(); i++) {
     if (i < compareLen && origPayload[i] !== builtPayload[i]) rodataDiffs++;
   }
-  console.log(`Rodata (${hex(PAYLOAD_OFFSET)}..${hex(rodataEnd)}): ${rodataDiffs} diff bytes`);
+  console.log(`Rodata (${hex(PAYLOAD_OFFSET())}..${hex(rodataEnd)}): ${rodataDiffs} diff bytes`);
 
   // Compare data region
   let dataDiffs = 0;
-  const dataPayStart = dataStart - PAYLOAD_OFFSET;
-  const dataPayEnd = sdataStart - PAYLOAD_OFFSET;
+  const dataPayStart = dataStart - PAYLOAD_OFFSET();
+  const dataPayEnd = sdataStart - PAYLOAD_OFFSET();
   for (let i = dataPayStart; i < Math.min(dataPayEnd, compareLen); i++) {
     if (origPayload[i] !== builtPayload[i]) dataDiffs++;
   }
@@ -355,8 +356,8 @@ function main() {
 
   // Compare sdata region
   let sdataDiffs = 0;
-  const sdataPayStart = sdataStart - PAYLOAD_OFFSET;
-  const sdataPayEnd = fileEnd - PAYLOAD_OFFSET;
+  const sdataPayStart = sdataStart - PAYLOAD_OFFSET();
+  const sdataPayEnd = fileEnd - PAYLOAD_OFFSET();
   for (let i = sdataPayStart; i < Math.min(sdataPayEnd, compareLen); i++) {
     if (origPayload[i] !== builtPayload[i]) sdataDiffs++;
   }

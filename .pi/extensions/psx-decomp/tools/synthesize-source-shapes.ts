@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runProjectCommand, validateFunctionName } from "./shared.ts";
@@ -23,7 +24,7 @@ export function registerSynthesizeSourceShapesTool(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       validateFunctionName(params.functionName);
       if (params.analysis && !safeJsonPath(params.analysis)) throw new Error(`Invalid analysis path: ${params.analysis}`);
-      const args = ["tsx", "tools/agent/synthesizeSourceShapes.ts", params.functionName];
+      const args = [params.functionName];
       if (params.analysis) args.push("--analysis", params.analysis);
       if (params.deriveOnly) args.push("--derive-only");
       if (params.maxVariants !== undefined) args.push("--max-variants", String(params.maxVariants));
@@ -31,7 +32,7 @@ export function registerSynthesizeSourceShapesTool(pi: ExtensionAPI): void {
       if (params.jobs !== undefined) args.push("--jobs", String(params.jobs));
       if (params.resume) args.push("--resume");
       onUpdate?.({ content: [{ type: "text", text: `Deriving requirement-guided clean-C shapes for ${params.functionName}...` }], details: {} });
-      return runProjectCommand(pi, ctx.cwd, "npx", args, signal, 1_800_000);
+      return runProjectCommand(pi, ctx.cwd, process.execPath, installedScriptArgs("tools/agent/synthesizeSourceShapes.ts", args, ctx.cwd), signal, 1_800_000);
     },
   });
 }

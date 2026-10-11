@@ -1,10 +1,13 @@
+import { COMPONENT_CONTRACTS, compilationIdentity, stableHash } from "../lib/cacheIdentity.js";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Library-mode bridge for npm and the existing Pi preparation/diff/gate loop.
  * Iterations compile the owning TU; acceptance is the entire original member.
  * No original object is ever substituted for missing reconstructed C. */
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { HARNESS_ROOT, configuredFlags, configuredTool, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredFlags, configuredTool, toolchainExecutables } from "../lib/toolchain.js";
 import { libraryContext, loadLibraryProject, libraryInputFiles } from "../lib/project.js";
 import { libraryInventory, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, type LibraryMember } from "../lib/libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, type ObjectComparison } from "../lib/relocatableObject.js";
@@ -12,7 +15,7 @@ import { libraryAssemblyParts } from "../lib/libraryAssembly.js";
 import { libraryFunctionTarget } from "../lib/targetAdapter.js";
 import { digest, filesUnder, snapshot } from "../lib/contentCache.js";
 import { recordedCommand, commandText } from "../lib/recordedCommand.js";
-import { compileSource, compileSourceAsync, configuredToolchainIdentity, rejectionFromDiagnostics, runTool, sourceDependencyFiles } from "./decompToolchain.js";
+import { compileSource, compileSourceAsync, configuredToolchainIdentity, loadFlagOverrides, rejectionFromDiagnostics, runTool, sourceDependencyFiles } from "./decompToolchain.js";
 import { extractSignaturesFromSource } from "./sdkTypes.js";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
@@ -26,15 +29,14 @@ function memberInputPaths(member: LibraryMember, root: string): string[] {
   const p = loadLibraryProject(root)!;
   const cpp = configuredFlags("cpp", libraryContext(member.id, root), root);
   const includeDirs = cpp.flatMap((f, i) => f === "-I" ? [cpp[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []);
-  return ["project.json", "toolchain.json", member.source, ...libraryInputFiles(p, root).map(i => i.path),
+  return ["project.json", member.source, ...libraryInputFiles(p, root).map(i => i.path),
     ...includeDirs, ...p.headers.reference, ...p.headers.owned,
-    ...(root === HARNESS_ROOT && existsSync(join(root, member.source)) ? sourceDependencyFiles(member.source) : []),
-    "tools/vendor/maspsx", "tools/lib", "tools/agent", ".pi/extensions/shared", ".pi/extensions/psx-decomp/tools"];
+    ...(existsSync(join(root, member.source)) ? sourceDependencyFiles(member.source) : [])];
 }
-export function libraryBuildIdentity(member: LibraryMember, root = HARNESS_ROOT): string {
+export function libraryBuildIdentity(member: LibraryMember, root = projectRoot()): string {
   if (hashFile(resolve(root, member.input)) !== member.inputHash) throw new Error(`Target input changed while measuring ${member.id}; rerun inventory`);
   return digest(JSON.stringify({ target: member.sha256, input: member.inputHash,
-    tools: root === HARNESS_ROOT ? configuredToolchainIdentity() : toolchainExecutables(root),
+    tools: compilationIdentity(root, libraryContext(member.id, root), member.id),
     inputs: snapshot(root, memberInputPaths(member, root), f => !f.endsWith(".test.ts") && !f.includes("__pycache__")) }));
 }
 function accepted(member: LibraryMember, root: string): boolean {
@@ -43,8 +45,7 @@ function accepted(member: LibraryMember, root: string): boolean {
 }
 export const isLibraryMemberVerified = accepted;
 
-function compileMember(member: LibraryMember, source = member.source, root = HARNESS_ROOT) {
-  if (root !== HARNESS_ROOT) throw new Error("Compile library targets from their cloned harness root");
+function compileMember(member: LibraryMember, source = member.source, root = projectRoot()) {
   const artifacts = compileSource(source, `build/libraries/candidates/${member.id}/${randomUUID()}`, member.id, { assemble: true, containerKind: "library", containerId: member.id });
   const rejection = rejectionFromDiagnostics(artifacts.diagnostics);
   if (rejection) throw new Error(`Invalid C: ${rejection}`);
@@ -72,14 +73,14 @@ export function renderLibraryComparison(comparison: ObjectComparison): string {
     `VERDICT: ${comparison.verdict.toUpperCase()}`, "Scope: whole relocatable member (sections, bytes, symbols and symbolic relocations)",
     ...comparison.differences.map(d => `  ${d}`)].join("\n");
 }
-export function disassembleLibraryMember(member: LibraryMember, root = HARNESS_ROOT): string {
+export function disassembleLibraryMember(member: LibraryMember, root = projectRoot()): string {
   const original = materializeOriginal(member, root), path = join(root, member.assembly);
   mkdirSync(dirname(path), { recursive: true });
   const assembly = runTool(configuredTool("spimdisasm", root), ["elfObjDisasm", original, "-", ...configuredFlags("spimdisasm", libraryContext(member.id, root), root),
     "--no-libultra-syms", "--no-ique-syms", "--no-hardware-regs", "--no-default-banned", "--quiet"], root);
   writeFileSync(path, assembly); return path;
 }
-export function writeLibraryGraph(root = HARNESS_ROOT) {
+export function writeLibraryGraph(root = projectRoot()) {
   const members = libraryMembers(root);
   const entries = members.flatMap(member => member.functions.map(fn => {
     const target = libraryFunctionTarget(member, fn, root);
@@ -105,7 +106,7 @@ export function writeLibraryGraph(root = HARNESS_ROOT) {
   mkdirSync(join(root, "build"), { recursive: true }); writeFileSync(join(root, "build/callGraph.json"), JSON.stringify(graph, null, 2) + "\n");
   return graph;
 }
-export function splitLibrary(root = HARNESS_ROOT): void {
+export function splitLibrary(root = projectRoot()): void {
   const project = loadLibraryProject(root)!;
   for (const member of libraryMembers(root)) {
     const assembly = disassembleLibraryMember(member, root);
@@ -126,7 +127,7 @@ export function splitLibrary(root = HARNESS_ROOT): void {
   writeLibraryGraph(root);
   console.log("Library members indexed; original objects/disassembly stay under build/libraries. Existing C untouched.");
 }
-export function libraryProgress(args: string[] = [], root = HARNESS_ROOT): void {
+export function libraryProgress(args: string[] = [], root = projectRoot()): void {
   const members = libraryMembers(root), rows = members.map(m => ({ id: m.id, input: m.input, member: m.member, ordinal: m.ordinal, source: m.source,
     functions: m.functions.map(f => libraryTargetKey(m, f.name)), codeBytes: [...m.object.sections.values()].filter(s => s.flags & 4).reduce((n, s) => n + s.size, 0), verified: accepted(m, root) }));
   const done = rows.filter(r => r.verified), report = { targetKind: "relocatable-library", scope: "fresh whole-member verification, not source presence or liveness",
@@ -144,7 +145,7 @@ export function libraryProgress(args: string[] = [], root = HARNESS_ROOT): void 
 /** --accepted is a loop environment guard, NOT whole-library completion.
  * A finalizer verifies the active member plus every previously accepted member;
  * npm check-all requires every configured member, including data-only objects. */
-export function checkLibrary(args: string[], root = HARNESS_ROOT): void {
+export function checkLibrary(args: string[], root = projectRoot()): void {
   const members = libraryMembers(root), ids = args.flatMap((a, i) => a === "--member" ? [args[i + 1]] : []);
   for (const id of ids) if (!members.some(m => m.id === id)) throw new Error(`Unknown library member ${id}`);
   const scoped = args.includes("--accepted") || ids.length > 0;
@@ -168,7 +169,7 @@ export function checkLibrary(args: string[], root = HARNESS_ROOT): void {
   console.log(scoped ? `Verified ${selected.length} active/previously accepted member(s); ${members.length - selected.length} backlog member(s) not verified.` : `All ${selected.length} configured library members verified.`);
 }
 export async function prepareLibraryFunction(name: string, options: { root?: string; signal?: AbortSignal; alternative?: boolean; contextFile?: string } = {}) {
-  const root = options.root ?? HARNESS_ROOT, { member, fn, key } = requireLibraryFunction(name, root), p = loadLibraryProject(root)!;
+  const root = options.root ?? projectRoot(), { member, fn, key } = requireLibraryFunction(name, root), p = loadLibraryProject(root)!;
   const target = libraryFunctionTarget(member, fn, root);
   options.signal?.throwIfAborted();
   const assembly = disassembleLibraryMember(member, root);
@@ -186,8 +187,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   const directory = join(root, "build/preparation", key, `${Date.now()}-${process.pid}`); mkdirSync(directory, { recursive: true });
   const paths = [...memberInputPaths(member, root), member.assembly, `build/libraries/nonmatchings/${member.id}`,
     target.context.types, target.context.functions,
-    ...Object.values(toolchainExecutables(root)).flatMap(t => t.path ? [t.path] : []),
-    "tools/vendor/m2c/m2c", "tools/vendor/m2c/m2c_pycparser", ...(options.contextFile ? [options.contextFile] : [])];
+    ...(options.contextFile ? [options.contextFile] : [])];
   const inputs: Record<string, string> = {}, memberships: Record<string, string[]> = {};
   for (const path of paths) {
     const absolute = resolve(root, path), key = relative(root, absolute);
@@ -199,10 +199,10 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   }
   const context = join(directory, "context.c");
   writeFileSync(context, p.headers.context.map(h => `#include "${h}"`).join("\n") + "\n" + (options.contextFile ? readFileSync(resolve(root, options.contextFile), "utf8") : ""));
-  const flagContext = target.flags, flags = configuredFlags("cc1", flagContext, root);
-  const packet: PreparationPacket = { schemaVersion: 1, preparationState: "running", identity: { functionName: key, symbol: fn.name, targetKind: "relocatable-library", container: member.id,
+  const flagContext = target.flags, flags = configuredFlags("cc1", flagContext, root).concat(loadFlagOverrides(root).get(member.id) ?? []);
+  const packet: PreparationPacket = { schemaVersion: 1, preparationState: "running", identity: { compatibility: COMPONENT_CONTRACTS.preparation, functionName: key, symbol: fn.name, targetKind: "relocatable-library", container: member.id,
     destination: target.source, assembly: existsSync(join(root, target.assembly.function)) ? target.assembly.function : target.assembly.translationUnit,
-    data: [member.original], inputs, memberships, fingerprint: digest(JSON.stringify({ inputs, memberships })), tools: configuredToolchainIdentity(), flags },
+    data: [member.original], inputs, memberships, fingerprint: digest(JSON.stringify({ inputs, memberships })), tools: { compilation: compilationIdentity(root, target.flags, member.id), m2c: { compatibility: "patched-m2c-v1", source: prepareM2c(root).identity.sha256, flags: configuredFlags("m2c", target.flags, root) }, context: COMPONENT_CONTRACTS.context }, flags },
     verification: target.verification,
     primary: existing && !options.alternative ? { origin: "existing-attempt", path: member.source, sha256: digest(source), text: source, declarationsRequired: [] } : retained,
     context: { index: emptyDeclarationIndex(), projection: relative(root, context), excluded: [], unknown: [], headers: p.headers.context },
@@ -212,7 +212,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   try {
     if (!packet.primary) {
       const m2c = prepareM2c(root);
-      for (const path of [...m2c.identity.inputs, ...m2c.sources]) inputs[relative(root, path)] = hashFile(path);
+      // Source/patch content identity lives in the component witness, not an installation-path input.
       const cpp = await recordedCommand(configuredTool("cpp", root), [...configuredFlags("cpp", flagContext, root), context, "-o", join(directory, "context.i")], root, directory, "context-cpp", options.signal);
       packet.discovery.preflight.push(cpp);
       if (cpp.status !== 0) throw new Error(commandText(cpp));
@@ -260,8 +260,8 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   // tools already consume normalized targets; no format-specific agent steps.
   for (const [script, label] of [["scanReadBeforeDef.ts", "read-before-definition"], ["triage.ts", "triage"]]) {
     try {
-      const args = ["tsx", `tools/agent/${script}`, key, "--json", ...(label === "triage" && packet.primary ? ["--src", packet.primary.path] : [])];
-      const result = await recordedCommand("npx", args, root, directory, label!, options.signal);
+      const args = [key, "--json", ...(label === "triage" && packet.primary ? ["--src", packet.primary.path] : [])];
+      const result = await recordedCommand(process.execPath, currentScriptArgs(`tools/agent/${script}`, args), root, directory, label!, options.signal);
       packet.discovery.preflight.push(result);
       if (result.status !== 0) throw new Error(commandText(result));
       const report = JSON.parse(readFileSync(result.stdout, "utf8"));
@@ -291,7 +291,7 @@ export function runLibraryTask(task: string, args: string[] = []): void {
   if (task === "progress") { libraryProgress(args); return; }
   if (["check", "check-all"].includes(task)) { checkLibrary(args); return; }
   if (task === "build") {
-    const members = libraryMembers(), pending = members.filter(m => existsSync(join(HARNESS_ROOT, m.source)));
+    const members = libraryMembers(), pending = members.filter(m => existsSync(join(projectRoot(), m.source)));
     for (const member of pending) compileMember(member);
     console.log(`Compiled ${pending.length}/${members.length} reconstructed TU(s); this is not verification.`); return;
   }

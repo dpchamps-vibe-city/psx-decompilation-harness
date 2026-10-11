@@ -1,4 +1,6 @@
-import { test } from "node:test";
+import { installedCommandFixture } from "../../../../tools/testing/commandFixture.js";
+import { seedProjectFixture } from "../../../../tools/testing/projectFixture.js";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
@@ -14,12 +16,10 @@ async function until(check: () => boolean) {
   while (!check() && Date.now() < end) await delay(10);
   assert.ok(check(), "fixture reached the tested boundary");
 }
-function fixture(t: { after: (f: () => Promise<void>) => void }) {
+function fixture(t: { after: (f: () => void | Promise<void>) => void }) {
   const root = mkdtempSync(join(tmpdir(), "interactive-routes-"));
-  const cwd = process.cwd();
-  for (const path of ["src", "build", "tools/agent"]) mkdirSync(join(root, path), { recursive: true });
-  symlinkSync(join(cwd, "node_modules"), join(root, "node_modules"));
-  writeFileSync(join(root, "AGENTS.md"), "fixture\n");
+  seedProjectFixture(root);
+  for (const path of ["src", "build"]) mkdirSync(join(root, path), { recursive: true });
   writeFileSync(join(root, "src/f.c"), 'INCLUDE_ASM("original/f", f);\n');
   writeFileSync(join(root, "build/callGraph.json"), JSON.stringify({ functions: [{ name: "f", vram: "0x80010000", container: "exe", decompiled: false, dead: false, handwritten: false, calls: [], calledBy: [] }] }));
   execFileSync("git", ["init", "-q"], { cwd: root });
@@ -29,8 +29,8 @@ function fixture(t: { after: (f: () => Promise<void>) => void }) {
   const pi = { registerTool: () => {}, registerCommand: (name: string, command: any) => commands.set(name, command),
     on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     sendUserMessage: (text: string) => messages.push(text), getActiveTools: () => [], setActiveTools: () => {} } as unknown as ExtensionAPI;
-  process.chdir(root); extension(pi); process.chdir(cwd);
-  const ctx = { signal: undefined, model: undefined, waitForIdle: async () => {}, isIdle: () => true,
+  extension(pi);
+  const ctx = { cwd: root, signal: undefined, model: undefined, waitForIdle: async () => {}, isIdle: () => true,
     ui: { notify: (text: string) => notices.push(text) } } as unknown as ExtensionCommandContext;
   const event = async (name: string, detail: any = {}) => { for (const handler of handlers.get(name) ?? []) await handler(detail, ctx); };
   t.after(async () => { await event("session_shutdown", { reason: "quit" }); await getSessionBaseline(root); rmSync(root, { recursive: true, force: true }); });
@@ -50,9 +50,9 @@ test("actual /decompile and /fix-decomp routes cancel idle waiting, reject concu
   assert.match(readFileSync(join(f.root, "src/f.c"), "utf8"), /INCLUDE_ASM/);
 });
 
-test("reload shutdown aborts and awaits the actual npx/tsx preparation and its live child compiler", { skip: process.platform !== "linux" }, async (t) => {
+test("reload shutdown aborts and awaits installed-script preparation and its live child compiler", { skip: process.platform !== "linux" }, async (t) => {
   const f = fixture(t); const pidFile = join(f.root, "compiler.pid");
-  writeFileSync(join(f.root, "tools/agent/m2cFunc.ts"), `import {spawn} from 'node:child_process';\nspawn(process.execPath,['-e',${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`)}],{stdio:'inherit'});\n`);
+  installedCommandFixture(t, f.root, { "tools/agent/m2cFunc.ts": `import {spawn} from 'node:child_process';\nspawn(process.execPath,['-e',${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`)}],{stdio:'inherit'});\n` });
   const command = f.command("fix-decomp", "f"); await until(() => existsSync(pidFile));
   const pid = Number(readFileSync(pidFile, "utf8"));
   const running = () => { try { const s = readFileSync(`/proc/${pid}/stat`, "utf8"); return s.slice(s.lastIndexOf(")") + 2)[0] !== "Z"; } catch { return false; } };
@@ -69,7 +69,7 @@ test("a cancelled preparation does not poison the next real command; a generatio
   const first = f.command("fix-decomp", "f"); await until(() => waiting);
   await f.command("decompile", "--cancel"); await first;
   f.ctx.waitForIdle = async () => {};
-  writeFileSync(join(f.root, "tools/agent/m2cFunc.ts"), "process.stderr.write('fixture generation failure\\n');process.exitCode=7;\n");
+  installedCommandFixture(t, f.root, { "tools/agent/m2cFunc.ts": "process.stderr.write('fixture generation failure\\n');process.exitCode=7;\n" });
   await f.command("decompile", "f");
   assert.equal(f.messages.length, 1); assert.match(f.messages[0]!, /fixture generation failure/);
   assert.match(f.messages[0]!, /Preserve the current source/);

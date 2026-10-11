@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * Overlapping and unaligned memory, and the compiler operations that produce
  * them.
@@ -21,8 +22,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { decodeFunction, decodeWord } from "./decode.js";
 import { assemble } from "./fixture-asm.js";
 import { canon, executeFunction, UnsupportedTarget } from "./exec.js";

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "../../../testing/runtimeTestContext.js";
 import { decodeXaWav, validateXaAudio, xaCoding } from "./xa-audio.ts";
 
 function sound(coding: number, parameter = coding & 16 ? 8 : 12): Buffer {

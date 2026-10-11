@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 /** Content-addressed caches: missing inputs and directory membership are facts.
  * Publication is atomic; corrupt/interrupted records are misses, never evidence. */
 import { createHash, randomUUID } from "node:crypto";
@@ -5,7 +6,18 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { dirname, isAbsolute, join, relative } from "node:path";
 
 export const digest = (value: string | Buffer): string => createHash("sha256").update(value).digest("hex");
-export const fileDigest = (path: string): string => existsSync(path) ? digest(readFileSync(path)) : "absent";
+const contentMemo = new AsyncLocalStorage<Map<string, { stamp: string; hash: string }>>();
+export function withContentMemo<T>(task: () => T): T { return contentMemo.getStore() ? task() : contentMemo.run(new Map(), task); }
+export function fileDigest(path: string): string {
+  if (!existsSync(path)) return "absent";
+  const memo = contentMemo.getStore();
+  if (!memo) return digest(readFileSync(path));
+  const stat = statSync(path, { bigint: true });
+  const stamp = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  const prior = memo.get(path);
+  if (prior?.stamp === stamp) return prior.hash;
+  const hash = digest(readFileSync(path)); memo.set(path, { stamp, hash }); return hash;
+}
 export function filesUnder(path: string): string[] {
   if (!existsSync(path)) return [];
   if (!statSync(path).isDirectory()) return [path];

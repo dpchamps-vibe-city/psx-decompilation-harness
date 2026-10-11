@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { loadMacroRegistry } from "../residual-source-search/macro-forms.js";
 import { buildSemanticGraph, webLookupId } from "../residual-source-search/semantic-graph.js";
 import { analyzeWebs } from "../residual-source-search/web-partitions.js";
@@ -290,15 +291,15 @@ function sdkCallOrderOutputs(source: string, spec: TransformationSpec): Transfor
 }
 
 export function generateTransformationVariants(specPath: string, functionName: string): VariantHypothesis[] {
-  const absoluteSpec = isAbsolute(specPath) ? specPath : join(ROOT, specPath);
+  const absoluteSpec = isAbsolute(specPath) ? specPath : join(projectRoot(), specPath);
   if (!existsSync(absoluteSpec)) throw new Error(`transformation spec not found: ${specPath}`);
   const spec = validateTransformationSpec(JSON.parse(readFileSync(absoluteSpec, "utf8")));
   if (spec.function !== functionName) throw new Error(`transformation spec targets ${spec.function}, not ${functionName}`);
-  const basePath = isAbsolute(spec.baseSourcePath) ? spec.baseSourcePath : join(ROOT, spec.baseSourcePath);
+  const basePath = isAbsolute(spec.baseSourcePath) ? spec.baseSourcePath : join(projectRoot(), spec.baseSourcePath);
   if (!existsSync(basePath)) throw new Error(`transformation base source not found: ${spec.baseSourcePath}`);
   const base = readFileSync(basePath, "utf8");
-  const outputDirectory = resolve(ROOT, spec.outputDirectory || join("build/variant-lab/generated", functionName, spec.template));
-  const related = relative(ROOT, outputDirectory).replace(/\\/g, "/");
+  const outputDirectory = resolve(projectRoot(), spec.outputDirectory || join("build/variant-lab/generated", functionName, spec.template));
+  const related = relative(projectRoot(), outputDirectory).replace(/\\/g, "/");
   if (related.startsWith("../") || (related !== "build" && !related.startsWith("build/"))) {
     throw new Error("generated transformation outputDirectory must be under build/");
   }

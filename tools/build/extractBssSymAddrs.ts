@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * extractBssSymAddrs.ts — Extract absolute addresses of BSS symbols from library .o files
  *
@@ -16,11 +17,11 @@ import { execFileSync, execSync } from "child_process";
 import { configuredTool } from "../lib/toolchain.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { loadPsxExeInfo, ROOT } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo } from "../lib/psxExeInfo.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _info = loadPsxExeInfo();
-const BINARY_PATH = _info.binaryPath;
+const _info = () => (loadPsxExeInfo());
+const BINARY_PATH = () => (_info().binaryPath);
 
 interface LibSectionEntry {
   oPath: string;
@@ -226,12 +227,12 @@ function extractOTextBytes(oPath: string): Buffer | null {
 }
 
 function main() {
-  const cachePath = join(ROOT, "build/libSections.json");
+  const cachePath = join(projectRoot(), "build/libSections.json");
   const libSections: LibSectionEntry[] = JSON.parse(
     readFileSync(cachePath, "utf-8")
   );
 
-  const binary = readFileSync(BINARY_PATH);
+  const binary = readFileSync(BINARY_PATH());
 
   // Collect all resolved BSS symbol addresses: symbolName -> address
   const bssSymAddrs = new Map<string, number>();
@@ -243,7 +244,7 @@ function main() {
   for (const entry of libSections) {
     if (!entry.bssSize || entry.bssSize === 0) continue;
 
-    const oPath = join(ROOT, entry.oPath);
+    const oPath = join(projectRoot(), entry.oPath);
     const sections = parseSections(oPath);
     const symbols = parseSymbols(oPath);
 
@@ -272,7 +273,7 @@ function main() {
   for (const entry of libSections) {
     if (!entry.textSize || entry.textSize === 0) continue;
 
-    const oPath = join(ROOT, entry.oPath);
+    const oPath = join(projectRoot(), entry.oPath);
     const relocs = parseRelocs(oPath);
     if (relocs.length === 0) continue;
 
@@ -323,7 +324,7 @@ function main() {
     if (!entry.bssSize || entry.bssSize === 0) continue;
     if (!entry.textSize || entry.textSize === 0) continue;
 
-    const oPath = join(ROOT, entry.oPath);
+    const oPath = join(projectRoot(), entry.oPath);
     const sections = parseSections(oPath);
     const symbols = parseSymbols(oPath);
     const relocs = parseRelocs(oPath);
@@ -399,7 +400,7 @@ function main() {
 
     // Get all .o files from lib/ directory
     const libOFiles = execSync(
-      `find "${join(ROOT, "lib")}" -name "*.o" -type f`,
+      `find "${join(projectRoot(), "lib")}" -name "*.o" -type f`,
       { encoding: "utf-8" }
     )
       .trim()
@@ -410,7 +411,7 @@ function main() {
     const textRomMap = new Map<string, number>();
     for (const entry of libSections) {
       if (entry.textSize > 0) {
-        textRomMap.set(join(ROOT, entry.oPath), entry.textRom);
+        textRomMap.set(join(projectRoot(), entry.oPath), entry.textRom);
       }
     }
 

@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { decodeFunction } from "./decode.js";
 import { executeFunction } from "./exec.js";
 import { fitScanRelation } from "./scan-relation.js";

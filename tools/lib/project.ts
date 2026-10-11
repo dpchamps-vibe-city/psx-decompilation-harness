@@ -1,8 +1,9 @@
+import { projectRoot, contextForProject, assertProjectInput } from "./runtimeContext.js";
 /** Target selection is independent of the candidate compiler. Missing manifest
  * keeps the existing executable/overlay pipeline. Never infer a library from SDK inputs. */
 import { existsSync, readFileSync, realpathSync, globSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { HARNESS_ROOT, loadToolchain } from "./toolchain.js";
+import { loadToolchain } from "./toolchain.js";
 export const PROJECT_FILE = "project.json";
 export interface LibraryProject {
   schemaVersion: 1;
@@ -23,7 +24,7 @@ function paths(value: any, at: string): asserts value is string[] {
   if (!Array.isArray(value) || value.some(p => typeof p !== "string" || !p || p.includes("\0") || isAbsolute(p) || p.split(/[\\/]/).includes("..")))
     throw new Error(`${PROJECT_FILE}: ${at} must contain safe root-relative paths`);
 }
-export function loadLibraryProject(root = HARNESS_ROOT): LibraryProject | null {
+export function loadLibraryProject(root = projectRoot()): LibraryProject | null {
   const file = join(root, PROJECT_FILE);
   if (!existsSync(file)) return null;
   const p = JSON.parse(readFileSync(file, "utf8"));
@@ -56,7 +57,7 @@ export function loadLibraryProject(root = HARNESS_ROOT): LibraryProject | null {
   }
   return p as LibraryProject;
 }
-export function libraryInputFiles(project: LibraryProject, root = HARNESS_ROOT): { path: string; archive: boolean }[] {
+export function libraryInputFiles(project: LibraryProject, root = projectRoot()): { path: string; archive: boolean }[] {
   const seen = new Set<string>(), result: { path: string; archive: boolean }[] = [];
   for (const [patterns, archive] of [[project.target.archives, true], [project.target.standaloneObjects, false]] as const) {
     for (const pattern of patterns) {
@@ -64,7 +65,8 @@ export function libraryInputFiles(project: LibraryProject, root = HARNESS_ROOT):
       if (!matches.length) throw new Error(`${PROJECT_FILE}: input pattern matched nothing: ${pattern}`);
       for (const path of matches) {
         const actual = realpathSync(resolve(root, path)), rel = relative(realpathSync(root), actual);
-        if (rel.startsWith(`..${sep}`) || isAbsolute(rel) || rel === ".." || rel.startsWith(`build${sep}`) || path.startsWith("build/")) throw new Error(`Library target must be a pristine input inside the project, outside build/: ${path}`);
+        assertProjectInput(path, contextForProject(root));
+        if (rel.startsWith(`build${sep}`) || path.startsWith("build/")) throw new Error(`Library target must be a pristine input outside build/: ${path}`);
         if (seen.has(actual)) throw new Error(`Library input selected twice: ${path}`);
         seen.add(actual); result.push({ path: path.split(sep).join("/"), archive });
       }
@@ -72,7 +74,7 @@ export function libraryInputFiles(project: LibraryProject, root = HARNESS_ROOT):
   }
   return result;
 }
-export function libraryContext(memberId: string, root = HARNESS_ROOT): { kind: "library"; id: string; profile?: string } {
+export function libraryContext(memberId: string, root = projectRoot()): { kind: "library"; id: string; profile?: string } {
   const project = loadLibraryProject(root);
   if (!project) throw new Error("Not a library target");
   const profile = project.memberProfiles[memberId] ?? project.toolchainProfile;

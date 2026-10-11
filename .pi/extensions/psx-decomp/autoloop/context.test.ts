@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { needsCompaction, requestCompaction, type CompactionHandlers } from "./context.ts";
 
 const reading = (tokens: number | null) => ({ tokens, contextWindow: 1_000_000, percent: null });

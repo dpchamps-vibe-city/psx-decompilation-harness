@@ -21,12 +21,16 @@ export interface MemberRecord {
   ordinal: number;
   sourceOffset: number;
   sourceHash: string;
+  archiveHash?: string;
+  objectHash?: string;
+  converter?: { sha256: string; mode: "supplied" | "preexisting-elf" | "elf-ar" };
   symbols: { name: string; offset: number }[];
   oPath: string;
   collision: boolean;
 }
 export interface MemberMap {
   schemaVersion: 1;
+  inputsFingerprint?: string;
   version: string;
   members: MemberRecord[];
   signatures: { sigFile: string; identity: string; oPath: string }[];

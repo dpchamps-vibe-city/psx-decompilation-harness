@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { VARIANT_MECHANISMS, type ExactSourceEdit, type VariantMechanism } from "../variant-lab/types.js";
 import {
   SOURCE_SHAPE_SEARCH_SCHEMA_VERSION,
@@ -198,8 +199,8 @@ export function validateSourceShapeSpec(value: unknown, functionName?: string): 
 }
 
 export function resolveProjectInput(path: string, context: string): string {
-  const absolute = isAbsolute(path) ? resolve(path) : resolve(ROOT, path);
-  const related = relative(ROOT, absolute).replace(/\\/g, "/");
+  const absolute = isAbsolute(path) ? resolve(path) : resolve(projectRoot(), path);
+  const related = relative(projectRoot(), absolute).replace(/\\/g, "/");
   if (related.startsWith("../")) throw new Error(`${context} must stay within the project tree`);
   if (!existsSync(absolute)) throw new Error(`${context} not found: ${path}`);
   return absolute;

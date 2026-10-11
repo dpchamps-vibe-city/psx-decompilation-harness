@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Audit EVERY vendored version separately. Versions without converted objects
  * are explicitly not-provisioned, never called verified. Default required: 470.
  * Usage: auditSdkCollisions.ts [--require-version N | --require-all] [--detection report.json]
@@ -8,11 +9,10 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadMemberMap, memberKey, parseSig, readTextObject, resolveSignatureObject, signatureFits, signatureId, type SigEntry } from "../lib/psyqMembers.js";
 import { configuredSdk } from "../lib/toolchain.js";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import { verifiedMatches } from "../lib/sdkDetection.js";
 
-export function auditSdkCollisions(root: string, requiredVersions: string[] = [configuredSdk(root).version]): { versions: { version: string; status: "verified" | "not-provisioned" | "failed"; collisions: { sigFile: string; member: string; objects: string[]; variants: number }[] }[]; errors: string[] } {
-  const sigRoot = existsSync(join(root, "toolchain.json")) ? resolve(configuredSdk(root).signatures, "..") : join(root, "tools/vendor/psx_psyq_signatures");
+export function auditSdkCollisions(root: string, requiredVersions: string[] = [configuredSdk(root).version], sigRoot = resolve(configuredSdk(root).signatures, "..")): { versions: { version: string; status: "verified" | "not-provisioned" | "failed"; collisions: { sigFile: string; member: string; objects: string[]; variants: number }[] }[]; errors: string[] } {
   const versions = readdirSync(sigRoot, { withFileTypes: true }).filter(d => d.isDirectory() && /^\d+$/.test(d.name)).map(d => d.name).sort();
   const errors: string[] = [];
   for (const version of requiredVersions) if (!versions.includes(version)) errors.push(`Required signature version ${version} absent`);
@@ -54,7 +54,7 @@ function main(): void {
   const args = process.argv.slice(2);
   const required = args.flatMap((a, i) => a === "--require-version" ? [args[i + 1]!] : []);
   const all = readdirSync(resolve(configuredSdk().signatures, "..")).filter(v => /^\d+$/.test(v));
-  const report = auditSdkCollisions(ROOT, args.includes("--require-all") ? all : required.length ? required : [configuredSdk().version]);
+  const report = auditSdkCollisions(projectRoot(), args.includes("--require-all") ? all : required.length ? required : [configuredSdk().version]);
   const detectionIndex = args.indexOf("--detection");
   if (detectionIndex >= 0) {
     try { verifiedMatches(readFileSync(resolve(args[detectionIndex + 1]!), "utf8")); } catch (error) { report.errors.push((error as Error).message); }

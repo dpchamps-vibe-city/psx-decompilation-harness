@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { instrumentLocalAllocation, instrumentScheduler } from "./instrumentation.js";
 import { deriveOracleInterventions, parseOracleEvents } from "./run.js";
 import { replayLocalAllocation } from "./local-allocation.js";

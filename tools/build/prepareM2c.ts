@@ -1,32 +1,40 @@
+import { projectRoot, HARNESS_ROOT, contextForProject } from "../lib/runtimeContext.js";
+import { installedScriptArgs } from "../lib/installedScripts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HARNESS_ROOT, configuredTool } from "../lib/toolchain.js";
+import { configuredTool, loadToolchain } from "../lib/toolchain.js";
 
 const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]);
 export function m2cPatchIdentity(root: string): { upstream: string; sha256: string; inputs: string[] } {
-  const manifest = join(root, "tools/vendor/m2c-patches/manifest.json");
+  const manifest = join(HARNESS_ROOT, "tools/vendor/m2c-patches/manifest.json");
   const spec = JSON.parse(readFileSync(manifest, "utf8")) as { version: number; upstream: string; patches: string[] };
   if (spec.version !== 1 || !/^[a-f0-9]{40}$/.test(spec.upstream) || spec.patches.some((p) => !/^[\w.-]+\.patch$/.test(p))) throw new Error("Invalid m2c patch manifest");
   const inputs = [manifest, join(dirname(manifest), "upstream-files.json"), ...spec.patches.map((p) => join(dirname(manifest), p))];
-  return { upstream: spec.upstream, sha256: hash(JSON.stringify(inputs.map((p) => [relative(root, p), hash(readFileSync(p))]))), inputs };
+  return { upstream: spec.upstream, sha256: hash(JSON.stringify(inputs.map((p) => [relative(HARNESS_ROOT, p), hash(readFileSync(p))]))), inputs };
 }
 /** Materialize a pinned, patched vendor tree without mutating the submodule.
  * Only source patches are tracked; archives, generated code and caches stay in build/. */
 export function prepareM2c(root: string): { script: string; identity: ReturnType<typeof m2cPatchIdentity>; sources: string[] } {
   const script = configuredTool("m2c", root);
-  const vendor = join(root, "tools/vendor/m2c");
-  if (script !== join(vendor, "m2c.py")) {
+  const owner = loadToolchain(root).tools.m2c;
+  if (!existsSync(script) && typeof owner === "object" && owner.origin === "runtime" && owner.path.startsWith("dependencies/m2c/")) {
+    execFileSync(process.execPath, installedScriptArgs("tools/build/prepareDependencies.ts", [], root), { cwd: root, stdio: "inherit" });
+  }
+  const vendor = dirname(script);
+  const runtime = contextForProject(root).runtimeRoot;
+  const standard = script === join(root, "tools/vendor/m2c/m2c.py") || script.startsWith(join(runtime, "dependencies/m2c") + "/");
+  if (!standard) {
     if (!existsSync(script)) throw new Error(`Configured m2c missing: ${script}`);
     const sources = files(dirname(script)).filter(p => /\.(py|h)$/.test(p) && !p.includes("/.git/"));
-    return { script, sources, identity: { upstream: "explicit-external-config", inputs: [join(root, "toolchain.json"), ...sources], sha256: hash(JSON.stringify(sources.map(p => [relative(root, p), hash(readFileSync(p))]))) } };
+    return { script, sources, identity: { upstream: "explicit-external-config", inputs: sources, sha256: hash(JSON.stringify(sources.map(p => [relative(dirname(script), p), hash(readFileSync(p))]))) } };
   }
   const identity = m2cPatchIdentity(root);
   if (!existsSync(join(vendor, "m2c.py"))) throw new Error("Pinned m2c sources missing. A degit export may omit submodules; use a recursive clone or provision the pinned vendor sources (docs/toolchain.md).");
-  const pin = JSON.parse(readFileSync(join(root, "tools/vendor/m2c-patches/upstream-files.json"), "utf8"));
+  const pin = JSON.parse(readFileSync(join(HARNESS_ROOT, "tools/vendor/m2c-patches/upstream-files.json"), "utf8"));
   const sourceFiles = files(vendor).filter(p => !p.includes("/.git/") && relative(vendor, p) !== ".git" && !p.includes("/__pycache__/") && !p.endsWith(".pyc"));
   const sourceHash = hash(JSON.stringify(sourceFiles.map(p => [relative(vendor, p), hash(readFileSync(p))]).sort(([a], [b]) => a! < b! ? -1 : a! > b! ? 1 : 0)));
   if (pin.upstream !== identity.upstream || pin.files !== sourceFiles.length || pin.sha256 !== sourceHash) throw new Error("m2c upstream differs from the pinned source snapshot");
@@ -35,7 +43,7 @@ export function prepareM2c(root: string): { script: string; identity: ReturnType
     const dirty = execFileSync("git", ["-C", vendor, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8", timeout: 10000 }).trim();
     if (head !== identity.upstream || dirty) throw new Error("m2c upstream differs from the pinned clean vendor revision");
   }
-  const dir = join(root, "build/vendor/m2c", identity.sha256);
+  const dir = join(runtime, "dependencies/patched-m2c", identity.sha256);
   const stamp = join(dir, "patched-source.json");
   const inspect = () => {
     const hashes = JSON.parse(readFileSync(stamp, "utf8")) as Record<string, string>;
@@ -61,6 +69,6 @@ export function prepareM2c(root: string): { script: string; identity: ReturnType
   } catch (error) { rmSync(temp, { recursive: true, force: true }); throw error; }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { console.log(prepareM2c(HARNESS_ROOT).script); }
+  try { console.log(prepareM2c(projectRoot()).script); }
   catch (error) { console.error(String(error)); process.exitCode = 1; }
 }

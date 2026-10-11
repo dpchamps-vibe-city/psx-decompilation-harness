@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * fileGroupings.ts — who else was in this function's translation unit.
  *
@@ -14,9 +15,9 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "./decompToolchain.js";
 
-const NOTE = join(ROOT, "notes/file-groupings.md");
+
+const NOTE = () => (join(projectRoot(), "notes/file-groupings.md"));
 
 export interface FileGroup {
   /** The `## ` heading the group was recorded under. */
@@ -24,7 +25,7 @@ export interface FileGroup {
   members: string[];
 }
 
-export function readGroups(path = NOTE): FileGroup[] {
+export function readGroups(path = NOTE()): FileGroup[] {
   if (!existsSync(path)) return [];
   const groups: FileGroup[] = [];
   let heading = "";
@@ -64,7 +65,7 @@ export function readGroups(path = NOTE): FileGroup[] {
  * Empty when the note records no group for it, which is the common case and
  * not an error: the ledger is a prior, not a partition.
  */
-export function siblingsOf(functionName: string, path = NOTE): string[] {
+export function siblingsOf(functionName: string, path = NOTE()): string[] {
   const seen = new Set<string>();
   for (const group of readGroups(path)) {
     if (!group.members.includes(functionName)) continue;
@@ -74,6 +75,6 @@ export function siblingsOf(functionName: string, path = NOTE): string[] {
 }
 
 /** The heading of the first group this function is recorded in. */
-export function groupHeadingOf(functionName: string, path = NOTE): string | undefined {
+export function groupHeadingOf(functionName: string, path = NOTE()): string | undefined {
   return readGroups(path).find((group) => group.members.includes(functionName))?.heading;
 }

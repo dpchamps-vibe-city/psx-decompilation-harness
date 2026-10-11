@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * ramMap.ts — where every address overlay code touches actually lives.
  *
@@ -18,7 +19,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { ROOT, loadPsxExeInfo } from "../lib/psxExeInfo.js";
+import { loadPsxExeInfo } from "../lib/psxExeInfo.js";
 import { buildRamMap, regionOf, type RamRegion } from "../lib/ramRegions.js";
 import { scanOverlayReferences } from "../lib/overlayReferences.js";
 import { findLuiPairs, isValidRamAddress } from "../lib/mips.js";
@@ -110,10 +111,10 @@ for (const entry of filtered) {
 
 /* The PS-X EXE's own references, for the comparison that makes the shared
    region legible: it is busier than either body's references to its own image. */
-const exe = loadPsxExeInfo();
-const exeImage = readFileSync(exe.binaryPath).subarray(exe.payloadOffset, exe.payloadOffset + exe.payloadSize);
+const exe = () => (loadPsxExeInfo());
+const exeImage = () => (readFileSync(exe().binaryPath).subarray(exe().payloadOffset, exe().payloadOffset + exe().payloadSize));
 const exeByRegion = new Map<string, number>();
-for (const pair of findLuiPairs(exeImage, 8)) {
+for (const pair of findLuiPairs(exeImage(), 8)) {
   if (!isValidRamAddress(pair.address)) continue;
   const region = regionOf(regions, pair.address);
   const key = region?.name ?? "unclassified";
@@ -141,8 +142,8 @@ if (unclassified.length > 0 && (unclassifiedOnly || unclassified.length <= 20)) 
 }
 
 if (json) {
-  const out = join(ROOT, "build/ramMap.json");
-  mkdirSync(join(ROOT, "build"), { recursive: true });
+  const out = join(projectRoot(), "build/ramMap.json");
+  mkdirSync(join(projectRoot(), "build"), { recursive: true });
   writeFileSync(
     out,
     `${JSON.stringify(

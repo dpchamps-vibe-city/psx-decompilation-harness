@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { archiveSource } from "./park.ts";
 import { createTurnGate, waitForTurn, type TurnWaitResult } from "./turn-gate.ts";
 

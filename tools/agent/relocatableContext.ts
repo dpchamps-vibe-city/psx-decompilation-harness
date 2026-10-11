@@ -1,9 +1,10 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Context publication for the relocatable adapter. Per-owner files prevent
  * duplicate/local symbol names from merging unrelated TU scopes. Reference
  * headers are read through the target cpp, never overwritten. */
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { HARNESS_ROOT, configuredFlags, configuredTool } from "../lib/toolchain.js";
+import { configuredFlags, configuredTool } from "../lib/toolchain.js";
 import { libraryMembers, requireLibraryFunction } from "../lib/libraryTargets.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { measureLibraryFunction, libraryBuildIdentity } from "./libraryTarget.js";
@@ -17,9 +18,8 @@ import { loadConfig } from "../../.pi/extensions/shared/config.js";
 import { sourceConstructFindings } from "../../.pi/extensions/shared/source-policy.js";
 import type { ExportResult } from "./contextExport.js";
 
-export function exportRelocatableContext(name: string, root = HARNESS_ROOT, dryRun = false): ExportResult {
+export function exportRelocatableContext(name: string, root = projectRoot(), dryRun = false): ExportResult {
   root = resolve(root);
-  if (root !== HARNESS_ROOT) throw new Error("Publish context from the target's cloned harness root");
   const target = resolveFunctionTarget(name, root);
   const skipped = (reason: string): ExportResult => ({ status: "skipped", skipped: true, signatureMatches: false, signatures: [], localPrototypes: [], reason });
   if (!existsSync(join(root, target.source))) return skipped("file not found");
@@ -68,7 +68,7 @@ export function exportRelocatableContext(name: string, root = HARNESS_ROOT, dryR
   return { status: "published", skipped: false, signatureMatches: true, signatures: pairs.map(p => p.signature), localPrototypes: [] };
 }
 
-export function exportAllRelocatableContexts(root = HARNESS_ROOT, dryRun = false): { exported: string[]; skipped: string[] } {
+export function exportAllRelocatableContexts(root = projectRoot(), dryRun = false): { exported: string[]; skipped: string[] } {
   const exported: string[] = [], skipped: string[] = [];
   for (const member of libraryMembers(root)) {
     const fn = member.functions[0];

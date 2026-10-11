@@ -1,3 +1,5 @@
+import { prepareWorkspaceInputs } from "../../../tools/lib/workspaceInputs.js";
+import { installedScriptArgs } from "../../../tools/lib/installedScripts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -137,23 +139,7 @@ export async function createWorkspace(
 
   await git(projectRoot, ["worktree", "add", "--detach", path, baseHead], projectRoot, undefined, 120_000);
   try {
-    const submodules = await runCommand("git", ["submodule", "update", "--init", "--recursive"], {
-      cwd: path,
-      timeoutMs: 10 * 60_000,
-    });
-    if (submodules.code !== 0) throw new Error(`Submodule preparation failed:\n${submodules.stderr || submodules.stdout}`);
-
-    ensureSymlink(join(projectRoot, "extracted"), join(path, "extracted"));
-    ensureSymlink(join(projectRoot, "node_modules"), join(path, "node_modules"));
-
-    const oldGcc = join(projectRoot, "tools", "vendor", "old-gcc");
-    if (existsSync(oldGcc)) {
-      for (const entry of readdirSync(oldGcc)) {
-        if (entry.startsWith("build-gcc-") && entry.endsWith("-psx")) {
-          ensureSymlink(join(oldGcc, entry), join(path, "tools", "vendor", "old-gcc", entry));
-        }
-      }
-    }
+    prepareWorkspaceInputs(projectRoot, path);
 
     if (baselineTree !== baseHead) {
       const baselinePatch = await treePatch(projectRoot, baseHead, baselineTree, config.integration.allowedRoots);
@@ -172,9 +158,9 @@ export async function createWorkspace(
        include and a link that fails on symbols the workspace never saw. */
     const targets = splitTargets(containers);
     for (const target of targets) {
-      const args = target === "split-all" ? ["run", "split-all"] : target === "split" ? ["run", "split"] : ["run", "split", "--", "--container", target.slice("split-".length)];
-      const split = await runCommand("npm", args, { cwd: path, timeoutMs: 15 * 60_000 });
-      if (split.code !== 0) throw new Error(`Workspace npm ${args.join(" ")} failed:\n${split.stderr || split.stdout}`);
+      const args = target === "split-all" ? ["split-all"] : target === "split" ? ["split"] : ["split", "--container", target.slice("split-".length)];
+      const split = await runCommand(process.execPath, installedScriptArgs("tools/build/pipeline.ts", args, path), { cwd: path, timeoutMs: 15 * 60_000 });
+      if (split.code !== 0) throw new Error(`Workspace splitting failed:\n${split.stderr || split.stdout}`);
     }
     return { id, path, baseHead, baselineTree };
   } catch (error) {

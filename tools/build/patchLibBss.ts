@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * patchLibBss.ts — Patch library .o files to resolve BSS symbols to absolute addresses
  *
@@ -25,16 +26,16 @@ import { execFileSync, execSync } from "child_process";
 import { configuredTool } from "../lib/toolchain.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { loadPsxExeInfo, exeBasename, ROOT } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, exeBasename } from "../lib/psxExeInfo.ts";
 import { patchedSdkObjectPath } from "../lib/psyqMembers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _info = loadPsxExeInfo();
-const BINARY_PATH = _info.binaryPath;
-const LD_SCRIPT = join(ROOT, "build", `${exeBasename()}.ld`);
-const CACHE_PATH = join(ROOT, "build/libSections.json");
-const BSS_SYMS_PATH = join(ROOT, "build/lib_bss_syms.txt");
-const BUILD_LIB = join(ROOT, "build/lib");
+const _info = () => (loadPsxExeInfo());
+const BINARY_PATH = () => (_info().binaryPath);
+const LD_SCRIPT = () => (join(projectRoot(), "build", `${exeBasename()}.ld`));
+const CACHE_PATH = () => (join(projectRoot(), "build/libSections.json"));
+const BSS_SYMS_PATH = () => (join(projectRoot(), "build/lib_bss_syms.txt"));
+const BUILD_LIB = () => (join(projectRoot(), "build/lib"));
 
 // ELF constants
 const SHN_ABS = 0xfff1;
@@ -613,18 +614,18 @@ function main() {
   const writeMode = process.argv.includes("--write");
   const verbose = process.argv.includes("--verbose");
 
-  if (!existsSync(CACHE_PATH)) {
+  if (!existsSync(CACHE_PATH())) {
     console.error("ERROR: build/libSections.json not found. Run 'npm run split' first.");
     process.exit(1);
   }
-  if (!existsSync(BSS_SYMS_PATH)) {
+  if (!existsSync(BSS_SYMS_PATH())) {
     console.error("ERROR: build/lib_bss_syms.txt not found. Run 'npm run split' first.");
     process.exit(1);
   }
 
-  const libSections: LibSections[] = JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
-  const globalBssSyms = parseGlobalBssSyms(BSS_SYMS_PATH);
-  const binary = readFileSync(BINARY_PATH);
+  const libSections: LibSections[] = JSON.parse(readFileSync(CACHE_PATH(), "utf-8"));
+  const globalBssSyms = parseGlobalBssSyms(BSS_SYMS_PATH());
+  const binary = readFileSync(BINARY_PATH());
 
   console.error(`Loaded ${globalBssSyms.size} global BSS symbol addresses`);
   console.error(`Processing ${libSections.length} library .o files`);
@@ -643,8 +644,8 @@ function main() {
 
   // Process all library .o files: copy to build/lib/, apply all patches
   for (const entry of libSections) {
-    const srcPath = join(ROOT, entry.oPath);
-    const dstPath = join(ROOT, patchedSdkObjectPath(entry.oPath));
+    const srcPath = join(projectRoot(), entry.oPath);
+    const dstPath = join(projectRoot(), patchedSdkObjectPath(entry.oPath));
 
     // Ensure output directory exists
     mkdirSync(dirname(dstPath), { recursive: true });
@@ -721,8 +722,8 @@ function main() {
   }
 
   // Update linker script: replace lib/ paths with build/lib/ for library .o files
-  if (writeMode && existsSync(LD_SCRIPT)) {
-    const ldContent = readFileSync(LD_SCRIPT, "utf-8");
+  if (writeMode && existsSync(LD_SCRIPT())) {
+    const ldContent = readFileSync(LD_SCRIPT(), "utf-8");
 
     // Replace all lib/*.o references with build/lib/*.o
     // Be careful to only replace standalone lib/ references (not build/lib/ already)
@@ -742,16 +743,16 @@ function main() {
     // After patching, .bss sections are empty, but the NOLOAD section
     // still needs to reference the patched files
 
-    writeFileSync(LD_SCRIPT, newContent);
-    console.error(`Updated ${LD_SCRIPT} (lib/ -> build/lib/ paths)`);
+    writeFileSync(LD_SCRIPT(), newContent);
+    console.error(`Updated ${LD_SCRIPT()} (lib/ -> build/lib/ paths)`);
 
     // Strip library-defined symbols from undefined_funcs_auto.txt and undefined_syms_auto.txt
     // These auto-generated files contain linker script assignments that override
     // the actual definitions from library .o files, causing wrong addresses.
     const allLibSyms = new Set<string>();
     for (const oPath of libOPaths) {
-      const buildPath = join(ROOT, patchedSdkObjectPath(oPath));
-      const origPath = join(ROOT, oPath);
+      const buildPath = join(projectRoot(), patchedSdkObjectPath(oPath));
+      const origPath = join(projectRoot(), oPath);
       const path = existsSync(buildPath) ? buildPath : origPath;
       try {
         const nmOut = execFileSync(configuredTool("nm"), [path], { encoding: "utf-8" });
@@ -765,7 +766,7 @@ function main() {
     }
 
     for (const autoFile of ["build/undefined_funcs_auto.txt", "build/undefined_syms_auto.txt"]) {
-      const autoPath = join(ROOT, autoFile);
+      const autoPath = join(projectRoot(), autoFile);
       if (!existsSync(autoPath)) continue;
       const lines = readFileSync(autoPath, "utf-8").split("\n");
       const filtered = lines.filter((l) => {

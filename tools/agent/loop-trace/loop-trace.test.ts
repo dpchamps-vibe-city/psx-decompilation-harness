@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { parseLoopDump } from "./parse.ts";
 import { preheaderLayouts, pseudoOf } from "./preheader.ts";
 import {

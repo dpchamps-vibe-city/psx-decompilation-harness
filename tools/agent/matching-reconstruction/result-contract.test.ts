@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * The result contract: what a consumer may read, and on whose authority.
  *
@@ -13,8 +14,8 @@ import { strict as assert } from "node:assert";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { sha256 } from "../provenance.js";
 import { ArtifactRecorder, isRefusal, readResultArtifact, type LoadedResult } from "./result-contract.js";
 import { MATCHING_RECONSTRUCTION_SCHEMA_VERSION, type ResultBundle } from "./types.js";

@@ -12,16 +12,18 @@ configured and unresolved prerequisites are reported.
 
 ## Read first
 
-This skill lives in `.pi/skills/psx-identify-project/`. Resolve these references
+This skill lives in `./`. Resolve these references
 relative to this directory:
 
 - [Toolchain contract and npm tasks](../../../docs/toolchain.md)
 - [Remaining format/ABI assumptions](../../../docs/game-agnosticity.md)
 - [Configuration schema](../../../tools/lib/toolchain.schema.json)
 
-Run commands below from the **repository root**, three directories above this
-skill. Inspect each tool's usage/source before adding options; do not invent
-flags or claim that a detector supports an unknown format.
+Run commands below from the **target repository root**, never the installed
+package checkout. The installed package supplies this skill and its tools; if
+the project is not scaffolded yet, run `/skill:psx-bootstrap-project` (default
+`exe`, or explicitly `library`) first. Inspect each tool's usage/source before
+adding options; do not invent flags or claim support for an unknown format.
 
 ## 1. Inventory inputs without modifying them
 
@@ -33,8 +35,8 @@ flags or claim that a detector supports an unknown format.
 3. Inspect `toolchain.json`, `configs/project-info.json`, any splat configs,
    symbol tables and overlay manifest. Record whether each item is a measured
    fact, a user assertion, or a template/default candidate.
-4. Check the configured executable paths. `npm ci` installs TypeScript tooling;
-   `npm run setup` prepares vendors, not compiler/system binaries. For degit
+4. Check the configured executable paths. The installed package supplies TypeScript tooling;
+   `psx_prepare_tooling` prepares vendors, not compiler/system binaries. For degit
    exports, missing gitlinks require provisioning the pinned sources or a
    recursive clone. Do not bypass m2c source verification.
 
@@ -44,10 +46,23 @@ Keep the evidence record in a project-owned file such as
 paths, conclusions, competing hypotheses and unresolved prerequisites. Do not
 restore the removed game research/plan directories.
 
-## 2. Identify the executable and address model
+## 2. Identify the target format and address model
+
+If `project.json` selects `relocatable-library`, read
+[Library targets](../../../docs/library-targets.md). Inventory authoritative
+ELF/ar inputs under `library-input/` (or explicitly selected converted inputs
+under `lib/`), review every input glob and reference/owned/context header role,
+and run `psx_identify_project({json: true})`. Do not require a PS-X EXE, invent RAM
+addresses, create splat configs, or run image-only archive/SDK integration.
+PSY-Q LIB/LNK needs a converter and recorded provenance before the ELF/ar adapter
+can handle it. Continue with toolchain/evidence configuration and the library
+split/profile/whole-member verification workflow in that document; preserve
+unresolved prerequisites. The image-only steps below apply to linked targets.
+
+For an EXE:
 
 ```sh
-npx tsx tools/diagnostics/headerInfo.ts extracted/YOUR-EXE build/identification/header.md
+psx_inspect_exe({input: "extracted/YOUR-EXE", output: "build/identification/header.md"})
 ```
 
 The explicit-file diagnostic can run before project configuration exists.
@@ -72,9 +87,9 @@ ambiguous metadata is a blocker, not permission to invent sections.
 ## 3. Measure layout and SDK evidence
 
 ```sh
-npm run identify -- --json
-npm run disassemble
-npm run identify -- --deep --json
+psx_identify_project({json: true})
+psx_disassemble_project({})
+psx_identify_project({deep: true, json: true})
 ```
 
 - Shallow identification examines vendor strings and reports configured choices
@@ -84,13 +99,13 @@ npm run identify -- --deep --json
   the latter to avoid phantom functions inside data. Review
   `build/sectionLayout.json` against the image and disassembly before treating
   section boundaries as established.
-- Deep identification runs `tools/diagnostics/matchSignatures.ts` across the
+- Deep identification runs `psx_match_sdk_signatures` across the
   available PSY-Q signature releases and writes `build/sdkVersion.json` tied to
   the target hash. Inspect the full counts/runner-up if needed:
 
 ```sh
-npx tsx tools/diagnostics/matchSignatures.ts
-npx tsx tools/diagnostics/matchSignatures.ts --version VERSION
+psx_match_sdk_signatures({})
+psx_match_sdk_signatures({version: "VERSION"})
 ```
 
 The most matches is a **candidate SDK release**, not proof of compiler version,
@@ -101,11 +116,15 @@ unsupported SDK is `undetermined`, never an automatic choice of 4.7.
 
 For original-object integration, inspect coherent original LIBs, converted ELF
 objects and their provenance. Once a justified SDK candidate is configured,
-`npm run split-sdk-libs` provisions collision-safe member identities;
-`npx tsx tools/build/detectLibFunctions.ts` checks placements against actual
+`psx_prepare_sdk` provisions collision-safe member identities;
+`psx_prepare_sdk({verifyPlacements: true})` checks placements against actual
 objects. Missing converters, collisions and unverifiable matches are blockers,
-not authority to replace bytes. The retained headers/objects are a 4.7 input set;
-changing only `sdk.version` does not turn them into another release.
+not authority to replace bytes. The harness checkout's retained reference headers are a 4.7 input set, but
+bootstrap does not copy SDK headers or objects. Supply coherent originals under
+`library-input/psyq/LIB/`, headers under `library-input/psyq/INCLUDE/`, and converted objects
+under `lib/` (or configure other paths). First-time non-colliding conversion is
+performed for supported inputs by the SDK repair tool. Changing only `sdk.version` does not turn
+an input set into another release.
 
 ## 4. Identify containers and ABI assumptions
 
@@ -113,13 +132,13 @@ Skip archive discovery if the project has no overlays. For supported paired-inde
 archives only, and with the user's intended input pair established:
 
 ```sh
-npm run disassemble -- --archives
-npx tsx tools/diagnostics/overlayFlagFingerprint.ts
+psx_disassemble_project({archives: true})
+psx_inspect_container_abi({})
 ```
 
 This adapter discovers/extracts/classifies members, solves bases and publishes
 `configs/overlays.json`. It is **not a universal PS1 archive decoder**. Inspect
-`tools/build/extractArchive.ts` for explicit `--index`/`--data` selection when
+`psx_extract_archive` for explicit `index`/`data` selection when
 more than one pair is plausible. Unknown formats need an adapter, not guessed
 boundaries. Unresolved bases remain unresolved and must not be claimed verified.
 
@@ -147,8 +166,8 @@ Edit `toolchain.json` using its existing schema:
 - `profiles`, `containerProfiles`: explicit container/kind selection when
   measured behavior differs. Profiles replace complete cc1/as/ld/maspsx arrays;
   omitted arrays inherit base. Never rely on an automatic `-G8` → `-G0` swap.
-- `fileFlags`: leave empty without per-TU target fingerprints, dominant probe
-  evidence, no contrary regional witness and a human-approved policy allowlist.
+- `configs/flag_overrides.mk`: leave empty without per-TU target fingerprints, dominant probe
+  evidence, no contrary regional witness and a matching policy allowlist.
   Ordinary workers must not modify toolchain authority.
 
 Do not select flags solely to improve a score. Use representative **real target
@@ -163,15 +182,15 @@ not create an adapter that is not implemented.
 With prerequisites present:
 
 ```sh
-npm run split-all
-npm run check-all
-npx tsx tools/build/genProjectProfile.ts --write
-npm run progress
+psx_split_project({all: true})
+psx_verify_project({})
+psx_generate_project_profile({write: true})
+psx_project_progress({})
 ```
 
-For selected containers, use `npm run split -- --container ID` and
-`npm run check -- --container ID`. Keep validation lean; do not build a large
-new test suite to onboard a project. `npm run config-check` is useful once a Git
+For selected containers, use `psx_split_project({container: "ID"})` and
+`psx_verify_project({container: "ID"})`. Keep validation lean; do not build a large
+new test suite to onboard a project. `psx_check_configuration` is useful once a Git
 baseline exists, but guards tracked config/header convergence only.
 
 Hand off:

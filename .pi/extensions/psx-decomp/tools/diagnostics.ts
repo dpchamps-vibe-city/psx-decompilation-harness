@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 /**
  * Registration for every `tools/agent` CLI that is not already its own tool
  * file. One Pi tool per CLI — a tool's subcommands stay parameters of that
@@ -207,7 +208,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     label: "PSX Compiler Source",
     script: "compilerSource.ts",
     description:
-      "Search the source of the compiler that builds this project (tools/vendor/gcc/<GCC_VERSION>, the exact patched tree cc1 is built from). Commands: `pass` maps a dump suffix (.gcse, .lreg, .greg, .sched2) to the passes whose output it shows and the flag that gates them; `def` and `body` locate and print a function, macro, variable or typedef; `refs` lists identifier references with comments and strings excluded; `pattern` prints a machine-description pattern such as movsi_internal2; `grep` is a scoped regex; `health` reports index coverage; `verify` checks the tree against its hash pin. Prefer one read of the pass that decides a thing over another round of source shapes — a proof that a form is unreachable ends a search, a failed experiment does not.",
+      "Search the source of the compiler that builds this project (the configured compiler source). Commands: `pass` maps a dump suffix (.gcse, .lreg, .greg, .sched2) to the passes whose output it shows and the flag that gates them; `def` and `body` locate and print a function, macro, variable or typedef; `refs` lists identifier references with comments and strings excluded; `pattern` prints a machine-description pattern such as movsi_internal2; `grep` is a scoped regex; `health` reports index coverage; `verify` checks the tree against its hash pin. Prefer one read of the pass that decides a thing over another round of source shapes — a proof that a form is unreachable ends a search, a failed experiment does not.",
     parameters: Type.Object({
       command: Type.Union([
         Type.Literal("def"), Type.Literal("body"), Type.Literal("refs"), Type.Literal("pass"),
@@ -346,7 +347,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     label: "PSX Reconstruction Campaign",
     script: "campaignRun.ts",
     description:
-      "An unattended reconstruction campaign to a fixed point, plus the prepared handoff for everything it could not finish. Runs each unmatched function through the cheapest route that could settle it — a family transfer where a member with clean C shares its word shape, reconstruction otherwise — and when one succeeds, requeues ONLY its dependents: its callers (whose callee signature stopped being an ABI bound), its family (which just acquired a donor), and the functions that share a global with it. That bound is what makes a campaign converge rather than re-run the project after every success; `--graph` reports the dependency relation and its fan-out. It writes NOTHING to src/: byte-exact candidates land under build/ with their integration plans, and `--bundles` writes a prepared bundle per unfinished function carrying the draft (or the honest absence of one and the capability that would produce it), the recovered context, the residual placed in the target's own basic blocks, the experiments already closed with what would reopen them, the next bounded work item, and an integration plan. `--bundle <fn>` prepares one without running anything. A budget stop (`--max-attempts`, `--max-rounds`) is a normal outcome and keeps everything settled so far. Promoting a candidate is a separately authorized step (finalizeEngineMatches --write).",
+      "An unattended reconstruction campaign to a fixed point, plus the prepared handoff for everything it could not finish. Runs each unmatched function through the cheapest route that could settle it — a family transfer where a member with clean C shares its word shape, reconstruction otherwise — and when one succeeds, requeues ONLY its dependents: its callers (whose callee signature stopped being an ABI bound), its family (which just acquired a donor), and the functions that share a global with it. That bound is what makes a campaign converge rather than re-run the project after every success; `--graph` reports the dependency relation and its fan-out. It writes NOTHING to src/: byte-exact candidates land under build/ with their integration plans, and `--bundles` writes a prepared bundle per unfinished function carrying the draft (or the honest absence of one and the capability that would produce it), the recovered context, the residual placed in the target's own basic blocks, the experiments already closed with what would reopen them, the next bounded work item, and an integration plan. `--bundle <fn>` prepares one without running anything. A budget stop (`--max-attempts`, `--max-rounds`) is a normal outcome and keeps everything settled so far. Promoting a candidate is a separately authorized step (psx_finalize_engine_matches({write: true})).",
     parameters: Type.Object({
       functionName: Type.Optional(FUNCTION("Restrict the campaign to this function; repeatable via the tool's own re-invocation")),
       container: Type.Optional(Type.String({ description: "Restrict to one container, e.g. ovl_11" })),
@@ -580,7 +581,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       "confirms every candidate with the byte oracle before writing — a subtly wrong " +
       "transform simply fails to match and the function is left as a stub. Omit the function " +
       "name to finalize every current engine match; pass --write to apply (dry run otherwise). " +
-      "Verify the result with psx_finalize_function / npm run check-all afterward.",
+      "Verify the result with psx_finalize_function / psx_verify_build afterward.",
     parameters: Type.Object({
       functionName: Type.Optional(Type.String({ description: "Restrict to one function; omit to finalize all current engine matches" })),
       write: Type.Optional(Type.Boolean({ description: "Write integrated source to src/; omit for a dry run" })),
@@ -640,8 +641,8 @@ export function registerDiagnosticTools(pi: ExtensionAPI): void {
         return runProjectCommand(
           pi,
           ctx.cwd,
-          "npx",
-          ["tsx", `tools/agent/${spec.script}`, ...spec.argv(record)],
+          process.execPath,
+          installedScriptArgs(`tools/agent/${spec.script}`, [...spec.argv(record)], ctx.cwd),
           signal,
           spec.timeout,
         );

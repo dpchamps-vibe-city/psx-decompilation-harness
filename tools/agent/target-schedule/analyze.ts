@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { parseRtlInstructions } from "../compiler-trace/rtl-parser.js";
 import { parseEmissionAttribution } from "../compiler-trace/emission-attribution.js";
 import type { CompilerTraceReport } from "../compiler-trace/types.js";
@@ -87,16 +88,16 @@ export function analyzeTargetScheduleFromArtifacts(
     trace.stages.find((stage) => stage.suffix === "dbr");
   if (!machStage) throw new Error("compiler trace did not produce .mach or .dbr final RTL");
   const finalInstructions = parseRtlInstructions(
-    readFileSync(join(ROOT, machStage.file), "utf8"),
+    readFileSync(join(projectRoot(), machStage.file), "utf8"),
     machStage.suffix,
   );
 
   const target = machineRefs(options.target);
-  const candidate = machineRefs(options.candidate || parseCc1Assembly(join(ROOT, trace.assembly)));
+  const candidate = machineRefs(options.candidate || parseCc1Assembly(join(projectRoot(), trace.assembly)));
   /* Traces are compiled with -dp, so the assembly carries the compiler's own
    * RTL-instruction-to-line attribution. Older traces without it fall back to
    * canonical matching. */
-  const attribution = parseEmissionAttribution(readFileSync(join(ROOT, trace.assembly), "utf8"));
+  const attribution = parseEmissionAttribution(readFileSync(join(projectRoot(), trace.assembly), "utf8"));
   const uidResult = attachFinalUids(candidate, finalInstructions, attribution);
   const alignment = alignMachineInstructions(target, candidate);
   attachCorrespondenceUids(alignment.correspondence, candidate);

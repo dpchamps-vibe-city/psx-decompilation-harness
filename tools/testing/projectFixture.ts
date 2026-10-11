@@ -76,9 +76,9 @@ export function projectFixture(t: { after: (cleanup: () => void) => void }, opti
   });
   put("configs/overlays.json", JSON.stringify({ generatedBy: "synthetic fixture", archive: {}, members }));
   const config: ToolchainConfig = JSON.parse(readFileSync(join(HARNESS_ROOT, "toolchain.json"), "utf8"));
-  for (const name of Object.keys(config.tools) as ToolName[]) config.tools[name] = configuredTool(name);
+  for (const name of Object.keys(config.tools) as ToolName[]) config.tools[name] = configuredTool(name, HARNESS_ROOT);
   config.profiles = { fixture_overlay: { cc1: config.flags.cc1.filter(f => !/^-G/.test(f)).concat("-G0"), as: config.flags.as.filter(f => !/^-G/.test(f)).concat("-G0") } };
-  config.containerProfiles = { overlay: "fixture_overlay" }; config.fileFlags = {};
+  config.containerProfiles = { overlay: "fixture_overlay" };
   put("toolchain.json", JSON.stringify(config));
   return { root, put, containers: () => loadContainers(root), toolchain: config };
 }

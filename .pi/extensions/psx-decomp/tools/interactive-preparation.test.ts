@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";

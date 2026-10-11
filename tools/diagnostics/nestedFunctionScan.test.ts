@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { projectFixture, FIXTURE_BASE, FIXTURE_OVERLAY_BASE } from "../testing/projectFixture.js";
 import { loadMacroFunctions } from "./macroIdentity.js";
 import { buildChainCensus, scanChainFunction, chainRow } from "./nestedFunctionScan.js";

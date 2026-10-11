@@ -35,7 +35,7 @@ roles; do not infer these from an m2c declaration.
 - Never hand-edit generated headers such as `include/globals.h`,
   `include/functions.h` or the generated m2c context headers. After adding a
   global override, regenerate globals through
-  `npx tsx tools/build/classifyGlobals.ts --write` if required to remove its
+  `psx_classify_globals({write: true})` if required to remove its
   old generated declaration. Do not export an unmatched function as verified.
 - A translation-unit-owned global's tentative **definition** belongs in its
   source file; it is not a redundant extern. Preserve ownership supported by

@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { align, ngrams } from "./align.js";
 import { bucketImmediate, registerClass, tier0, tier1, tokensAt } from "./normalize.js";
 import type { MirInsn } from "../pipeline-reversal/types.js";

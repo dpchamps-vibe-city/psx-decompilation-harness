@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runProjectCommand, validateFunctionName } from "./shared.ts";
@@ -16,8 +17,8 @@ export function registerExplainDiffTool(pi: ExtensionAPI): void {
       return runProjectCommand(
         pi,
         ctx.cwd,
-        "npx",
-        ["tsx", "tools/agent/explainDiff.ts", params.functionName],
+        process.execPath,
+        installedScriptArgs("tools/agent/explainDiff.ts", [params.functionName], ctx.cwd),
         signal,
         15_000,
       );

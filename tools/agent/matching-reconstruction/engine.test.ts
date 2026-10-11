@@ -1,8 +1,10 @@
+import { fixtureContext } from "../../testing/runtimeTestContext.js";
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT, configuredCompilerPath } from "../decompToolchain.js";
+
+import { configuredCompilerPath } from "../decompToolchain.js";
 import { loadContainer, containerTargetPath } from "../../lib/container.js";
 import { reconstructFunction } from "./engine.js";
 
@@ -16,7 +18,7 @@ function overlayReady(): boolean {
   return container !== null && existsSync(containerTargetPath(container));
 }
 
-const ready = overlayReady();
+const ready = fixtureContext(ROOT, () => (overlayReady()));
 
 test("the embedded-table regression reconstructs from source-hidden inputs", { skip: !ready }, () => {
   const result = reconstructFunction({

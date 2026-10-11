@@ -1,13 +1,14 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Shared first-pass preparation entry point. Raw output and every diagnostic
  * stay under build/preparation/. --write is a guarded handoff, never overwrite. */
 import { prepareFunction, stagePrepared } from "./prepareFunction.js";
 import { packetOpening } from "./campaign/packet.js";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { normalizeFunctionName } from "./decompToolchain.js";
 
 export { prepareFunction, stagePrepared } from "./prepareFunction.js";
 
 /** Explicit alternative for diagnostic consumers; no repair or scalar backstop. */
-export async function runM2c(functionName: string, root = ROOT, options: { write?: boolean; contextFile?: string } = {}): Promise<string> {
+export async function runM2c(functionName: string, root = projectRoot(), options: { write?: boolean; contextFile?: string } = {}): Promise<string> {
   const result = await prepareFunction(functionName, { root, alternative: true, ...(options.contextFile ? { contextFile: options.contextFile } : {}) });
   if (!result.packet.primary) throw new Error(`m2c ${result.packet.generation.status}; preserved packet: ${result.path}`);
   if (options.write) {

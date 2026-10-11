@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonical, hash, Store } from "../../../../tools/agent/resource-extraction/storage.ts";
@@ -13,13 +13,11 @@ export async function runResource(operation: Operation, root: string, request: R
   const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
   const script = TOOL_SCRIPTS.find(([key]) => key === operation)?.[1];
   if (!script) throw new Error("Unknown resource operation");
-  const localScript = resolve(root, "tools/agent", script);
-  const executable = existsSync(localScript) ? localScript : resolve(repository, "tools/agent", script);
   const payload = canonical(request);
   if (Buffer.byteLength(payload) > 65536) throw new Error("Request budget exceeded");
   const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
   return new Promise((resolveResult, reject) => {
-    const child = spawn(process.execPath, [resolve(repository, "node_modules/tsx/dist/cli.mjs"), executable, "--request", "-"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, installedScriptArgs(`tools/agent/${script}`, ["--request", "-"], root), { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "", stderr = "", buffered = "", result: Record<string, unknown> | undefined, cancelled = false;
     let force: ReturnType<typeof setTimeout> | undefined;
     const cancel = (): void => { cancelled = true; child.kill("SIGTERM"); force ??= setTimeout(() => child.kill("SIGKILL"), 2000); };

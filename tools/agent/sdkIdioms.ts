@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * sdkIdioms.ts — recognize PSY-Q packet types and macro operations in a
  * target function.
@@ -39,19 +40,17 @@
  */
 
 import { existsSync, readFileSync, rmSync } from "fs";
-import { join } from "path";
-import {
-  ROOT,
-  type DisassembledInstruction,
-  assembleTarget,
-  disassembleObject,
-  normalizeFunctionName,
-  sourcePathFor,
-} from "./decompToolchain.js";
+import { join, relative } from "path";
+import { type DisassembledInstruction, assembleTarget, disassembleObject, normalizeFunctionName, sourcePathFor } from "./decompToolchain.js";
 import { defUse } from "./webAnalysis.js";
 
-const LIBGPU_RELATIVE = "include/psyq/libgpu.h";
-const LIBGPU = join(ROOT, LIBGPU_RELATIVE);
+import { loadToolchain } from "../lib/toolchain.js";
+const LIBGPU = () => {
+  const headers = loadToolchain().includeDirs.map(path => join(projectRoot(), path, "libgpu.h"));
+  const path = headers.find(existsSync);
+  if (!path) throw new Error("Configured PSY-Q libgpu.h unavailable; supply SDK headers under library-input/psyq/INCLUDE and configure includeDirs.");
+  return path;
+};
 
 /* --- header parsing: struct layouts --- */
 
@@ -161,10 +160,10 @@ function structNameFor(macroSuffix: string, known: Map<string, string>): string 
 }
 
 function readHeader(): string | null {
-  if (!existsSync(LIBGPU)) return null;
+  if (!existsSync(LIBGPU())) return null;
   /* The vendored SDK headers are CRLF; splice continuations so a multi-line
    * macro reads as the single expression it is. */
-  return readFileSync(LIBGPU, "utf-8").replace(/\r\n/g, "\n");
+  return readFileSync(LIBGPU(), "utf-8").replace(/\r\n/g, "\n");
 }
 
 export function loadStructLayouts(header: string): {
@@ -994,7 +993,7 @@ function findPrimitives(
               ? " (no attribute bits applied)"
               : ` | ${chosen.attributes.filter((a) => a.enabled && (composedBits & a.mask) !== 0)
                   .map((a) => `${a.macro} bit ${hex(a.mask)}`).join(" | ")}`),
-        `${chosen.type.macro}(p) expands to exactly the len/code pair — see ${LIBGPU_RELATIVE}`,
+        `${chosen.type.macro}(p) expands to exactly the len/code pair — see ${relative(projectRoot(), LIBGPU())}`,
       ];
       if (!ambiguous && composedBits !== 0) {
         evidence.push(
@@ -1092,7 +1091,7 @@ function findPackets(
       `${instructions[lenAccess.index].raw.trim()}   (len = ${lenValue})`,
       ...chosen.words.map((word) => `word at +${hex(word.offset)} = ${hex(word.value)}`),
       `${chosen.recipe.macro}(${chosen.recipe.parameters.join(", ")}) writes len ${chosen.recipe.len} at +0x3 and ` +
-      `${chosen.recipe.writes.map((write) => `+${hex(write.offset)}`).join(", ")} — see ${LIBGPU_RELATIVE}`,
+      `${chosen.recipe.writes.map((write) => `+${hex(write.offset)}`).join(", ")} — see ${relative(projectRoot(), LIBGPU())}`,
     ];
     if (ambiguous) {
       evidence.push(pool.length > 1
@@ -1489,7 +1488,7 @@ export function recognizeIdioms(
           baseWeb: object.baseWeb,
           summary: `code bit ${hex(attribute.mask)} is set on top of ${object.type.macro}'s base — use \`${attribute.macro}(p, 1)\``,
           evidence: [
-            `${attribute.macro} is defined in ${LIBGPU_RELATIVE} as a set/clear of code bit ${hex(attribute.mask)}`,
+            `${attribute.macro} is defined in ${relative(projectRoot(), LIBGPU())} as a set/clear of code bit ${hex(attribute.mask)}`,
             "the enabled state is established; the Boolean source expression behind it is not",
           ],
         });
@@ -1733,7 +1732,7 @@ function main(): void {
   }
 
   const name = normalizeFunctionName(positional[0]);
-  const scratch = join(ROOT, "build/triage", `${name}-sdk`);
+  const scratch = join(projectRoot(), "build/triage", `${name}-sdk`);
   let instructions: DisassembledInstruction[];
   try {
     instructions = disassembleObject(assembleTarget(name, scratch));

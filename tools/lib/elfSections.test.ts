@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { elf32SectionSizes } from "./elfSections.js";
 function fixture(be = false, extended = false): Buffer {

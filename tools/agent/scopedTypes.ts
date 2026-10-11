@@ -1,10 +1,12 @@
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
+import { projectRoot, contextForProject, inRuntimeContext } from "../lib/runtimeContext.js";
 /** Scope-aware context-only names; compiler headers are never populated here. */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { collectTypedefs, extractSignaturesFromSource } from "./sdkTypes.js";
 import { parseC, walk, namedChildren, field, C_FRONTEND_IDENTITY } from "./residual-source-search/tree-sitter-c.js";
-import { configuredCppFlags, ROOT } from "./decompToolchain.js";
+import { configuredCppFlags } from "./decompToolchain.js";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { scopeFromPreprocessed } from "./calleeTruth.js";
 import { cachedPreprocess, withPreprocessorMetadata } from "./preprocessedCache.js";
@@ -29,9 +31,9 @@ export function renameTypeTokens(source: string, names: Map<string, string>): st
 }
 interface TypeFact { name: string; text: string; origin: string; kind: "typedef" | "tag" | "standalone" }
 function cachedTypeFacts(root: string, path: string, processed: ReturnType<typeof scopeFromPreprocessed>, sourceLocal: boolean): TypeFact[] {
-  const implementation = ["scopedTypes.ts", "sdkTypes.ts", "calleeTruth.ts", "residual-source-search/tree-sitter-c.ts"].map((p) => fileDigest(join(ROOT, "tools/agent", p)));
-  implementation.push(fileDigest(join(ROOT, "tools/vendor/tree-sitter-c/tree-sitter-c.wasm")), fileDigest(join(ROOT, "package-lock.json")));
-  const key = digest(JSON.stringify([processed.identity, sourceLocal, implementation, C_FRONTEND_IDENTITY]));
+  const implementation = ["scopedTypes.ts", "sdkTypes.ts", "calleeTruth.ts", "residual-source-search/tree-sitter-c.ts"].map((p) => fileDigest(join(HARNESS_ROOT, "tools/agent", p)));
+  implementation.push(fileDigest(join(HARNESS_ROOT, "tools/vendor/tree-sitter-c/tree-sitter-c.wasm")), fileDigest(join(projectRoot(), "package-lock.json")));
+  const key = digest(JSON.stringify([processed.identity, sourceLocal, implementation, C_FRONTEND_IDENTITY()]));
   const cache = join(root, "build/cache/scoped-types", `${digest(path + sourceLocal)}.json`);
   const hit = readCache<TypeFact[]>(cache, key);
   if (hit) return hit;
@@ -54,7 +56,7 @@ function cachedTypeFacts(root: string, path: string, processed: ReturnType<typeo
   return result;
 }
 export function scopedTypeCatalog(root: string): ReturnType<typeof buildScopedTypeCatalog> {
-  return withPreprocessorMetadata(() => buildScopedTypeCatalog(root));
+  return inRuntimeContext(contextForProject(root), () => withPreprocessorMetadata(() => buildScopedTypeCatalog(root)));
 }
 function buildScopedTypeCatalog(root: string): {
   defs: Map<string, string>; byFunction: Map<string, Map<string, string>>;
@@ -67,7 +69,7 @@ function buildScopedTypeCatalog(root: string): {
   const origins = new Map<string, string>();
   const conflicts: Array<{ name: string; origins: string[] }> = [];
   const normalize = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, "");
-  const flags = configuredCppFlags().map((f) => f.startsWith(`-I${ROOT}/`) ? `-I${join(root, relative(ROOT, f.slice(2)))}` : f);
+  const flags = configuredCppFlags().map((f) => f.startsWith(`-I${projectRoot()}/`) ? `-I${join(root, relative(projectRoot(), f.slice(2)))}` : f);
   const preprocess = (path: string) => {
     return scopeFromPreprocessed(cachedPreprocess(path, root, flags).text);
   };

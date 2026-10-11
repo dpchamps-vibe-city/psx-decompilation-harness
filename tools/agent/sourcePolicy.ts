@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -13,20 +14,20 @@ import {
   workspaceChangedFiles,
 } from "../../.pi/extensions/shared/workspace.ts";
 
-const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const functionIndex = args.indexOf("--function");
   const functionName = functionIndex >= 0 ? args[functionIndex + 1] : undefined;
-  const config = loadConfig(ROOT);
-  const tree = await createTreeFromWorktree(ROOT, ROOT, config.integration.allowedRoots);
-  const patch = await treePatch(ROOT, "HEAD", tree, config.integration.allowedRoots);
+  const config = loadConfig(projectRoot());
+  const tree = await createTreeFromWorktree(projectRoot(), projectRoot(), config.integration.allowedRoots);
+  const patch = await treePatch(projectRoot(), "HEAD", tree, config.integration.allowedRoots);
   const changedFiles = [...new Set([
-    ...await changedFilesBetweenTrees(ROOT, "HEAD", tree),
-    ...await workspaceChangedFiles(ROOT),
+    ...await changedFilesBetweenTrees(projectRoot(), "HEAD", tree),
+    ...await workspaceChangedFiles(projectRoot()),
   ])].sort();
-  const graph = loadCallGraph(ROOT);
+  const graph = loadCallGraph(projectRoot());
   const entry = functionName ? graph.functions.find((candidate) => candidate.name === functionName) : undefined;
   if (functionName && !entry) throw new Error(`Unknown function: ${functionName}`);
   /* --final reproduces the controller's completion audit, where every live
@@ -44,13 +45,13 @@ async function main(): Promise<void> {
   const pendingStubs = functionName || finalAudit
     ? []
     : candidates.filter((name) => {
-      const path = resolve(ROOT, sourceOf.get(name) ?? `src/${name}.c`);
+      const path = resolve(projectRoot(), sourceOf.get(name) ?? `src/${name}.c`);
       return existsSync(path) && isPendingStub(readFileSync(path, "utf8"));
     });
   const pending = new Set(pendingStubs);
   const scanFunctions = candidates.filter((name) => !pending.has(name));
   const result = checkSourcePolicy({
-    projectRoot: ROOT,
+    projectRoot: projectRoot(),
     config,
     ...(functionName ? { functionName } : {}),
     ...(entry?.vram ? { functionVram: entry.vram } : {}),

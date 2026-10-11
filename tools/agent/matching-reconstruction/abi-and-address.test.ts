@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * Complete ABI call snapshots, preserved signature types, call-result pointer
  * bases, and compositional address recovery.
@@ -13,8 +14,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { executeFunction, canon, splitIndexedAddress, constExpr, binary } from "./exec.js";
 import { decodeFunction } from "./decode.js";
 import { abiArguments, argumentsForArity, calleeDeclarations, expressibleType } from "./effect-construct.js";

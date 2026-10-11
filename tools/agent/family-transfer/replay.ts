@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * Family replay — solve one member, then instantiate and verify the rest.
  *
@@ -17,7 +18,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { buildFamilyIndex, donorsFor, familyOf, type Family, type FamilyIndex } from "./family-index.js";
 import { transferFromDonor, type TransferAttempt, type TransferOptions } from "./transfer.js";
 
@@ -207,10 +208,10 @@ export function donorNamesFor(functionName: string, options: ReplayOptions = {})
 
 /** Where a family's replay report is written. */
 export function replayReportPath(shape: string): string {
-  return join(ROOT, "build/familyTransfer", `replay-${shape.replace(/[^0-9a-z]/gi, "_")}.json`);
+  return join(projectRoot(), "build/familyTransfer", `replay-${shape.replace(/[^0-9a-z]/gi, "_")}.json`);
 }
 
 /** True when the project tree is configured enough to build an index. */
 export function projectConfigured(): boolean {
-  return existsSync(join(ROOT, "configs/splat"));
+  return existsSync(join(projectRoot(), "configs/splat"));
 }

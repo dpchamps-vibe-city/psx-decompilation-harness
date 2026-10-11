@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The reconstruction result contract — what a consumer is allowed to read, and
  * on whose authority.
@@ -22,7 +23,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { sha256, computeProvenance, describeStaleReason, staleReason, type Provenance, type ProvenanceInputs } from "../provenance.js";
 import {
   MATCHING_RECONSTRUCTION_SCHEMA_VERSION,
@@ -32,7 +33,7 @@ import {
 
 /** Where a function's reconstruction result lives. */
 export function resultDirectory(functionName: string): string {
-  return join(ROOT, "build/matchingReconstruction", functionName);
+  return join(projectRoot(), "build/matchingReconstruction", functionName);
 }
 
 /** The result document inside that directory. */
@@ -114,7 +115,7 @@ export function loadResult(
   const directory = resultDirectory(functionName);
   const path = resultPath(functionName);
   if (!existsSync(path)) {
-    return { refused: "no-result", detail: `no reconstruction result at ${relative(ROOT, path)}` };
+    return { refused: "no-result", detail: `no reconstruction result at ${relative(projectRoot(), path)}` };
   }
   let bundle: ResultBundle & { provenance?: Provenance };
   try {
@@ -158,7 +159,7 @@ export function readResultArtifact(
   }
   const path = join(loaded.directory, name);
   if (!existsSync(path)) {
-    return { refused: "missing", detail: `${name} is in the manifest but absent from ${relative(ROOT, loaded.directory)}` };
+    return { refused: "missing", detail: `${name} is in the manifest but absent from ${relative(projectRoot(), loaded.directory)}` };
   }
   const content = readFileSync(path, "utf-8");
   if (sha256(content) !== recorded) {

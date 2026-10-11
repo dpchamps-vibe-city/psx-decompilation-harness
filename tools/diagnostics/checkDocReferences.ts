@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * checkDocReferences.ts — find references to repository files that do not exist.
  *
@@ -35,7 +36,7 @@ import { execFileSync } from "child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { dirname, join, relative, resolve } from "path";
 
-const ROOT = new URL("../..", import.meta.url).pathname;
+
 
 /** Extensions whose comments and prose are worth scanning. */
 const SCANNED = new Set([".md", ".c", ".h", ".ts", ".mk"]);
@@ -88,7 +89,7 @@ function walk(directory: string, onFile: (absolute: string) => void): void {
  * to catch.
  */
 function trackedTopLevels(): Set<string> {
-  const output = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const output = execFileSync("git", ["ls-files"], { cwd: projectRoot(), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   return new Set(output.split("\n").filter(Boolean).map((path) => path.split("/")[0]!));
 }
 
@@ -96,8 +97,8 @@ function trackedTopLevels(): Set<string> {
 function indexRepository(): { paths: Set<string>; basenames: Set<string> } {
   const paths = new Set<string>();
   const basenames = new Set<string>();
-  walk(ROOT, (absolute) => {
-    const path = relative(ROOT, absolute);
+  walk(projectRoot(), (absolute) => {
+    const path = relative(projectRoot(), absolute);
     paths.add(path);
     basenames.add(path.slice(path.lastIndexOf("/") + 1));
   });
@@ -106,7 +107,7 @@ function indexRepository(): { paths: Set<string>; basenames: Set<string> } {
 
 /** Top-level directories, which is the vocabulary a repository path can start with. */
 function topLevelDirectories(): string[] {
-  return readdirSync(ROOT, { withFileTypes: true })
+  return readdirSync(projectRoot(), { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !EXCLUDED.has(entry.name))
     .filter((entry) => !entry.name.startsWith(".") || entry.name === ".pi")
     .map((entry) => entry.name)
@@ -174,8 +175,8 @@ function main(): void {
   const candidates: Reference[] = [];
   let scanned = 0;
   let checked = 0;
-  walk(ROOT, (absolute) => {
-    const path = relative(ROOT, absolute);
+  walk(projectRoot(), (absolute) => {
+    const path = relative(projectRoot(), absolute);
     if (only && !only.has(path)) return;
     if (!SCANNED.has(path.slice(path.lastIndexOf(".")))) return;
     /* Test files name deliberately fictional paths as fixtures. */
@@ -191,8 +192,8 @@ function main(): void {
       /* A path may be repository-rooted or relative to the file that names it —
        * `./tools/x.ts` inside an extension resolves against that extension (doc-ref-ignore). Only
        * a reference that resolves neither way is a candidate. */
-      const fromRoot = join(ROOT, reference.reference);
-      const fromFile = resolve(ROOT, dirname(path), reference.reference);
+      const fromRoot = join(projectRoot(), reference.reference);
+      const fromFile = resolve(projectRoot(), dirname(path), reference.reference);
       if (paths.has(reference.reference) || existsSync(fromRoot) || existsSync(fromFile)) continue;
       candidates.push(reference);
     }

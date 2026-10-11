@@ -45,8 +45,9 @@ export function recordApproval(config: LoopConfig, state: LoopState, record: App
 /**
  * Project the loop's own decisions onto the shared source-policy allowlist.
  *
- * A parked function is `INCLUDE_ASM` on purpose, and an agent-approved
- * exemption has been adjudicated one rung up the ladder — both must stop the
+ * A loop park may restore `INCLUDE_ASM` on purpose; a selection-only park does
+ * not grant that exemption. An agent-approved exemption has been adjudicated
+ * one rung up the ladder — both loop decisions must stop the
  * gate from failing every *later* function whose patch happens to contain
  * those lines. Neither is written into `.pi/autoloop.json`: that allowlist is
  * the human's permanent assertion about a function, and the loop only ever
@@ -58,7 +59,9 @@ export function withLoopExemptions(config: AutodecompConfig, state: LoopState): 
     const key = name.toLowerCase();
     allowlist[key] = [...new Set([...(allowlist[key] ?? []), ...kinds])];
   };
-  for (const name of Object.keys(state.parked)) add(name, ["include-asm"]);
+  for (const [name, record] of Object.entries(state.parked)) {
+    if (!record.skipOnly) add(name, ["include-asm"]);
+  }
   for (const [name, approval] of Object.entries(state.approvals)) add(name, approval.kinds);
   return { ...config, sourcePolicy: { ...config.sourcePolicy, allowlist } };
 }

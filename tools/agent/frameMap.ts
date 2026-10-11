@@ -562,6 +562,10 @@ function tailTransfers(instructions: DisassembledInstruction[]): string[] {
  * never as proof.
  */
 export function analyzeReturnValue(name: string, instructions: DisassembledInstruction[]): ReturnValue {
+  if (instructions.some(insn => insn.mnemonic === "syscall")) return {
+    type: "unknown", basis: "unknown",
+    evidence: ["syscall may produce $v0 implicitly; absence of an explicit $v0 write does not prove void. Use an independent SDK declaration or the syscall ABI."],
+  };
   const definesV0 = instructions.some((insn) => defUse(insn).defs.includes("v0"));
   const escapes = tailTransfers(instructions);
   if (!definesV0 && escapes.length === 0) {

@@ -108,6 +108,10 @@ import { nestedFunctionCensus, chainRow, type ChainRow } from "../diagnostics/ne
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { sourceConstructFindings } from "../../.pi/extensions/shared/source-policy.ts";
 import { loadConfig } from "../../.pi/extensions/shared/config.ts";
+import { targetWordsOf } from "../lib/functionOracle.js";
+import { decodeFunctionWords, type DecodedInsn } from "./matching-reconstruction/decode.js";
+import { describeBiosVeneer, recognizeBiosVeneer } from "./matching-reconstruction/bios-veneer.js";
+import { biosTailJumpMacroEnabled } from "../lib/biosSyscallMacro.js";
 
 /* Both spellings: target assembly uses names, cc1 output uses numbers. */
 const CALL_CLOBBERED = new Set([
@@ -143,6 +147,20 @@ export interface Finding {
   summary: string;
   evidence: string[];
   see: string[];
+}
+
+export function biosVeneerFindings(insns: DecodedInsn[]): Finding[] {
+  const bios = recognizeBiosVeneer(insns);
+  if (!bios) return [];
+  if (biosTailJumpMacroEnabled(projectRoot())) return [{ detector: "bios-veneer", severity: "info",
+    summary: "Original BIOS dispatch has an explicitly approved PSX_BIOS_FUNCTION binding",
+    evidence: [`Vector 0x${bios.vector.toString(16)}, selector 0x${bios.selector.toString(16)}; incoming arguments and ra pass through unchanged.`,
+      "Use PSX_BIOS_FUNCTION with an independently witnessed signature. Approval is not a match: compile and verify exact code/data and relocations."],
+    see: ["include/library/psx_bios_tailjump.h"] }];
+  return [{ detector: "bios-veneer", severity: "blocker",
+    summary: "Original BIOS dispatch requires the explicitly approved PSX_BIOS_TAILJUMP operation",
+    evidence: [describeBiosVeneer(bios), "No clean-C search domain was exhausted. Do not request an INCLUDE_ASM exception or count this target as reconstructed."],
+    see: ["tools/agent/matching-reconstruction/bios-veneer.ts"] }];
 }
 
 /* --- target-side facts --- */
@@ -2428,6 +2446,7 @@ function main(): void {
   }
 
   const findings: Finding[] = detectBoundaryPremise(name);
+  findings.push(...biosVeneerFindings(decodeFunctionWords(targetWordsOf(name))));
   const srcPath = srcOverride ?? sourcePathFor(name);
   const srcText = existsSync(srcPath) ? readFileSync(srcPath, "utf-8") : undefined;
   const sourceState: "missing" | "stub" | "c" =

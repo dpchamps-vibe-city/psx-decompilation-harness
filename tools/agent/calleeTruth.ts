@@ -339,7 +339,7 @@ function headersUnder(dir: string): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) found.push(...headersUnder(path));
-    else if (entry.name.endsWith(".h")) found.push(path);
+    else if (entry.name.toLowerCase().endsWith(".h")) found.push(path);
   }
   return found;
 }
@@ -907,7 +907,9 @@ export function auditCallees(name: string, sourcePath: string, scratch: string, 
     if (!inScope.has(prototype.name)) inScope.set(prototype.name, prototype);
   }
 
-  const sdk = evidence.sdk ?? sdkPrototypes(name);
+  // A leaf (including BIOS tail transfers) has no callee declarations to
+  // confront. Do not preprocess unrelated SDK headers just to report zero.
+  const sdk = evidence.sdk ?? (direct.length ? sdkPrototypes(name) : new Map<string, Prototype>());
   const callees: CalleeReport[] = [];
   const readTarget = targetReadObserver(scratch, undefined, sdk);
   let observer: ReturnType<typeof callerSiteObserver> | undefined;

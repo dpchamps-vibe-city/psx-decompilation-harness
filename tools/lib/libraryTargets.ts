@@ -5,6 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { hash, readAr } from "./psyqMembers.js";
 import { libraryInputFiles, loadLibraryProject, type LibraryProject } from "./project.js";
 import { objectFunctions, readRelocatableObject, type RelocatableObject } from "./relocatableObject.js";
+import { libraryMemberSource } from "./librarySourceLayout.js";
 export interface LibraryMember {
   id: string; input: string; member: string; ordinal: number; sourceOffset: number;
   inputHash: string; sha256: string; source: string; original: string; assembly: string;
@@ -15,6 +16,7 @@ export function libraryMembers(root = projectRoot(), project = loadLibraryProjec
   const result: LibraryMember[] = [];
   const archiveMembers = new Map<string, string>();
   const standaloneMembers = new Map<string, string>();
+  const sourceOwners = new Map<string, string>();
   for (const input of libraryInputFiles(project, root)) {
     const bytes = readFileSync(join(root, input.path));
     const members = input.archive ? readAr(bytes) : [{ name: basename(input.path), ordinal: 0, offset: 0, bytes }];
@@ -25,8 +27,12 @@ export function libraryMembers(root = projectRoot(), project = loadLibraryProjec
       if (duplicate) throw new Error(`Library selection contains an archive and its extracted member copy: ${duplicate}, ${input.path}; select originals or explicit converted members, not both`);
       (input.archive ? archiveMembers : standaloneMembers).set(sha256, input.path);
       const object = readRelocatableObject(member.bytes), functions = objectFunctions(object);
+      const source = libraryMemberSource(project, input, member, id), sourceKey = source.toLowerCase();
+      const owner = sourceOwners.get(sourceKey);
+      if (owner) throw new Error(`Library source path collision: ${source} (${owner}, ${input.path}[${member.ordinal}]); use distinct input paths or output.sourceLayout: member-id`);
+      sourceOwners.set(sourceKey, `${input.path}[${member.ordinal}]`);
       result.push({ id, input: input.path, member: member.name, ordinal: member.ordinal, sourceOffset: member.offset,
-        inputHash: hash(bytes), sha256, source: `${project.output.sourceDir}/${id}/${basename(member.name).replace(/\.[^.]*$/, "")}.c`,
+        inputHash: hash(bytes), sha256, source,
         original: `build/libraries/originals/${id}/${sha256}.o`, assembly: `build/libraries/disassembly/${id}/member.s`,
         bytes: member.bytes, object, functions });
     }

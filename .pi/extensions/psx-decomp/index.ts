@@ -14,11 +14,14 @@ import { registerExportContextTool } from "./tools/export-context.ts";
 import { registerFinalizeFunctionTool } from "./tools/finalize-function.ts";
 import { registerFuzzVariantsTool } from "./tools/fuzz-variants.ts";
 import { registerAutoloopCommands } from "./autoloop/commands.ts";
+import { loadLoopConfig } from "./autoloop/config.ts";
+import { readState } from "./autoloop/state.ts";
+import { registerParkFunctionTool } from "./tools/park-function.ts";
 import { registerM2cTool } from "./tools/m2c.ts";
 import { registerSearchSourceShapesTool } from "./tools/search-source-shapes.ts";
 import { registerSynthesizeSourceShapesTool } from "./tools/synthesize-source-shapes.ts";
 import { registerVerifyBuildTool } from "./tools/verify-build.ts";
-import { runProjectCommand } from "./tools/shared.ts";
+import { runProjectCommand, validateFunctionName } from "./tools/shared.ts";
 import { captureSessionBaseline } from "./tools/session-baseline.ts";
 import { prepareInteractive, interactiveDocumentation, interactivePreparationLifecycle, agentCompletion } from "./tools/interactive-preparation.ts";
 
@@ -64,7 +67,8 @@ function completionItems(names: string[], prefix: string) {
 
 function parseFunctionArg(args: string): string | undefined {
   const value = args.trim();
-  if (!value || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) return undefined;
+  if (!value) return undefined;
+  try { validateFunctionName(value); } catch { return undefined; }
   return value;
 }
 
@@ -74,9 +78,14 @@ function targetExists(root: string, name: string): boolean {
   return existsSync(join(root, "src", `${name}.c`)) || existsSync(join(root, "build", "asm", "nonmatchings", name));
 }
 
+function pendingDecompilationTargets(root: string, graph = loadCallGraph(root)): CallGraphEntry[] {
+  if (!graph) return [];
+  const parked = new Set(Object.keys(readState(loadLoopConfig(root)).parked));
+  return graph.functions.filter((entry) => !entry.decompiled && entry.handwritten === false && !entry.dead && !parked.has(entry.name));
+}
+
 function nextDecompilationTarget(root: string): string | undefined {
-  const graph = loadCallGraph(root);
-  return graph?.functions.find((entry) => !entry.decompiled && entry.handwritten === false && !entry.dead)?.name;
+  return pendingDecompilationTargets(root)[0]?.name;
 }
 
 /* The decompiled flags are derived from src/*.c at graph-generation time, so
@@ -195,6 +204,7 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
   registerSynthesizeSourceShapesTool(pi);
   registerVerifyBuildTool(pi);
   registerProjectBuildTools(pi);
+  registerParkFunctionTool(pi, () => loopActive());
 
   /* Snapshot pre-existing workspace dirt so the finalize scope gate only
    * fails on files this session actually touched. */
@@ -208,7 +218,7 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
     description: "Decompile and byte-match a function; omit the name to pick the next priority target",
     getArgumentCompletions: (prefix) => {
       const items = completionItems(
-        functionNames(activeRoot ?? "", (entry) => !entry.decompiled && entry.handwritten === false && !entry.dead),
+        pendingDecompilationTargets(activeRoot ?? "").map((entry) => entry.name),
         prefix,
       );
       return items.length > 0 ? items : null;
@@ -333,10 +343,11 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
         return;
       }
 
-      const remaining = graph.functions.filter((entry) => !entry.decompiled && entry.handwritten === false && !entry.dead);
+      const remaining = pendingDecompilationTargets(root, graph);
+      const parked = Object.keys(readState(loadLoopConfig(root)).parked).length;
       const decompiled = graph.functions.filter((entry) => entry.decompiled && !entry.dead).length;
       const next = remaining[0]?.name ?? "none";
-      ctx.ui.notify(`${decompiled} decompiled; ${remaining.length} clean-C targets remain; next: ${next}`, "info");
+      ctx.ui.notify(`${decompiled} decompiled; ${remaining.length} clean-C targets remain; ${parked} parked; next: ${next}`, "info");
     },
   });
 }

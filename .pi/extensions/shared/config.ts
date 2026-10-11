@@ -38,6 +38,8 @@ export const DEFAULT_CONFIG: AutodecompConfig = {
   sourcePolicy: {
     allowEmptyMemoryBarrier: true,
     allowStackPointerSwitch: true,
+    allowBiosSyscallMacro: false,
+    allowBiosTailJumpMacro: false,
     allowlist: {},
   },
 };
@@ -117,7 +119,12 @@ export function loadConfig(projectRoot: string): AutodecompConfig {
   rejectUnknown(retry, ["retryParkedAfterEpoch", "retryOnNeighborHashChange", "blockedSleepMinutes"], "retry");
   rejectUnknown(integration, ["mode", "allowCommits", "allowedRoots"], "integration");
   rejectUnknown(budgets, ["maxCostUsd", "maxRuntimeHours", "maxAttemptsPerFunctionPerEpoch"], "budgets");
-  rejectUnknown(sourcePolicy, ["allowEmptyMemoryBarrier", "allowStackPointerSwitch", "allowlist"], "sourcePolicy");
+  rejectUnknown(sourcePolicy, ["allowEmptyMemoryBarrier", "allowStackPointerSwitch", "allowBiosSyscallMacro", "allowBiosTailJumpMacro", "allowlist"], "sourcePolicy");
+  for (const flag of ["allowBiosSyscallMacro", "allowBiosTailJumpMacro"]) {
+    if (sourcePolicy[flag] !== undefined && typeof sourcePolicy[flag] !== "boolean") {
+      throw new Error(`sourcePolicy.${flag} must be a boolean`);
+    }
+  }
 
   if (raw.parallelism !== undefined && raw.parallelism !== 1) {
     throw new Error("Only parallelism: 1 is supported by the transactional integration backend");
@@ -194,6 +201,8 @@ export function loadConfig(projectRoot: string): AutodecompConfig {
       ),
     },
     sourcePolicy: {
+      allowBiosSyscallMacro: sourcePolicy.allowBiosSyscallMacro === true,
+      allowBiosTailJumpMacro: sourcePolicy.allowBiosTailJumpMacro === true,
       allowEmptyMemoryBarrier: sourcePolicy.allowEmptyMemoryBarrier === undefined
         ? DEFAULT_CONFIG.sourcePolicy.allowEmptyMemoryBarrier
         : Boolean(sourcePolicy.allowEmptyMemoryBarrier),

@@ -11,7 +11,11 @@ import { configuredFlags, configuredTool, toolchainExecutables } from "../lib/to
 import { libraryContext, loadLibraryProject, libraryInputFiles } from "../lib/project.js";
 import { libraryInventory, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, type LibraryMember } from "../lib/libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, type ObjectComparison } from "../lib/relocatableObject.js";
-import { libraryAssemblyParts } from "../lib/libraryAssembly.js";
+import { libraryAssemblyParts, librarySourceScaffold } from "../lib/libraryAssembly.js";
+import { migrateLibrarySources } from "./librarySources.js";
+import { classifyLibraryCode } from "./libraryCodeClass.js";
+import { biosSyscallCandidate } from "./biosSyscall.js";
+import { biosTailJumpCandidate } from "./biosTailJump.js";
 import { libraryFunctionTarget } from "../lib/targetAdapter.js";
 import { digest, filesUnder, snapshot } from "../lib/contentCache.js";
 import { recordedCommand, commandText } from "../lib/recordedCommand.js";
@@ -84,11 +88,14 @@ export function writeLibraryGraph(root = projectRoot()) {
   const members = libraryMembers(root);
   const entries = members.flatMap(member => member.functions.map(fn => {
     const target = libraryFunctionTarget(member, fn, root);
+    const assemblyClass = classifyLibraryCode(member.object, fn);
+    const syscall = assemblyClass ? biosSyscallCandidate(member, fn, root) ?? biosTailJumpCandidate(member, fn, root) : undefined;
     return { name: target.key, symbol: target.symbol, container: target.owner.id, source: target.source,
       includeAsmPath: target.includeAsm.folder, assembly: target.assembly.function, verification: target.verification,
       vram: `symbol:${target.symbol}`, section: fn.section, sectionOffset: fn.offset, size: fn.size,
       inferredSize: fn.inferredSize, tier: 1, priority: 0, callerCount: 0, calls: [] as string[], calledBy: [] as string[], instructionCount: Math.ceil(fn.size / 4),
-      decompiled: accepted(member, root), handwritten: false as const, dead: false };
+      decompiled: accepted(member, root), handwritten: assemblyClass && !syscall ? "asm" as const : false as const, dead: false,
+      ...(assemblyClass ? { assemblyClass } : {}), ...(syscall ? { platformMacro: syscall.evidence } : {}) };
   }));
   for (const member of members) for (const fn of member.functions) {
     const entry = entries.find(e => e.name === libraryTargetKey(member, fn.name))!;
@@ -102,13 +109,16 @@ export function writeLibraryGraph(root = projectRoot()) {
   for (const entry of entries) for (const call of entry.calls) entries.find(e => e.name === call)!.calledBy.push(entry.name);
   for (const entry of entries) { entry.callerCount = entry.calledBy.length; entry.priority = entry.callerCount; }
   const graph = { targetKind: "relocatable-library", identityKind: "member-symbol", functions: entries,
-    stats: { totalFunctions: entries.length, totalMembers: members.length, verifiedMembers: members.filter(m => accepted(m, root)).length } };
+    stats: { totalFunctions: entries.length, totalMembers: members.length, verifiedMembers: members.filter(m => accepted(m, root)).length,
+      assemblyOnlyFunctions: entries.filter(entry => entry.handwritten === "asm").length } };
   mkdirSync(join(root, "build"), { recursive: true }); writeFileSync(join(root, "build/callGraph.json"), JSON.stringify(graph, null, 2) + "\n");
   return graph;
 }
 export function splitLibrary(root = projectRoot()): void {
-  const project = loadLibraryProject(root)!;
-  for (const member of libraryMembers(root)) {
+  const project = loadLibraryProject(root)!, members = libraryMembers(root);
+  const moves = migrateLibrarySources(members, project, root);
+  if (moves.length) console.log(`Migrated ${moves.length} library sources to their derived paths; contents unchanged.`);
+  for (const member of members) {
     const assembly = disassembleLibraryMember(member, root);
     const folder = `build/libraries/nonmatchings/${member.id}`;
     const parts = libraryAssemblyParts(member, readFileSync(assembly, "utf8"));
@@ -117,9 +127,7 @@ export function splitLibrary(root = projectRoot()): void {
     const path = join(root, member.source);
     if (!existsSync(path)) {
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, `/* Original TU: ${member.input}[${member.ordinal}] ${member.member}\n * sha256: ${member.sha256}\n * One original member, one TU. Replace INCLUDE_ASM stubs with C; keep neighboring code/data.\n * Functions: ${member.functions.map(f => f.name).join(", ") || "none identified (data-only or unresolved code)"}\n */\n` +
-        [...new Set([...project.headers.context, "include_asm.h"])].map(h => `#include "${h}"\n`).join("") + "\n" +
-        parts.map(part => `INCLUDE_ASM("${folder}", ${part.symbol});\n`).join(""));
+      writeFileSync(path, librarySourceScaffold(member, project.headers.context, parts));
     }
   }
   mkdirSync(join(root, "build/libraries"), { recursive: true });
@@ -176,8 +184,9 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   const destination = join(root, member.source), source = existsSync(destination) ? readFileSync(destination, "utf8") : "";
   const existing = !!source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*#include[^\n]*$/gm, "").replace(/^\s*INCLUDE_ASM\([^)]*\);\s*$/gm, "").trim();
   const latest = join(root, "build/preparation", key, "latest-library.json");
+  const syscall = biosSyscallCandidate(member, fn, root) ?? biosTailJumpCandidate(member, fn, root);
   let retained: PreparationPacket["primary"] = null;
-  if (!existing && !options.alternative) {
+  if (!existing && !options.alternative && !syscall) {
     try {
       const previous = JSON.parse(readFileSync(latest, "utf8")) as { draft: string };
       const text = readFileSync(resolve(root, previous.draft), "utf8");
@@ -187,7 +196,8 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   const directory = join(root, "build/preparation", key, `${Date.now()}-${process.pid}`); mkdirSync(directory, { recursive: true });
   const paths = [...memberInputPaths(member, root), member.assembly, `build/libraries/nonmatchings/${member.id}`,
     target.context.types, target.context.functions,
-    ...(options.contextFile ? [options.contextFile] : [])];
+    ...(options.contextFile ? [options.contextFile] : []),
+    ...(syscall ? [syscall.evidence.header, syscall.evidence.signatureHeader] : [])];
   const inputs: Record<string, string> = {}, memberships: Record<string, string[]> = {};
   for (const path of paths) {
     const absolute = resolve(root, path), key = relative(root, absolute);
@@ -209,7 +219,13 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
     generation: { status: "not-attempted" }, compilation: { status: "not-attempted", commands: [], diagnostics: "" }, comparison: { status: "not-available" },
     integration: { state: existing && !options.alternative ? "live" : "staged", changes: [member.source], blockers: [], destinationHash: hashFile(destination) },
     discovery: { unknowns: [], report: { scope: "whole-member", member: member.id, input: member.input, ordinal: member.ordinal, originalHash: member.sha256, functions: member.functions }, priorExperiments: [], preflight: [] }, finalization: { status: "not-attempted" } };
+  if (syscall) packet.discovery.platformMacros = [syscall.evidence];
   try {
+    if (!packet.primary && syscall) {
+      const draft = join(directory, "draft.c"); writeFileSync(draft, syscall.source);
+      packet.primary = { origin: "platform-macro", path: relative(root, draft), sha256: digest(syscall.source), text: syscall.source, declarationsRequired: [] };
+      packet.generation = { status: "generated", draftHash: digest(syscall.source) };
+    }
     if (!packet.primary) {
       const m2c = prepareM2c(root);
       // Source/patch content identity lives in the component witness, not an installation-path input.

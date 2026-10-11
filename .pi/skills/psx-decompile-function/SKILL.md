@@ -30,11 +30,20 @@ them to summarise, check in, or report. There is no per-response budget of one
 experiment, and there is no such thing as a good stopping point that is not a
 match.
 
-Two things end the work, and only two:
+Three things end the work:
 
-- `psx_finalize_function` passes; or
+- `psx_finalize_function` passes;
 - you hit something only a human can decide — an allowlist entry, a policy
-  exception. Say which, and say it in one paragraph.
+  exception; or
+- a witnessed input/build blocker or original-word target classification prevents
+  clean-C reconstruction (for example, a BIOS assembly veneer whose implementation
+  is in ROM, not this object). An engine capability refusal alone is not proof.
+
+For standalone `/decompile` or `/fix-decomp`, persist either non-matching outcome
+with `psx_park_function`, its exact target key, reason and evidence before stopping.
+A markdown note or `psx_record_closed` entry does **not** park the worklist. This
+state-only park preserves source and grants no policy exception. When an autoloop
+is active, report the blocker to its controller instead; it owns parking.
 
 "I classified the residual and identified the next experiment" is not a result.
 If you can name the next experiment, **you have time to run it**: the compile is
@@ -178,9 +187,10 @@ is exhausted, not the function. A respelling does not count toward that three:
 a source that reaches a program the ledger has already measured is the same
 program arrived at again, not a measurement that failed to move. That is worth
 knowing — it is how an idea is shown to have been tried — but it is not
-progress and it is not a stall either, so do not report one as a finding. Every function here has clean C that matches it
-100%; a residual that survives hand-authored variants is a signal to bring
-heavier evidence, not to give up.
+progress and it is not a stall either, so do not report one as a finding. For
+clean-C targets, a residual that survives hand-authored variants is a signal to
+bring heavier evidence, not to give up. Do not apply that premise to a witnessed
+assembly-only target class.
 
 **Exhausting a spelling family is a positive result, not a failure.** A dozen
 genuinely different sources that all leave the residual where it was have
@@ -291,14 +301,16 @@ you had at the time — and a row that does not say so is read by the next sessi
 as unconditional and never re-opened. Two such rows closed one function for six
 sessions; both proofs were sound and both premises were false. `--conditional-on`
 is where the premise goes, and a later session's job is to attack the premise
-rather than to re-run the proof.
+rather than to re-run the proof. This records a scoped experiment closure, not
+worklist parking.
 
 Read that record before running one — an `UNSAT` another session already bought
 costs minutes to buy again. An axis proved empty is progress: the record is printed above the
 measurements in `psx_experiment_ledger` and carried into every escalation, so
 the next session starts from it instead of re-deriving it. Park a function only
-when a human decision is required — an allowlist entry, a policy exception —
-never merely because it is hard.
+for a witnessed blocker or a human decision — an allowlist entry, a policy
+exception — never merely because it is hard. Use the durable parking tool for
+standalone work, as described above.
 
 ## What wastes the session
 
@@ -363,12 +375,14 @@ There is no progress report. The ledger holds every measurement with its
 residual key, so a written summary of where things stand duplicates it and costs
 an experiment.
 
-You write exactly one of two things, at the end:
+You write exactly one of three things, at the end:
 
 - **A match.** What `psx_finalize_function` verified.
 - **A human decision.** The one thing that needs deciding — an allowlist entry,
   a policy exception — in a paragraph, with the residual key and the axes the
   ledger shows as closed.
+- **A witnessed blocker.** Its evidence and premises, with confirmation that
+  standalone work was durably parked (or handed back to the active controller).
 
 Anything else means you stopped early. A classification with one measurement
 under it is not a result no matter how well argued; if the analysis is good

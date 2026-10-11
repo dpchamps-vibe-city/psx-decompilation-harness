@@ -30,6 +30,7 @@ import type { BinaryOp, CallEffect, DagNode, DagRef, Effect, Predicate, StoreEff
 import { LOOP_BACK } from "./types.js";
 import { isUnaligned } from "./decode.js";
 import { classifyUnknownWord, type FailureCategory } from "./failure-category.js";
+import { describeBiosVeneer, recognizeBiosVeneer } from "./bios-veneer.js";
 
 /* Re-import for the executor's register file. */
 import * as decodeModule from "./decode.js";
@@ -740,6 +741,8 @@ class RestartWithLoop extends Error {
 }
 
 export function executeFunction(insns: DecodedInsn[], options: ExecOptions = {}): ExecResult {
+  const bios = recognizeBiosVeneer(insns);
+  if (bios) throw new UnsupportedTarget(describeBiosVeneer(bios), [bios.transferOffset], "bios-veneer");
   const blockers = classifySupport(insns);
   if (blockers.length > 0) {
     /* Several blockers can coexist; the reported category is the first in a

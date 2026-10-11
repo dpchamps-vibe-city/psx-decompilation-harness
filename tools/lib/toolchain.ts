@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { installedDependency } from "./installedScripts.js";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { fileDigest } from "./contentCache.js";
 import { fileOverrideFlags } from "./flagOverrides.js";
@@ -130,6 +130,21 @@ export function configuredSdk(root = projectRoot()): { version: string; converte
 export function configuredSdkHeaders(root = projectRoot()): string[] {
   const headers = loadToolchain(root).sdk.headers;
   return headers ? [resolveOwnedPath(headers, contextForProject(root))] : [];
+}
+/** Original SDKs often use DOS uppercase filenames. Resolve without renaming
+ * inputs, borrowing package headers, or silently choosing a case collision. */
+export function configuredSdkHeader(name: string, root = projectRoot()): string | undefined {
+  if (!/^[\w.-]+$/.test(name)) throw new Error(`SDK header must be a filename: ${name}`);
+  const explicit = configuredSdkHeaders(root);
+  const directories = explicit.length ? explicit : loadToolchain(root).includeDirs.map(dir => resolve(root, dir));
+  for (const directory of directories) {
+    if (!existsSync(directory)) continue;
+    const matches = readdirSync(directory).filter(entry => entry.toLowerCase() === name.toLowerCase()
+      && statSync(join(directory, entry)).isFile()).sort();
+    if (matches.length > 1) throw new Error(`Ambiguous SDK header ${name} in ${directory}: ${matches.join(", ")}`);
+    if (matches.length === 1) return join(directory, matches[0]!);
+  }
+  return undefined;
 }
 export function requireCompilerCapability(capability: string, root = projectRoot()): void {
   const compiler = loadToolchain(root).compiler;

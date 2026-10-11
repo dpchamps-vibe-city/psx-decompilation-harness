@@ -18,8 +18,8 @@
  * machine applied.
  */
 
-import { loadSymbolIndex, resolveAddress, type SymbolIndex } from "../../lib/symbolIndex.js";
-import type { Container } from "../../lib/container.js";
+import { resolveAddress, type SymbolIndex } from "../../lib/symbolIndex.js";
+import { constructionSymbolIndex, type ConstructionContext } from "./construction-context.js";
 import { canon, type LoadMeta } from "./exec.js";
 import { recognizeConstantMultiply, recognizeDivision } from "./idioms.js";
 import { resolveSignature, inferSignatureRange, type CalleeSignature, type InferredSignatureRange } from "./callee-signature.js";
@@ -115,7 +115,7 @@ export interface ResolvedCall {
 
 export function resolveCallSignatures(
   effects: Effect[],
-  container: Container,
+  container: ConstructionContext,
 ): {
   resolved: Map<number, ResolvedCall>;
   unknownRanges: Map<number, { calleeName: string; arityLo: number; arityHi: number; returns: "yes" | "no" | "unknown" }>;
@@ -127,6 +127,10 @@ export function resolveCallSignatures(
   const unknownRanges = new Map<number, { calleeName: string; arityLo: number; arityHi: number; returns: "yes" | "no" | "unknown" }>();
   for (const effect of effects) {
     if (effect.kind !== "call") continue;
+    if (container.kind === "library") {
+      conflicts.push("ET_REL call signatures require symbolic callee evidence; no linked-address inference is permitted");
+      continue;
+    }
     /* The executor already resolved the target to a name when it could. */
     const name = effect.calleeName ?? effect.callee;
     const signature = resolveSignature(name, effect.calleeAddress, container);
@@ -1523,7 +1527,7 @@ export function constructEffectCandidates(
   functionName: string,
   relation: EffectRelation,
   loadsMeta: LoadMeta[],
-  container: Container,
+  container: ConstructionContext,
 ): EffectCandidate[] | { unresolved: string } | { invalid: string } {
   let isVoid = canon(relation.returnValue) === canon(ENTRY_V0);
 
@@ -1622,7 +1626,7 @@ export function constructEffectCandidates(
     if (effect.index) collectAtoms(effect.index.expr, atoms);
   }
 
-  const index = loadSymbolIndex(container);
+  const index = constructionSymbolIndex(container);
   const map = buildStorageMap(cells, index, new Map(), functionName);
   if ("unresolved" in map) return map;
   if ("invalid" in map) return map;
@@ -1995,7 +1999,7 @@ export function constructGuardedCandidates(
   arena: DagArena,
   root: DagRef,
   loadsMeta: LoadMeta[],
-  container: Container,
+  container: ConstructionContext,
   maskWitnesses: Set<string> = new Set(),
 ): EffectCandidate[] | { unresolved: string } | { invalid: string } {
   /* Bound the structure: tests + dispatches ≤ 32, leaves ≤ 16, total targets ≤ 64. */
@@ -2142,7 +2146,7 @@ export function constructGuardedCandidates(
     }
   }
 
-  const index = loadSymbolIndex(container);
+  const index = constructionSymbolIndex(container);
   const map = buildStorageMap(cells, index, ivDeltas, functionName);
   if ("unresolved" in map) return map;
   if ("invalid" in map) return map;

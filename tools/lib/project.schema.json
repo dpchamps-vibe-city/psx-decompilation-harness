@@ -48,7 +48,11 @@
     },
     "output": {
       "type": "object", "additionalProperties": false, "required": ["sourceDir"],
-      "properties": { "sourceDir": { "$ref": "#/$defs/path", "pattern": "^src/", "default": "src/libraries" } }
+      "properties": {
+        "sourceDir": { "$ref": "#/$defs/path", "pattern": "^src/", "default": "src/libraries" },
+        "sourceLayout": { "enum": ["grouped", "member-id"], "default": "grouped", "description": "Grouped paths mirror standalone input directories; archives use their stem and ordinal-prefixed member names. member-id retains the legacy layout." },
+        "inputRoot": { "$ref": "#/$defs/path", "description": "Directory stripped from input paths for grouped sources. Defaults to the common literal directory prefix of the configured input globs, not their matches." }
+      }
     },
     "toolchainProfile": { "type": "string", "minLength": 1, "description": "Default named profile in toolchain.json." },
     "memberProfiles": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 }, "description": "Exact member ID to named toolchain profile; overrides toolchainProfile." }

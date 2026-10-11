@@ -3,6 +3,12 @@
  * reference stubs, never proof of reconstruction; the pristine object is the oracle. */
 import type { LibraryMember } from "./libraryTargets.js";
 export interface LibraryAssemblyPart { symbol: string; text: string; functions: string[] }
+export function librarySourceScaffold(member: LibraryMember, headers: string[], parts: LibraryAssemblyPart[]): string {
+  const folder = `build/libraries/nonmatchings/${member.id}`;
+  return `/* Original TU: ${member.input}[${member.ordinal}] ${member.member}\n * sha256: ${member.sha256}\n * One original member, one TU. Replace INCLUDE_ASM stubs with C; keep neighboring code/data.\n * Functions: ${member.functions.map(f => f.name).join(", ") || "none identified (data-only or unresolved code)"}\n */\n` +
+    [...new Set([...headers, "include_asm.h"])].map(h => `#include "${h}"\n`).join("") + "\n" +
+    parts.map(part => `INCLUDE_ASM("${folder}", ${part.symbol});\n`).join("");
+}
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export function libraryAssemblyParts(member: LibraryMember, assembly: string): LibraryAssemblyPart[] {
   if (member.functions.some(fn => fn.name === "__library_member_data")) throw new Error("Reserved scaffold symbol __library_member_data conflicts with an original function");
@@ -33,7 +39,17 @@ export function libraryAssemblyParts(member: LibraryMember, assembly: string): L
     data.push(`.comm ${s.name}, ${s.size}, ${s.value}\n`);
   }
   if (data.length) parts.push({ symbol: "__library_member_data", functions: [], text: directives + data.join("\n") });
-  if (!parts.length) throw new Error(`No assembly sections found for ${member.id}`);
+  if (!parts.length) {
+    // Valid runtime-template objects can contain only ELF metadata. Keep an
+    // explicit assembly-backed stub rather than rejecting or silently omitting
+    // the member. Missing listings for any program state must still fail closed.
+    const allocated = [...member.object.sections.values()].some(s => s.flags & 2);
+    const publicSymbols = member.object.symbols.some(s => s.binding !== 0 && s.type !== 4);
+    if (allocated || publicSymbols || member.object.relocations.length || member.functions.length)
+      throw new Error(`No assembly sections found for ${member.id}`);
+    parts.push({ symbol: "__library_member_data", functions: [], text: directives +
+      "# Metadata-only original member; no allocated sections or public symbols.\nnonmatching __library_member_data, 0\n" });
+  }
   for (const fn of member.functions) if (!parts.some(p => p.functions.includes(fn.name)))
     throw new Error(`No independent assembly boundary for ${member.id}::${fn.name}; aliases/unsupported listings need review`);
   return parts;

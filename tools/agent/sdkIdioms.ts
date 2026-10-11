@@ -44,10 +44,9 @@ import { join, relative } from "path";
 import { type DisassembledInstruction, assembleTarget, disassembleObject, normalizeFunctionName, sourcePathFor } from "./decompToolchain.js";
 import { defUse } from "./webAnalysis.js";
 
-import { loadToolchain } from "../lib/toolchain.js";
+import { configuredSdkHeader } from "../lib/toolchain.js";
 const LIBGPU = () => {
-  const headers = loadToolchain().includeDirs.map(path => join(projectRoot(), path, "libgpu.h"));
-  const path = headers.find(existsSync);
+  const path = configuredSdkHeader("libgpu.h");
   if (!path) throw new Error("Configured PSY-Q libgpu.h unavailable; supply SDK headers under library-input/psyq/INCLUDE and configure includeDirs.");
   return path;
 };

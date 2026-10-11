@@ -18,7 +18,10 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
+import { configuredSdkHeaders } from "../lib/toolchain.js";
+import { biosFunctionProjection } from "../lib/biosFunctionMacro.js";
+import { loadLibraryProject } from "../lib/project.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
 import { parseC, walk, children, namedChildren, field, isTrivia, subtreeIsBroken, type Node } from "./residual-source-search/tree-sitter-c.js";
 
@@ -122,11 +125,12 @@ export function collectTypedefs(source: string, into: Map<string, string>): void
 /** All `.h` files under `dir`, recursively. */
 function headersUnder(dir: string): string[] {
   if (!existsSync(dir)) return [];
+  if (statSync(dir).isFile()) return dir.toLowerCase().endsWith(".h") ? [dir] : [];
   const out: string[] = [];
   for (const entry of readdirSync(dir).sort()) {
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) out.push(...headersUnder(path));
-    else if (entry.endsWith(".h")) out.push(path);
+    else if (entry.toLowerCase().endsWith(".h")) out.push(path);
   }
   return out;
 }
@@ -149,10 +153,13 @@ export function harvestTypedefs(rootDir: string): Map<string, string> {
   inputs.push(...sourcesUnder(srcDir));
   if (existsSync(includeDir)) {
     inputs.push(...readdirSync(includeDir).sort()
-      .filter((f) => f.endsWith(".h") && !GENERATED_CONTEXT_HEADERS.includes(f))
+      .filter((f) => f.toLowerCase().endsWith(".h") && !GENERATED_CONTEXT_HEADERS.includes(f.toLowerCase()))
       .map((f) => join(includeDir, f)));
   }
-  inputs.push(...headersUnder(join(includeDir, "psyq")));
+  const library = loadLibraryProject(rootDir);
+  const sdkDirectories = library ? library.headers.reference.map(dir => resolve(rootDir, dir))
+    : existsSync(join(rootDir, "toolchain.json")) ? configuredSdkHeaders(rootDir) : [join(includeDir, "psyq")];
+  for (const directory of sdkDirectories) inputs.push(...headersUnder(directory));
 
   for (const path of inputs) {
     /* The vendored SDK headers are CRLF; the generated context is LF. */
@@ -253,7 +260,7 @@ export function extractSignaturesFromSource(source: string): ExtractedSignature[
   const found: ExtractedSignature[] = [];
   let tree;
   try {
-    tree = parseC(source);
+    tree = parseC(biosFunctionProjection(source).source);
   } catch {
     return found;
   }

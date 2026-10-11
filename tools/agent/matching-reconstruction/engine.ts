@@ -37,6 +37,8 @@ import { join } from "node:path";
 import { compileSource, configuredCc1FlagsForContainer, detectImplicitDeclarations, loadFlagOverrides, rejectionFromDiagnostics } from "../decompToolchain.js";
 import { containerTargetPath, loadContainer, vramToRom } from "../../lib/container.js";
 import { requireFunctionLocation, loadSymbolIndex, resolveAddress } from "../../lib/symbolIndex.js";
+import { loadLibraryProject } from "../../lib/project.js";
+import { reconstructLibraryFunction } from "./library-engine.js";
 import { compareFunction } from "../../lib/functionOracle.js";
 import { computeProvenance, stamped, writeStableJson } from "../provenance.js";
 import { decodeBytes, executeFunction, UnsupportedTarget } from "./exec.js";
@@ -96,6 +98,7 @@ interface CandidateSource {
 }
 
 export function reconstructFunction(options: ReconstructOptions): ResultBundle {
+  if (loadLibraryProject()) return reconstructLibraryFunction(options);
   const startedAt = Date.now();
   const notify = options.notify ?? ((line: string) => console.error(line));
   const functionName = options.functionName;

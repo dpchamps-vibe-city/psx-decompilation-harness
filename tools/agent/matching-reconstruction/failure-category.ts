@@ -49,6 +49,7 @@ export type FailureCategory =
   /* --- control model --- */
   | "nonlocal-control"
   | "indirect-jump"
+  | "bios-veneer"
   | "nonterminating-cycle"
   | "loop-induction-origin"
   | "nested-loop"
@@ -63,6 +64,7 @@ export type FailureCategory =
   | "division-by-zero"
   /* --- context and evidence --- */
   | "no-origin-evidence"
+  | "symbolic-relocation"
   | "callee-signature-unknown"
   | "call-result-unbound"
   | "parameter-plan-unavailable"
@@ -92,6 +94,7 @@ const LAYER_OF: Record<FailureCategory, FailureLayer> = {
   "store-budget": "memory",
   "nonlocal-control": "control",
   "indirect-jump": "control",
+  "bios-veneer": "control",
   "nonterminating-cycle": "control",
   "loop-induction-origin": "control",
   "nested-loop": "control",
@@ -104,6 +107,7 @@ const LAYER_OF: Record<FailureCategory, FailureLayer> = {
   "decision-depth": "control",
   "division-by-zero": "arithmetic",
   "no-origin-evidence": "context",
+  "symbolic-relocation": "context",
   "callee-signature-unknown": "context",
   "call-result-unbound": "context",
   "parameter-plan-unavailable": "context",

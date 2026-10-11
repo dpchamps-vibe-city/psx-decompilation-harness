@@ -1,8 +1,9 @@
-/** Conservative ET_REL oracle. No linking to invented addresses, no relocation
- * masks. Encoded addends remain in section bytes; relocation references are
- * compared symbolically, in order (MIPS HI16/LO16 pairing is order-sensitive).
- * Equivalent but differently encoded objects may fail; unsupported objects
- * never produce MATCH. Debug/file/local-symbol names are not program identity. */
+/** ET_REL program oracle: exact code/data bytes, storage sizes, symbols and
+ * symbolic relocations, not identical ELF packaging. No invented addresses or
+ * relocation masks; encoded addends and MIPS HI16/LO16 order remain exact.
+ * ELF header flags, section alignment/entry sizes, empty sections and assembler
+ * ABI bookkeeping are not emitted program content. Unsupported objects never
+ * produce MATCH. Debug/file/local-symbol names are not program identity. */
 import { elf32Sections, type Elf32Section } from "./elfSections.js";
 export interface ObjectSymbol {
   name: string; value: number; size: number; binding: number; type: number; visibility: number; section: string;
@@ -14,6 +15,13 @@ export interface RelocatableObject {
   symbols: ObjectSymbol[];
   relocations: ObjectRelocation[];
 }
+// SHT_MIPS_REGINFO / SHT_MIPS_ABIFLAGS describe assembler ABI bookkeeping,
+// not instructions or C storage. Executable sections are never discarded.
+const assemblerMetadata = (s: Elf32Section) => !(s.flags & 4) && [0x70000006, 0x7000002a].includes(s.type);
+const programSection = (s: Elf32Section) => !!(s.flags & 2) && !assemblerMetadata(s);
+const programSections = (o: RelocatableObject) => [...o.sections].filter(([, s]) => programSection(s) && s.size > 0);
+const storageKind = (s: Elf32Section) => `${s.flags & 4 ? "code" : "data"}:${s.type === 8 ? "zero-fill" : "initialized"}`;
+
 export function readRelocatableObject(bytes: Buffer): RelocatableObject {
   const sections = elf32Sections(bytes);
   if (bytes[5] !== 1 || bytes.readUInt16LE(16) !== 1 || bytes.readUInt16LE(18) !== 8) throw new Error("Expected ELF32 little-endian MIPS ET_REL");
@@ -36,7 +44,7 @@ export function readRelocatableObject(bytes: Buffer): RelocatableObject {
     if (![4, 9].includes(r.type)) continue;
     const name = byIndex.get(r.info), target = name ? sections.get(name) : undefined;
     if (!target) throw new Error("Relocation target section missing");
-    if (!(target.flags & 2)) continue; // Non-allocated debug relocations are not linker-visible output.
+    if (!programSection(target)) continue; // Debug/assembler metadata is not program content.
     if (r.type !== 9 || r.entsize !== 8 || r.size % 8 || r.link !== symtab.index) throw new Error("Unsupported relocation table (only MIPS REL supported)");
     for (let i = 0; i < r.size; i += 8) {
       const offset = r.data.readUInt32LE(i), info = r.data.readUInt32LE(i + 4), type = info & 255, s = symbols[info >>> 8];
@@ -51,9 +59,9 @@ export function readRelocatableObject(bytes: Buffer): RelocatableObject {
 /** Candidate-output identity for the experiment ledger: include all TU program
  * state, excluding debug/file/local-label naming and symbol-table indices. */
 export function relocatableOutputIdentity(object: RelocatableObject): string {
-  return JSON.stringify({ flags: object.flags,
-    sections: [...object.sections].filter(([, s]) => s.flags & 2).sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, s]) => [name, s.type, s.flags, s.size, s.alignment, s.entsize, s.data.toString("hex")]),
+  return JSON.stringify({
+    sections: programSections(object).sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, s]) => [name, storageKind(s), s.size, s.data.toString("hex")]),
     symbols: object.symbols.filter(s => s.binding !== 0 && s.type !== 4).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
     relocations: [...new Set(object.relocations.map(r => r.section))].sort().map(section => object.relocations.filter(r => r.section === section)) });
 }
@@ -67,7 +75,7 @@ const json = (v: unknown) => JSON.stringify(v);
 export function compareRelocatableObjects(original: Buffer, candidate: Buffer): ObjectComparison {
   try {
     const a = readRelocatableObject(original), b = readRelocatableObject(candidate), differences: string[] = [];
-    const allocated = (o: RelocatableObject) => [...o.sections].filter(([, s]) => s.flags & 2);
+    const targetSections = new Map(programSections(a)), candidateSections = new Map(programSections(b));
     const targetText = [...a.sections].filter(([, s]) => s.flags & 4);
     let totalWords = 0, matchedWords = 0, candidateWords = 0;
     for (const [name, s] of targetText) {
@@ -79,11 +87,10 @@ export function compareRelocatableObjects(original: Buffer, candidate: Buffer): 
       }
     }
     for (const s of b.sections.values()) if (s.flags & 4) candidateWords += Math.ceil(s.size / 4);
-    if (a.flags !== b.flags) differences.push(`ELF architecture/ABI flags: ${a.flags.toString(16)} != ${b.flags.toString(16)}`);
-    for (const name of new Set([...allocated(a), ...allocated(b)].map(([name]) => name))) {
-      const s = a.sections.get(name), c = b.sections.get(name);
-      if (!s || !c || s.type !== c.type || s.flags !== c.flags || s.size !== c.size || s.alignment !== c.alignment || s.entsize !== c.entsize)
-        differences.push(`${name}: section type/flags/size/alignment/entry-size differ`);
+    for (const name of new Set([...targetSections.keys(), ...candidateSections.keys()])) {
+      const s = targetSections.get(name), c = candidateSections.get(name);
+      if (!s || !c || storageKind(s) !== storageKind(c) || s.size !== c.size)
+        differences.push(`${name}: program storage kind/size differs or section missing`);
       if (s && c && !s.data.equals(c.data)) differences.push(`${name}: initialized bytes (including encoded relocation addends) differ`);
     }
     // Keep table order within each target section, but not unrelated section-table ordering.

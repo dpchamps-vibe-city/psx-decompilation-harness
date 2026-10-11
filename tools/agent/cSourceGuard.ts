@@ -28,6 +28,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { biosFunctionProjection } from "../lib/biosFunctionMacro.js";
 import { children, declaratorName, field, namedChildren, parseC, walk, type Node } from "./residual-source-search/tree-sitter-c.ts";
 
 export interface IncludeAsmSite {
@@ -64,7 +65,7 @@ function danglingDirective(node: Node): string | undefined {
 }
 
 export function analyzeCSource(source: string): CSourceReport {
-  const tree = parseC(source);
+  const tree = parseC(biosFunctionProjection(source).source);
   const root = tree.rootNode;
   const reasons: string[] = [];
   const includeAsm: IncludeAsmSite[] = [];
@@ -158,7 +159,7 @@ export interface MatchingConstructs {
 export function matchingConstructs(source: string): MatchingConstructs {
   const guard = analyzeCSource(source);
   if (!guard.parses) throw new Error(`Cannot inspect register bindings: ${guard.reasons.join("; ")}`);
-  const tree = parseC(source);
+  const tree = parseC(biosFunctionProjection(source).source);
   const result: MatchingConstructs = { localRegisterBindings: [], fileRegisterBindings: [], otherAsm: [] };
   try {
     walkActiveC(tree.rootNode, node => {
@@ -215,7 +216,7 @@ export interface CaptureSite {
 /** Only standalone, one-identifier invocations are the approved construct.
  * Comments, strings, disabled arms and same-named declarations are not uses. */
 export function capturePrevRetSites(source: string): CaptureSite[] {
-  const tree = parseC(source), result: CaptureSite[] = [];
+  const tree = parseC(biosFunctionProjection(source).source), result: CaptureSite[] = [];
   try { walkActiveC(tree.rootNode, node => {
     if (node.type !== "call_expression" || field(node, "function")?.text !== "CAPTURE_PREV_RET") return true;
     const args = namedChildren(field(node, "arguments")!);
@@ -251,7 +252,7 @@ export function applyCSourceEdits(source: string, edits: readonly CSourceEdit[])
 /** Exact scalar entry-$2 declaration migration, at either scope. Non-scalar,
  * initialized/multiple declarators and other register bindings are untouched. */
 export function migrateCapturePrevRet(source: string): string {
-  const tree = parseC(source), edits: CSourceEdit[] = [];
+  const tree = parseC(biosFunctionProjection(source).source), edits: CSourceEdit[] = [];
   try {
     for (const site of [...matchingConstructs(source).fileRegisterBindings, ...matchingConstructs(source).localRegisterBindings]) {
       if (!["$2", "$v0", "2", "v0"].includes(site.register)) continue;

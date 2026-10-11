@@ -2,7 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import type { AutodecompConfig, PolicyFinding, SourcePolicyResult } from "./types.ts";
 import { analyzeCSource, capturePrevRetSites, matchingConstructs, walkActiveC } from "../../../tools/agent/cSourceGuard.ts";
-import { parseC, field } from "../../../tools/agent/residual-source-search/tree-sitter-c.ts";
+import { parseC, field, namedChildren } from "../../../tools/agent/residual-source-search/tree-sitter-c.ts";
+import { BIOS_SYSCALL_HEADER, BIOS_SYSCALL_MACRO, isBiosSyscallHeader, BIOS_TAILJUMP_HEADER, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_END_MACRO, isBiosTailJumpHeader } from "../../../tools/lib/biosSyscallMacro.js";
+import { BIOS_FUNCTION_MACRO, biosFunctionProjection } from "../../../tools/lib/biosFunctionMacro.js";
 import { loadLibraryProject } from "../../../tools/lib/project.js";
 import { libraryMembers } from "../../../tools/lib/libraryTargets.js";
 
@@ -323,9 +325,41 @@ export function sourceConstructFindings(source: string, config: AutodecompConfig
     findings.push({ kind: "embedded-asm", line: asm.line, text: asm.text, message: "Embedded assembly is forbidden for an ordinary compiled function" });
   }
   for (const capture of capturePrevRetSites(source)) if (!capture.valid) findings.push({ kind: "register-asm", line: capture.line, message: "CAPTURE_PREV_RET requires a standalone one-identifier invocation at file or block scope" });
-  const tree = parseC(source);
+  const projection = biosFunctionProjection(source), tree = parseC(projection.source);
   try { walkActiveC(tree.rootNode, node => {
+    if (node.type === "function_definition") {
+      const binding = projection.sites.find(s => s.start === node.startIndex);
+      if (binding && (!config.sourcePolicy.allowBiosTailJumpMacro || !binding.valid ||
+          ![0xa0, 0xb0, 0xc0].includes(Number(binding.vector)) || !Number.isInteger(Number(binding.selector)) || Number(binding.selector) < 0 || Number(binding.selector) > 255)) {
+        findings.push({ kind: "platform-macro", line: binding.line, message: "PSX_BIOS_FUNCTION requires explicit approval, a valid signature, a literal A0/B0/C0 vector and an 8-bit literal selector" });
+      }
+    }
+    if (node.type === "identifier" && ["__psx_bios_selector", "__psx_bios_entry"].includes(node.text)) findings.push({
+      kind: "register-asm", line: node.startPosition.row + 1, message: "Do not access private BIOS register bindings; call the canonical operation",
+    });
+    if (node.type === "call_expression" && field(node, "function")?.text === BIOS_SYSCALL_MACRO) {
+      const args = field(node, "arguments");
+      const values = args ? namedChildren(args) : [];
+      if (!config.sourcePolicy.allowBiosSyscallMacro || values.length !== 1 || values[0]!.type !== "number_literal" || ![0, 1, 2].includes(Number(values[0]!.text))) {
+        findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_SYSCALL requires explicit project approval and a supported literal selector (0, 1 or 2)" });
+      }
+    }
+    if (node.type === "call_expression" && field(node, "function")?.text === BIOS_TAILJUMP_MACRO) {
+      const args = field(node, "arguments"), values = args ? namedChildren(args) : [];
+      if (!config.sourcePolicy.allowBiosTailJumpMacro || values.length !== 2 || values.some(v => v.type !== "number_literal") ||
+          ![0xa0, 0xb0, 0xc0].includes(Number(values[0]?.text)) || !Number.isInteger(Number(values[1]?.text)) || Number(values[1]?.text) < 0 || Number(values[1]?.text) > 255) {
+        findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_TAILJUMP requires explicit approval, a literal A0/B0/C0 vector and an 8-bit literal selector" });
+      }
+    }
+    const end = node.type === "call_expression" ? field(node, "function") : node.type === "function_declarator" ? field(node, "declarator") : undefined;
+    if (end?.text === BIOS_TAILJUMP_END_MACRO && (!config.sourcePolicy.allowBiosTailJumpMacro || namedChildren(field(node, "arguments") ?? field(node, "parameters")!).length)) {
+      findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_TAILJUMP_END requires explicit approval and no arguments" });
+    }
+    if (node.type === "preproc_call" && /^#\s*undef\s+PSX_BIOS_(?:FUNCTION|SYSCALL|TAILJUMP(?:_END)?)\b/.test(node.text)) {
+      findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "Do not undefine canonical BIOS operations" });
+    }
     if (node.type === "preproc_function_def" || node.type === "preproc_def") {
+      if ([BIOS_FUNCTION_MACRO, BIOS_SYSCALL_MACRO, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_END_MACRO].includes(field(node, "name")?.text ?? "")) findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "Do not redefine BIOS operations; use the canonical platform header" });
       if (field(node, "name")?.text === "CAPTURE_PREV_RET")
         findings.push({ kind: "register-asm", line: node.startPosition.row + 1, message: "Do not redefine the standing CAPTURE_PREV_RET construct; use common.h" });
       /* tree-sitter exposes a replacement list as opaque preproc_arg. Fold
@@ -349,6 +383,8 @@ function scanSourceFile(options: PolicyOptions, file: string, findings: PolicyFi
   const path = resolve(options.projectRoot, file);
   if (!existsSync(path)) return;
   const source = readFileSync(path, "utf8");
+  if ((options.config.sourcePolicy.allowBiosSyscallMacro && isBiosSyscallHeader(options.projectRoot, file)) ||
+      (options.config.sourcePolicy.allowBiosTailJumpMacro && isBiosTailJumpHeader(options.projectRoot, file))) return;
   const scope = patchScope(options, file);
   findings.push(...sourceConstructFindings(source, options.config, scope).map(f => ({ ...f, file: normalizedPath(relative(options.projectRoot, path)) })));
 }
@@ -435,7 +471,9 @@ function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
          Missing-file patch fixtures retain the conservative legacy fallback. */
       const completeSource = sourceIdentity(file) && existsSync(resolve(options.projectRoot, file)) &&
         readFileSync(resolve(options.projectRoot, file), "utf8").split("\n")[newLine - 1] === text;
-      const violation = commentOnly || !policesConstructs(file) || completeSource
+      const approvedPlatformHeader = (options.config.sourcePolicy.allowBiosSyscallMacro && isBiosSyscallHeader(options.projectRoot, file)) ||
+        (options.config.sourcePolicy.allowBiosTailJumpMacro && isBiosTailJumpHeader(options.projectRoot, file));
+      const violation = commentOnly || !policesConstructs(file) || completeSource || approvedPlatformHeader
         ? undefined
         : forbiddenLine(text, options.config, scope.name, scope.vram, scope.container);
       if (violation) findings.push({ kind: violation.kind, file, line: newLine, message: violation.message, text: text.trim() });
@@ -516,6 +554,12 @@ export function checkSourcePolicy(options: PolicyOptions): SourcePolicyResult {
     message: "Worker modified a path outside the configured integration roots",
   }));
 
+  if (options.config.sourcePolicy.allowBiosSyscallMacro && !isBiosSyscallHeader(options.projectRoot)) hardFailures.push({
+    kind: "platform-macro", file: BIOS_SYSCALL_HEADER, message: "Enabled PSX_BIOS_SYSCALL requires the unchanged canonical platform header",
+  });
+  if (options.config.sourcePolicy.allowBiosTailJumpMacro && !isBiosTailJumpHeader(options.projectRoot)) hardFailures.push({
+    kind: "platform-macro", file: BIOS_TAILJUMP_HEADER, message: "Enabled PSX_BIOS_TAILJUMP requires the unchanged canonical platform header",
+  });
   const scanNames = options.scanFunctions ?? (options.functionName ? [options.functionName] : []);
   const scannedFiles = new Set<string>();
   for (const name of scanNames) {
@@ -533,7 +577,7 @@ export function checkSourcePolicy(options: PolicyOptions): SourcePolicyResult {
   }
 
   const patchFiles = (options.patch ?? "").split("\n").flatMap(line => line.startsWith("+++ b/") ? [line.slice(6)] : []);
-  for (const file of [...changedFiles, ...patchFiles]) if (sourceIdentity(file) && !scannedFiles.has(file)) {
+  for (const file of [...changedFiles, ...patchFiles]) if (policesConstructs(file) && !scannedFiles.has(file)) {
     scannedFiles.add(file); scanSourceFile(options, file, hardFailures);
   }
 

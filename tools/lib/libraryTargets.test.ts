@@ -8,6 +8,8 @@ import { loadLibraryProject, libraryContext } from "./project.js";
 import { libraryMembers, requireLibraryFunction, type LibraryMember } from "./libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, objectFunctions, relocatableOutputIdentity } from "./relocatableObject.js";
 import { libraryAssemblyParts } from "./libraryAssembly.js";
+import { libraryMemberSource, librarySourceInputRoot, legacyLibrarySource } from "./librarySourceLayout.js";
+import type { LibraryProject } from "./project.js";
 import { resolveFunctionTarget, sourceFlagContext, functionSymbol } from "./targetAdapter.js";
 import { functionPaths } from "../../.pi/extensions/shared/call-graph.js";
 import { validateFunctionName } from "../../.pi/extensions/psx-decomp/tools/shared.js";
@@ -106,7 +108,7 @@ test("library mode is opt-in; duplicate members stay distinct, profiles and immu
     writeFileSync(join(root, "project.json"), JSON.stringify(manifest));
     const members = libraryMembers(root);
     assert.equal(members.length, 2); assert.notEqual(members[0]!.id, members[1]!.id);
-    assert.notEqual(members[0]!.source, members[1]!.source);
+    assert.deepEqual(members.map(m => m.source), ["src/libraries/original/0-member.c", "src/libraries/original/1-member.c"]);
     assert.throws(() => requireLibraryFunction("first", root), /Ambiguous/);
     const key = `${members[0]!.id}::first`;
     assert.equal(requireLibraryFunction(key, root).member.id, members[0]!.id);
@@ -124,8 +126,54 @@ test("library mode is opt-in; duplicate members stay distinct, profiles and immu
     assert.deepEqual(configuredFlags("cpp", libraryContext(members[0]!.id, root), root), [`-I${join(root, "include/library")}`, "-DLIBRARY_TEST"]);
     const policy = checkSourcePolicy({ projectRoot: root, config: DEFAULT_CONFIG, changedFiles: ["include/psyq/libcd.h"], patch: "" });
     assert.equal(policy.pass, false); assert.match(policy.hardFailures[0]!.message, /immutable/);
+    writeFileSync(join(root, "project.json"), JSON.stringify({ ...manifest, output: { sourceDir: "src/libraries", sourceLayout: "member-id" } }));
+    const legacy = libraryMembers(root);
+    assert.deepEqual(legacy.map(m => m.id), members.map(m => m.id), "source layout never changes target identity");
+    assert.equal(legacy[0]!.source, `src/libraries/${members[0]!.id}/member.c`);
+    for (const output of [{ sourceDir: "src/libraries", sourceLayout: "unknown" },
+      { sourceDir: "src/libraries", inputRoot: "../outside" }, { sourceDir: "src/libraries", inputRoot: "library-input/*" }]) {
+      writeFileSync(join(root, "project.json"), JSON.stringify({ ...manifest, output }));
+      assert.throws(() => loadLibraryProject(root), /output\.(?:sourceLayout|inputRoot)/);
+    }
     writeFileSync(join(root, "project.json"), JSON.stringify({ ...manifest, headers: { ...manifest.headers, owned: ["include"] } }));
     assert.throws(() => loadLibraryProject(root), /overlap/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("grouped source paths derive from configured roots and ordinals, not glob results or basenames alone", () => {
+  const project = { target: { archives: ["library-input/redux/**/*.a"], standaloneObjects: ["library-input/redux/**/*.o"] },
+    output: { sourceDir: "src/libraries" } } as LibraryProject;
+  assert.equal(librarySourceInputRoot(project), "library-input/redux");
+  assert.equal(libraryMemberSource(project, { path: "library-input/redux/libspu/52-s_gtsa.o", archive: false },
+    { name: "52-s_gtsa.o", ordinal: 0 }, "id"), "src/libraries/libspu/52-s_gtsa.c");
+  assert.equal(libraryMemberSource(project, { path: "library-input/redux/a/lib.a", archive: true },
+    { name: "duplicate.o", ordinal: 3 }, "id"), "src/libraries/a/lib/3-duplicate.c");
+  assert.equal(libraryMemberSource(project, { path: "library-input/redux/b/lib.a", archive: true },
+    { name: "duplicate.o", ordinal: 4 }, "id"), "src/libraries/b/lib/4-duplicate.c");
+  assert.equal(legacyLibrarySource(project, "id", "path/member.o"), "src/libraries/id/member.c");
+  const explicit = { ...project, output: { ...project.output, inputRoot: "library-input" } };
+  assert.equal(librarySourceInputRoot(explicit), "library-input");
+  assert.throws(() => libraryMemberSource(explicit, { path: "other/unit.o", archive: false },
+    { name: "unit.o", ordinal: 0 }, "id"), /outside output.inputRoot/);
+  assert.equal(librarySourceInputRoot({ ...project, target: { archives: ["a/lib.a"], standaloneObjects: ["b/unit.o"] } }), ".");
+});
+
+test("grouped archive/standalone source collisions fail without changing member identities", () => {
+  const root = mkdtempSync(join(tmpdir(), "psx-library-layout-"));
+  try {
+    writeFileSync(join(root, "toolchain.json"), readFileSync(join(HARNESS_ROOT, "toolchain.json")));
+    mkdirSync(join(root, "input/lib"), { recursive: true });
+    writeFileSync(join(root, "input/lib.a"), archive([objectFixture()]));
+    const distinct = objectFixture(), offset = readRelocatableObject(distinct).sections.get(".text")!.offset;
+    distinct[offset] = distinct[offset]! ^ 1;
+    writeFileSync(join(root, "input/lib/0-member.o"), distinct);
+    const manifest = { schemaVersion: 1, target: { kind: "relocatable-library", format: "elf-ar",
+      archives: ["input/*.a"], standaloneObjects: ["input/**/*.o"] } };
+    writeFileSync(join(root, "project.json"), JSON.stringify(manifest));
+    assert.throws(() => libraryMembers(root), /Library source path collision/);
+    writeFileSync(join(root, "project.json"), JSON.stringify({ ...manifest,
+      output: { sourceDir: "src/libraries", sourceLayout: "member-id" } }));
+    assert.equal(libraryMembers(root).length, 2);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -137,6 +185,31 @@ test("INCLUDE_ASM assembly parts retain member neighbors/data and don't repeat s
   assert.match(parts[0]!.text, /\.align 4/); assert.doesNotMatch(parts[1]!.text, /\.align 4/);
   assert.match(parts[2]!.text, /\.word 7/); assert.match(parts[2]!.text, /\.comm common, 4, 4/);
   assert.throws(() => libraryAssemblyParts(member, ".section .text\n nop\n"), /No independent assembly boundary/);
+});
+
+test("metadata-only members retain explicit stubs; missing program listings still fail closed", () => {
+  const original = readRelocatableObject(objectFixture());
+  const object = { ...original, sections: new Map([...original.sections].filter(([, s]) => !(s.flags & 2))),
+    symbols: [{ name: "template.c", value: 0, size: 0, binding: 0, type: 4, visibility: 0, section: "ABS" }], relocations: [] };
+  const member = { id: "metadata_only", object, functions: [] } as unknown as LibraryMember;
+  const parts = libraryAssemblyParts(member, "");
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0]!.symbol, "__library_member_data");
+  assert.deepEqual(parts[0]!.functions, []);
+  assert.match(parts[0]!.text, /nonmatching __library_member_data, 0/);
+  assert.doesNotMatch(parts[0]!.text, /\.(?:word|space|comm)\b/);
+  assert.throws(() => libraryAssemblyParts({ ...member, object: { ...object,
+    sections: original.sections } }, ""), /No assembly sections found/);
+  for (const section of ["UND", "ABS"]) {
+    const symbols = [{ name: "required", value: 4, size: 4, binding: 1, type: 0, visibility: 0, section }];
+    assert.throws(() => libraryAssemblyParts({ ...member, object: { ...object, symbols } }, ""), /No assembly sections found/);
+  }
+  const commonOnly = libraryAssemblyParts({ ...member, object: { ...object,
+    symbols: original.symbols.filter(s => s.section === "COMMON") } }, "");
+  assert.match(commonOnly[0]!.text, /\.comm common, 4, 4/);
+  assert.doesNotMatch(commonOnly[0]!.text, /Metadata-only/);
+  assert.throws(() => libraryAssemblyParts({ ...member, object: { ...object,
+    relocations: original.relocations } }, ""), /No assembly sections found/);
 });
 
 test("shared diagnostics isolate TU views and retain symbolic values instead of invented addresses", () => {

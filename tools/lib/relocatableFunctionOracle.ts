@@ -27,12 +27,14 @@ function addend(o: RelocatableObject, r: ObjectRelocation): number {
   }
   return signed(word);
 }
-export function relocatableFunctionWords(object: RelocatableObject, symbol: string, base?: number): RenderedWord[] {
+export function relocatableFunctionWords(object: RelocatableObject, symbol: string, base?: number, extent?: number): RenderedWord[] {
   const fn = objectFunctions(object).find(f => f.name === symbol);
   if (!fn) throw new Error(`Object does not define ${symbol}`);
-  const section = object.sections.get(fn.section)!, bytes = section.data.subarray(fn.offset, fn.offset + fn.size);
+  const size = extent ?? fn.size, section = object.sections.get(fn.section)!;
+  if (size < 0 || fn.offset + size > section.size) throw new Error(`Invalid code extent for ${symbol}`);
+  const bytes = section.data.subarray(fn.offset, fn.offset + size);
   if (bytes.length % 4) throw new Error(`Unaligned code extent for ${symbol}`);
-  const start = base ?? fn.offset, context = { functionName: symbol, functionStart: start, functionExtent: fn.size,
+  const start = base ?? fn.offset, context = { functionName: symbol, functionStart: start, functionExtent: size,
     index: { byAddress: new Map<number, string>(), addresses: [] }, gp: 0 };
   const lines = disassembleBytes(bytes, start);
   return lines.map((line, i) => {
@@ -51,7 +53,7 @@ export function relocatableFunctionWords(object: RelocatableObject, symbol: stri
         // adds P + 4, so its destination is S + A + 4 (GAS uses A=-4).
         const targetOffset = value === undefined ? undefined : value + bias + (r.type === 10 ? 4 : 0);
         return { type: NAMES[r.type]!, reference: r.reference, addend: bias,
-          ...([4, 10].includes(r.type) && section === fn.section && targetOffset !== undefined && targetOffset >= fn.offset && targetOffset < fn.offset + fn.size
+          ...([4, 10].includes(r.type) && section === fn.section && targetOffset !== undefined && targetOffset >= fn.offset && targetOffset < fn.offset + size
             ? { targetOffset: start + targetOffset - fn.offset } : {}) };
       });
       const r = rs[0]!, ref = referenceText(r), bias = addend(object, r), expr = `${ref}${bias ? `${bias < 0 ? "" : "+"}${bias}` : ""}`;
@@ -71,10 +73,15 @@ export function targetRelocatableWords(name: string): RenderedWord[] {
 }
 export function compareRelocatableFunction(name: string, objectPath: string): OracleResult {
   const { member, fn, key } = requireLibraryFunction(name), candidateBytes = readFileSync(objectPath), object = readRelocatableObject(candidateBytes);
-  const targetWords = relocatableFunctionWords(member.object, fn.name), candidateWords = relocatableFunctionWords(object, fn.name, fn.offset);
+  const memberComparison = compareRelocatableObjects(member.bytes, candidateBytes);
+  // A size-zero original symbol's inferred span may include alignment padding
+  // outside the compiler's FUNC-size annotation. Exact whole-member bytes and
+  // symbol positions license comparing that same span; metadata must not turn
+  // already-identical assembly into a function-local mismatch.
+  const extent = fn.inferredSize && memberComparison.verdict === "match" ? fn.size : undefined;
+  const targetWords = relocatableFunctionWords(member.object, fn.name), candidateWords = relocatableFunctionWords(object, fn.name, fn.offset, extent);
   const comparison = compareWords(targetWords, candidateWords);
   if (object.symbols.some(s => s.name === `${fn.name}.NON_MATCHING`)) comparison.verdict = "stub";
-  const memberComparison = compareRelocatableObjects(member.bytes, candidateBytes);
   const memberStub = object.symbols.some(s => s.name.endsWith(".NON_MATCHING"));
   return { ...comparison, functionName: key, vram: fn.offset, objectPath, targetWords, candidateWords,
     verification: { scope: "translation-unit", verdict: memberStub ? "stub" : memberComparison.verdict, differences: memberComparison.differences },

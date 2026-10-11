@@ -1,10 +1,11 @@
 import type { CommandRecord } from "../../lib/recordedCommand.js";
+import { BIOS_FUNCTION_MACRO } from "../../lib/biosFunctionMacro.js";
 import type { DeclarationIndex, Declaration } from "../declarationContext.js";
 import type { detectFunctionMacroIdentity } from "../../diagnostics/macroIdentity.js";
 
 /** Common handoff core. A draft's existence is independent of its compilability. */
 export interface PacketSource {
-  origin: "existing-attempt" | "m2c" | "reconstruction";
+  origin: "existing-attempt" | "m2c" | "reconstruction" | "platform-macro";
   path: string;
   sha256: string;
   text: string;
@@ -44,6 +45,7 @@ export interface PreparationPacket {
   integration: { state: "staged" | "live"; changes: string[]; blockers: string[]; destinationHash: string; stagedHash?: string };
   discovery: { unknowns: UnknownFact[]; report: unknown; priorExperiments: string[]; preflight: CommandRecord[];
     macroIdentity?: ReturnType<typeof detectFunctionMacroIdentity>;
+    platformMacros?: import("../biosSyscall.js").BiosSyscallEvidence[];
     readBeforeDefinition?: { findings: Array<{ guidance?: string; register: string; vram: string }>; staticChain: import("../../diagnostics/nestedFunctionScan.js").ChainRow | null; censusComplete: boolean | null };
     staticChain?: import("../staticChainInjection.js").ChainInjection;
     propagation?: { graph: string; report: string; input: string; graphComplete: boolean; convergence: string; visited: number; facts: number; steps: number } };
@@ -53,6 +55,10 @@ export interface PreparationPacket {
 const MACRO_CALL_POLICY = "Policy exception for this function: you may call the detected header macros (including reported compatible alternatives), even when they expand to assembly. This permits macro calls only, not handwritten assembly, register pinning, new stubs or allowlist changes. Candidate calls remain oracle-unverified; resolve operands and header vintage, then verify the complete function.";
 
 function macroOpening(packet: PreparationPacket): string {
+  if (packet.discovery.platformMacros?.length) return packet.discovery.platformMacros.map(m =>
+    `Supported platform macro: ${m.macro === BIOS_FUNCTION_MACRO ? `${m.macro} binding (vector 0x${m.vector!.toString(16)}, selector ${m.selector})` : `${m.macro}(${m.selector})`} from ${m.header}. Signature witnessed in ${m.signatureHeader}: ${m.signature}\n` +
+    `Project sourcePolicy.${m.policy ?? "allowBiosSyscallMacro"} explicitly permits this canonical operation. Macro calls only; no raw function assembly, register pinning, redefinitions or INCLUDE_ASM. Whole-member verification remains mandatory.`
+  ).join("\n");
   const report = packet.discovery.macroIdentity?.function;
   if (!report) return "Header asm-macro detection unavailable; no macro policy exception.";
   if (!report.tiling.length) return `Header asm-macro detection: no template matches (${report.cop2.count} COP2 instructions); no macro policy exception.`;
@@ -80,7 +86,7 @@ export function packetOpening(packet: PreparationPacket, packetPath: string): st
     `Generation: ${packet.generation.status}; compilation: ${packet.compilation.status}; comparison: ${packet.comparison.status}; finalization: ${packet.finalization.status}.`,
     links,
     ...(packet.verification ? [`Verification scope: ${packet.verification.scope}; oracle: ${packet.verification.mode}.`] : []),
-    ...(packet.discovery.macroIdentity ? [macroOpening(packet)] : []),
+    ...(packet.discovery.macroIdentity || packet.discovery.platformMacros?.length ? [macroOpening(packet)] : []),
     ...(packet.discovery.readBeforeDefinition ? [chainOpening(packet)] : []),
     ...(packet.discovery.propagation ? [`Type propagation: ${packet.discovery.propagation.convergence}, ${packet.discovery.propagation.visited} original functions; graph ${packet.discovery.propagation.graphComplete ? "closed" : "coverage incomplete"}. Constraints/provenance: ${packet.discovery.propagation.report}; actual m2c input: ${packet.discovery.propagation.input}.`] : []),
     ...(packet.comparison.report ? [`Comparison report: ${packet.comparison.report}. Compilation, exactness and finalization are separate claims.`] : []),

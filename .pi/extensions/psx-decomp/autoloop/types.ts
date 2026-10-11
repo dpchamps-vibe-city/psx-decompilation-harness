@@ -94,6 +94,8 @@ export type ParkReason =
 
 export interface ParkRecord {
   functionName: string;
+  /** Selection-only park: no source rewrite or source-policy exemption. */
+  skipOnly?: boolean;
   /** Project-relative C file, so a note names the container's path, not `src/`. */
   sourcePath?: string;
   reason: ParkReason;

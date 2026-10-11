@@ -18,8 +18,7 @@
  * the narrow predecessor and runs alongside it.
  */
 
-import { loadSymbolIndex } from "../../lib/symbolIndex.js";
-import type { Container } from "../../lib/container.js";
+import { constructionSymbolIndex, type ConstructionContext } from "./construction-context.js";
 import { canon, type LoadMeta } from "./exec.js";
 import type {
   CExpr,
@@ -500,7 +499,7 @@ export function constructControlFlowCandidates(
   arena: DagArenaLike,
   root: DagRef,
   loadsMeta: LoadMeta[],
-  container: Container,
+  container: ConstructionContext,
 ): ControlFlowCandidate[] | { invalid: string } | { unresolved: string } {
   /* 0. Refuse if the DAG contains loop nodes — loops are the guarded
    * constructor's domain, not the general control-flow class. */
@@ -587,7 +586,7 @@ export function constructControlFlowCandidates(
   collectStores(root);
 
   /* 3. Build storage map. */
-  const index = loadSymbolIndex(container);
+  const index = constructionSymbolIndex(container);
   const map = buildStorageMap(cells, index, new Map(), functionName);
   if ("unresolved" in map) return map;
   if ("invalid" in map) return map;

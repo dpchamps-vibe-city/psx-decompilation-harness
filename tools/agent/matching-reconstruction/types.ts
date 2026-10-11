@@ -356,6 +356,9 @@ export interface CandidateOutcome {
   differingCount?: number;
   /** A bounded sample of the differing addresses, for a human reading the bundle. */
   differingVram?: number[];
+  differingCoordinates?: Array<{ section: string; offset: number }>;
+  /** A function-local match does not certify an ET_REL member. */
+  memberVerification?: { verdict: "match" | "mismatch" | "undetermined" | "stub"; differences: string[] };
   compileError?: string;
 }
 
@@ -364,8 +367,10 @@ export interface UnresolvedReason {
   /** Which capability would lift this refusal. Chosen at the refusal site. */
   category: FailureCategory;
   detail: string;
-  /** VRAM addresses implicated, when the reason is located. */
+  /** VRAM addresses implicated, when the reason is located in an image. */
   vram?: number[];
+  /** ET_REL locations are section offsets, never invented RAM addresses. */
+  coordinates?: Array<{ section: string; offset: number }>;
 }
 
 /**
@@ -377,7 +382,7 @@ export interface UnresolvedReason {
  * half the fix; using it is the other half.
  */
 export interface EffectiveBuild {
-  containerKind: "exe" | "overlay";
+  containerKind: "exe" | "overlay" | "library";
   cc1Flags: string[];
   /** The per-file override entry that contributed, when one did. */
   overrideFlags?: string[];
@@ -416,7 +421,10 @@ export interface ResultBundle {
   schemaVersion: typeof MATCHING_RECONSTRUCTION_SCHEMA_VERSION;
   functionName: string;
   containerId: string;
-  vram: number;
+  /** Present only for linked-image results. */
+  vram?: number;
+  coordinate?: { kind: "section"; section: string; offset: number; size: number; inferredSize: boolean };
+  verification?: { scope: "function" | "translation-unit"; mode: "linked-bytes" | "relocatable-object" };
   sizeBytes: number;
   state: TerminalState;
   relation?: ScanRelation;

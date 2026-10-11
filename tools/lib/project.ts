@@ -11,7 +11,7 @@ export interface LibraryProject {
   headers: { reference: string[]; owned: string[]; context: string[] };
   selection: { scope: "all-code-members" };
   verification: { mode: "relocatable-object" };
-  output: { sourceDir: string };
+  output: { sourceDir: string; sourceLayout?: "grouped" | "member-id"; inputRoot?: string };
   /** Named toolchain flag/include profiles; exact member id wins over default. */
   toolchainProfile?: string;
   memberProfiles: Record<string, string>;
@@ -48,8 +48,14 @@ export function loadLibraryProject(root = projectRoot()): LibraryProject | null 
   p.selection ??= { scope: "all-code-members" }; object(p.selection, ["scope"], "selection");
   p.verification ??= { mode: "relocatable-object" }; object(p.verification, ["mode"], "verification");
   if (p.selection.scope !== "all-code-members" || p.verification.mode !== "relocatable-object") throw new Error(`${PROJECT_FILE}: unsupported selection/verification mode`);
-  p.output ??= { sourceDir: "src/libraries" }; object(p.output, ["sourceDir"], "output"); paths([p.output.sourceDir], "output.sourceDir");
-  if (!p.output.sourceDir.startsWith("src/") || /[*?\[]/.test(p.output.sourceDir)) throw new Error(`${PROJECT_FILE}: output.sourceDir must be a directory under src/`);
+  p.output ??= { sourceDir: "src/libraries" }; object(p.output, ["sourceDir", "sourceLayout", "inputRoot"], "output"); paths([p.output.sourceDir], "output.sourceDir");
+  if (!p.output.sourceDir.startsWith("src/") || /[*?\[{]/.test(p.output.sourceDir)) throw new Error(`${PROJECT_FILE}: output.sourceDir must be a directory under src/`);
+  p.output.sourceLayout ??= "grouped";
+  if (!["grouped", "member-id"].includes(p.output.sourceLayout)) throw new Error(`${PROJECT_FILE}: unsupported output.sourceLayout`);
+  if (p.output.inputRoot !== undefined) {
+    paths([p.output.inputRoot], "output.inputRoot");
+    if (/[*?\[{]/.test(p.output.inputRoot)) throw new Error(`${PROJECT_FILE}: output.inputRoot must name a directory, not a glob`);
+  }
   p.memberProfiles ??= {}; object(p.memberProfiles, Object.keys(p.memberProfiles), "memberProfiles");
   const profiles = loadToolchain(root).profiles;
   for (const name of [...Object.values(p.memberProfiles), ...(p.toolchainProfile !== undefined ? [p.toolchainProfile] : [])]) {

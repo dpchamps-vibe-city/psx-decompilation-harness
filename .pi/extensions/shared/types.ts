@@ -292,6 +292,11 @@ export interface AutodecompConfig {
      * `stackPointerSwitch` for how narrowly it is recognised.
      */
     allowStackPointerSwitch: boolean;
+    /** Explicit project approval for the canonical PSX_BIOS_SYSCALL operation,
+     * not raw function asm, register pinning or arbitrary macro definitions. */
+    allowBiosSyscallMacro?: boolean;
+    /** Canonical fixed-register BIOS tail transfer and its padding only. */
+    allowBiosTailJumpMacro?: boolean;
     allowlist: Record<string, string[]>;
   };
 }

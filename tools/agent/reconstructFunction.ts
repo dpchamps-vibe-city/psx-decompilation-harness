@@ -56,7 +56,9 @@ const result = reconstructFunction({
 if (json) {
   console.log(JSON.stringify(result, null, 2));
 } else {
-  console.log(`${result.functionName} (${result.containerId}, 0x${result.vram.toString(16)}, ${result.sizeBytes} bytes)`);
+  const location = result.coordinate ? `${result.coordinate.section}+0x${result.coordinate.offset.toString(16)}`
+    : result.vram === undefined ? "location unavailable" : `0x${result.vram.toString(16)}`;
+  console.log(`${result.functionName} (${result.containerId}, ${location}, ${result.sizeBytes} bytes)`);
   console.log(`STATE: ${result.state}`);
   if (result.relation) console.log(`relation: ${describeRelation(result.relation)}`);
   if (result.unresolved) console.log(`reason: ${result.unresolved.detail}`);

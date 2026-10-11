@@ -47,7 +47,7 @@ declares, and an absolute one for everything else. State that in C:
 - every other file leaves it `extern` and gets absolute addressing.
 
 Derive which globals a function owns from the target rather than guessing:
-`tools/build/deriveTuOwnedGlobals.ts <function>` lists them, and `--check`
+`psx_derive_tu_globals({functionName: "<function>"})` lists them, and `--check`
 reports any file that reaches a global through `$gp` but addresses it
 absolutely. A hand-written `__asm__` block declares its own symbols the same
 way, with `.comm SYM,n` rather than `.extern`.

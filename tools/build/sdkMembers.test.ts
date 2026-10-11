@@ -1,7 +1,8 @@
-import { test } from "node:test";
+import { ROOT, test } from "../testing/runtimeTestContext.js";
+
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { splitSdkLibs } from "./splitSdkLibs.js";
@@ -9,7 +10,7 @@ import { auditSdkCollisions } from "./auditSdkCollisions.js";
 import { collisionNames, isReturnPadding, loadMemberMap, patchedSdkObjectPath, readAr, readPsyqLib, readTextObject, signatureId, type SigEntry } from "../lib/psyqMembers.js";
 import { acknowledgeFindings, scanSdkSignatures, verifiedMatches, type DetectionAcknowledgement } from "../lib/sdkDetection.js";
 import { boundaryPremise, staleSdkSymbols } from "../lib/sdkProvenance.js";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 
 function ar(members: { name: string; bytes: Buffer }[]): Buffer {
   return Buffer.concat([Buffer.from("!<arch>\n"), ...members.flatMap(m => [
@@ -37,14 +38,14 @@ function sig(name: string, object: Buffer): SigEntry {
 }
 function fixture(): { root: string; small: Buffer; large: Buffer; entries: SigEntry[]; scan: () => ReturnType<typeof scanSdkSignatures> } {
   const root = mkdtempSync(join(tmpdir(), "sdk-collision-test-"));
-  const sdk = join(root, "sdk"), sigDir = join(root, "tools/vendor/psx_psyq_signatures/470");
-  mkdirSync(sdk); mkdirSync(sigDir, { recursive: true });
+  const sdk = join(root, "library-input/psyq/LIB"), sigDir = join(root, "library-input/signatures/470");
+  mkdirSync(sdk, { recursive: true }); mkdirSync(sigDir, { recursive: true });
   const small = assemble(root, "Small", "addiu $2,$0,1\njr $31\nnop\nnop");
   const large = assemble(root, "Large", "addiu $2,$0,2\naddiu $3,$0,3\naddiu $4,$0,4\naddiu $5,$0,5\naddiu $6,$0,6\njr $31\nnop\nnop");
   const entries = [sig("SAME.OBJ", small), sig("SAME.OBJ", large)];
   writeFileSync(join(sdk, "libtest.a"), ar([{ name: "same.o", bytes: small }, { name: "same.o", bytes: large }]));
   writeFileSync(join(sigDir, "LIBTEST.LIB.json"), JSON.stringify(entries));
-  splitSdkLibs({ root, sdkDir: sdk, version: "470", write: true });
+  splitSdkLibs({ root, sdkDir: sdk, version: "470", signatures: sigDir, write: true });
   const binary = Buffer.concat([readTextObject(small).text, readTextObject(large).text]);
   return { root, small, large, entries, scan: () => scanSdkSignatures({ root, sigDir, map: loadMemberMap(root, "470"), binary, searchStart: 0, searchEnd: binary.length }) };
 }
@@ -70,7 +71,7 @@ test("two-member collision: larger signature verifies its OWN object; removing i
     assert.equal(result.matchedButUnverifiable.length, 0);
     const large = result.candidates.find(c => c.entry.labels[0]!.name === "Large")!;
     assert.equal(large.textSize, 32); assert.deepEqual(large.offsets, [16]);
-    assert.equal(large.oPath, "build/sdk/lib/470/libtest/same__Large.o");
+    assert.equal(large.oPath, "lib/sdk/470/libtest/same__Large.o");
     // The legacy ambiguous filename is intentionally wrong and must not be consulted.
     mkdirSync(join(f.root, "lib/libtest"), { recursive: true });
     writeFileSync(join(f.root, "lib/libtest/same.o"), f.small);
@@ -94,21 +95,21 @@ test("two-member collision: larger signature verifies its OWN object; removing i
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("split is deterministic, preserves non-colliding input filenames, and never writes binaries to src or lib", () => {
+test("split is deterministic, preserves non-colliding input filenames, and writes new extraction results to project lib, not src", () => {
   const f = fixture();
   try {
     const stablePath = join(f.root, "lib/libtest/stable.o");
     mkdirSync(join(f.root, "lib/libtest"), { recursive: true }); writeFileSync(stablePath, f.small);
-    const archive = ar([{ name: "same.o", bytes: f.small }, { name: "same.o", bytes: f.large }, { name: "stable.o", bytes: f.large }]);
-    writeFileSync(join(f.root, "sdk/libtest.a"), archive);
-    const first = splitSdkLibs({ root: f.root, sdkDir: join(f.root, "sdk"), version: "470", write: true });
-    const second = splitSdkLibs({ root: f.root, sdkDir: join(f.root, "sdk"), version: "470", write: true });
+    const archive = ar([{ name: "same.o", bytes: f.small }, { name: "same.o", bytes: f.large }, { name: "stable.o", bytes: f.small }]);
+    writeFileSync(join(f.root, "library-input/psyq/LIB/libtest.a"), archive);
+    const first = splitSdkLibs({ root: f.root, sdkDir: join(f.root, "library-input/psyq/LIB"), version: "470", signatures: join(f.root, "library-input/signatures/470"), write: true });
+    const second = splitSdkLibs({ root: f.root, sdkDir: join(f.root, "library-input/psyq/LIB"), version: "470", signatures: join(f.root, "library-input/signatures/470"), write: true });
     assert.deepEqual(first, second);
     assert.ok(first.members.some(m => m.oPath === "lib/libtest/stable.o"));
     assert.ok(readFileSync(stablePath).equals(f.small));
-    assert.equal(existsSync(join(f.root, "lib/libtest/same__Large.o")), false);
+    assert.equal(existsSync(join(f.root, "lib/sdk/470/libtest/same__Large.o")), true);
     assert.equal(existsSync(join(f.root, "src")), false);
-    assert.equal(patchedSdkObjectPath("build/sdk/lib/470/libtest/same__Large.o"), "build/lib/470/libtest/same__Large.o");
+    assert.equal(patchedSdkObjectPath("lib/sdk/470/libtest/same__Large.o"), "build/lib/sdk/470/libtest/same__Large.o");
     assert.equal(patchedSdkObjectPath("lib/libtest/stable.o"), "build/lib/libtest/stable.o");
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
@@ -116,17 +117,44 @@ test("split is deterministic, preserves non-colliding input filenames, and never
 test("SDK version namespaces cannot overwrite another version's colliding objects", () => {
   const f = fixture();
   try {
-    const dir = join(f.root, "tools/vendor/psx_psyq_signatures/420"); mkdirSync(dir);
+    const dir = join(f.root, "library-input/signatures/420"); mkdirSync(dir);
     writeFileSync(join(dir, "LIBTEST.LIB.json"), JSON.stringify(f.entries));
     const first = loadMemberMap(f.root, "470")!;
-    const second = splitSdkLibs({ root: f.root, sdkDir: join(f.root, "sdk"), version: "420", write: true });
-    assert.ok(second.members.every(m => m.oPath.startsWith("build/sdk/lib/420/")));
+    const second = splitSdkLibs({ root: f.root, sdkDir: join(f.root, "library-input/psyq/LIB"), version: "420", signatures: dir, write: true });
+    assert.ok(second.members.every(m => m.oPath.startsWith("lib/sdk/420/")));
     assert.deepEqual(loadMemberMap(f.root, "470"), first);
     assert.equal(f.scan().candidates.length, 2);
-    mkdirSync(join(f.root, "tools/vendor/psx_psyq_signatures/370"));
-    const audit = auditSdkCollisions(f.root, ["370"]);
+    mkdirSync(join(f.root, "library-input/signatures/370"));
+    const audit = auditSdkCollisions(f.root, ["370"], join(f.root, "library-input/signatures"));
     assert.ok(audit.errors.some(e => e.includes("SDK 370: member map absent")));
   } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("first-time supplied SDK conversion covers colliding and unique members, retains provenance and refuses differing lib outputs", () => {
+  const root = mkdtempSync(join(tmpdir(), "sdk-first-conversion-"));
+  try {
+    const sdkDir = join(root, "library-input/psyq/LIB"), signatures = join(root, "library-input/signatures/470");
+    mkdirSync(sdkDir, { recursive: true }); mkdirSync(signatures, { recursive: true });
+    const small = assemble(root, "Small", "addiu $2,$0,1\njr $31\nnop"), large = assemble(root, "Large", "addiu $2,$0,2\njr $31\nnop");
+    const lnk = (elf: Buffer) => Buffer.concat([Buffer.from("LNK\x02"), elf]);
+    const bytes = lib([{ name: "SAME", bytes: lnk(small) }, { name: "SAME", bytes: lnk(large) }, { name: "UNIQUE", bytes: lnk(small) }]);
+    const archive = join(sdkDir, "LIBTEST.LIB"); writeFileSync(archive, bytes);
+    // Synthetic converter obeys the existing (input member, output ELF) argv
+    // contract. No original LNK encoding/decoder claim is made by this fixture.
+    const converter = join(root, "converter with spaces");
+    writeFileSync(converter, '#!/bin/sh\nprintf "convert\\n" >> "' + join(root, "conversions") + '"\ndd if="$1" of="$2" bs=1 skip=4 2>/dev/null\n'); chmodSync(converter, 0o755);
+    const options = { root, sdkDir, version: "470", signatures, converter, write: true };
+    const first = splitSdkLibs(options);
+    assert.equal(readFileSync(join(root, "conversions"), "utf8").trim().split("\n").length, 3);
+    assert.equal(first.members.length, 3);
+    assert.ok(first.members.every(member => member.oPath.startsWith("lib/") && member.source.startsWith("library-input/") && member.objectHash && member.archiveHash && member.converter?.mode === "supplied"));
+    assert.deepEqual(splitSdkLibs(options), first);
+    assert.equal(readFileSync(join(root, "conversions"), "utf8").trim().split("\n").length, 3, "verified cached conversions are not repeated");
+    assert.ok(readFileSync(archive).equals(bytes), "original archive remains untouched");
+    const object = join(root, first.members[0]!.oPath); writeFileSync(object, "different project-owned object");
+    assert.throws(() => splitSdkLibs(options), /Refusing to overwrite different/);
+    assert.equal(readFileSync(object, "utf8"), "different project-owned object");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("an absent member map cannot silently cross-check a collision by stored name", () => {
@@ -180,7 +208,7 @@ test("zero-reloc return/padding cannot be placed from generated names; legitimat
 test("acknowledgements bind the exact version, binary, signature, reason AND hit offsets", () => {
   const f = fixture();
   try {
-    const largePath = join(f.root, "build/sdk/lib/470/libtest/same__Large.o"); unlinkSync(largePath);
+    const largePath = join(f.root, "lib/sdk/470/libtest/same__Large.o"); unlinkSync(largePath);
     const findings = f.scan().matchedButUnverifiable;
     const entry = f.entries[1]!;
     const row: DetectionAcknowledgement = { version: "470", targetHash: "target", sigFile: "LIBTEST.LIB.json", identity: signatureId(entry), reason: "missing-file", offsets: [16], evidence: "Fixture: intentionally unavailable object." };
@@ -195,11 +223,11 @@ test("acknowledgements bind the exact version, binary, signature, reason AND hit
 test("retire only disproven return-stub labels and collision-manufactured generics; preserve unrelated SDK names and user renames", () => {
   const f = fixture();
   try {
-    const sdkDir = join(f.root, "tools/vendor/psx_psyq_signatures/470");
+    const sdkDir = join(f.root, "library-input/signatures/470");
     const dummy = { name: "DMYNOT1.OBJ", sig: "", labels: [{ name: "dmy_nothing1", offset: 0 }] };
     writeFileSync(join(sdkDir, "LIBSND.LIB.json"), JSON.stringify([dummy, { ...dummy, name: "OTHER.OBJ", labels: [{ name: "ChangeClearSIO", offset: 0 }] }]));
     const content = "MyRenamedFunction = 0x80030000;\ndmy_nothing1 = 0x80030010;\nfunc_80030014 = 0x80030014;\nChangeClearSIO = 0x80030018;\n";
-    assert.deepEqual(staleSdkSymbols(content, [{ vramStart: 0x80030000, vramEnd: 0x80030020, oPath: "build/sdk/lib/470/libtest/same__Large.o" }], f.root, "470", new Set(["lib/libsnd/dmynot1.o"])), ["dmy_nothing1", "func_80030014"]);
+    assert.deepEqual(staleSdkSymbols(content, [{ vramStart: 0x80030000, vramEnd: 0x80030020, oPath: "lib/sdk/470/libtest/same__Large.o" }], f.root, "470", new Set(["lib/libsnd/dmynot1.o"]), sdkDir), ["dmy_nothing1", "func_80030014"]);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 

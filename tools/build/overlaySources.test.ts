@@ -1,11 +1,12 @@
+import { ROOT } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { selectedCSources } from "./pipeline.js";
 import type { Container } from "../lib/container.js";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 
 test("overlay builds select configured functions without deleting retired source files", (t) => {
   const root = mkdtempSync(join(tmpdir(), "overlay-sources-"));

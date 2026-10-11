@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { sha256 } from "../variant-lab/artifacts.js";
 
 /**
@@ -411,7 +412,7 @@ export function splitComponents(
   return components;
 }
 
-export function loadMacroRegistry(root: string = ROOT): MacroRegistry {
+export function loadMacroRegistry(root: string = projectRoot()): MacroRegistry {
   const active = new Map<string, ActiveMacro>();
   const inactive: Array<{ name: string; reason: string }> = [];
   const headerCache = new Map<string, string | undefined>();

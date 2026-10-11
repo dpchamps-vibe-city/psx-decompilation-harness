@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
@@ -19,11 +20,11 @@ export function registerExportContextTool(pi: ExtensionAPI): void {
         details: {},
       });
 
-      const args = ["tsx", "tools/agent/contextExport.ts", params.functionName ?? "--all"];
+      const args = [params.functionName ?? "--all"];
       // Publication may write shared types and more than one owner header.
       const target = resolve(ctx.cwd, "build", "context-publication.lock");
       return withFileMutationQueue(target, () =>
-        runProjectCommand(pi, ctx.cwd, "npx", args, signal, 30_000),
+        runProjectCommand(pi, ctx.cwd, process.execPath, installedScriptArgs("tools/agent/contextExport.ts", args, ctx.cwd), signal, 30_000),
       );
     },
   });

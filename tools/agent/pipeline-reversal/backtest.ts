@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * Backtest — does the chain name the right pass?
  *
@@ -21,7 +22,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, resolveSource } from "../decompToolchain.js";
+import { resolveSource } from "../decompToolchain.js";
 import { declaratorName, field, namedChildren, parseC, walk, type Node } from "../residual-source-search/tree-sitter-c.js";
 import { reversePipeline } from "./reverse.js";
 
@@ -220,7 +221,7 @@ export function runBacktestCase(functionName: string, kind: PerturbationKind): B
   }
   if (!edited) return { ...base, detail: `${perturbation.reason} — no site in this source` };
 
-  const directory = join(ROOT, "build/pipelineReversal", functionName, "backtest", kind);
+  const directory = join(projectRoot(), "build/pipelineReversal", functionName, "backtest", kind);
   mkdirSync(directory, { recursive: true });
   const path = join(directory, `${functionName}.c`);
   writeFileSync(path, edited);

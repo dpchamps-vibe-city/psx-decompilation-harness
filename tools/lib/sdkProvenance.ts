@@ -2,10 +2,11 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { conventionalOPath, isReturnPadding, readTextObject, type SigEntry, type TextObject } from "./psyqMembers.js";
+import { configuredSdk } from "./toolchain.js";
 
-export function staleSdkSymbols(content: string, matches: { vramStart: number; vramEnd: number; oPath: string }[], root: string, version: string, retiredObjectPaths: Set<string>): string[] {
+export function staleSdkSymbols(content: string, matches: { vramStart: number; vramEnd: number; oPath: string }[], root: string, version: string, retiredObjectPaths: Set<string>, signatures = configuredSdk(root).signatures): string[] {
   const sdkNames = new Set<string>();
-  const dir = join(root, "tools/vendor/psx_psyq_signatures", version);
+  const dir = signatures;
   for (const file of readdirSync(dir).filter(f => f.endsWith(".json"))) {
     const entries: SigEntry[] = JSON.parse(readFileSync(join(dir, file), "utf8"));
     for (const entry of entries) {
@@ -25,7 +26,7 @@ export function staleSdkSymbols(content: string, matches: { vramStart: number; v
     // only belong to the verified member if that member actually exports them.
     const owner = matches.find(m => vram > m.vramStart && vram < m.vramEnd);
     if (!owner) continue;
-    const manufacturedGeneric = /^func_[\da-f]{8}$/i.test(name) && owner.oPath.startsWith("build/sdk/lib/") && owner.oPath.includes("__");
+    const manufacturedGeneric = /^func_[\da-f]{8}$/i.test(name) && /(?:^build\/sdk\/lib\/|\/sdk\/\d+\/)/.test(owner.oPath) && owner.oPath.includes("__");
     if (!sdkNames.has(name) && !manufacturedGeneric) continue;
     if (!symbols.has(owner.oPath)) symbols.set(owner.oPath, readTextObject(readFileSync(join(root, owner.oPath))).symbols);
     if (!symbols.get(owner.oPath)!.some(s => s.name === name && owner.vramStart + s.offset === vram)) stale.push(name);

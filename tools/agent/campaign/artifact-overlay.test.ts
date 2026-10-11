@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * The recovered-artifact overlay, and the loop it closes.
  *
@@ -19,8 +20,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { withContextMode } from "../matching-reconstruction/context-mode.js";
 import { reconstructFunction } from "../matching-reconstruction/engine.js";
 import { buildFamilyIndex, donorsFor } from "../family-transfer/family-index.js";

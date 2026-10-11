@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * Phase A3 of plans/automatic-matching-reconstruction.md: diagnostic authority
  * is scoped. A replay, a closed-direction record, or a ledger conclusion can
@@ -10,8 +11,8 @@
 import { strict as assert } from "node:assert";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 
 const FORBIDDEN = [
   "closedDirections",

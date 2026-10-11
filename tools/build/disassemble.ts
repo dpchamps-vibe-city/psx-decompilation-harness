@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * disassemble.ts — run spimdisasm over every container.
  *
@@ -21,7 +24,7 @@ import { configuredTool, configuredFlags } from "../lib/toolchain.js";
 import { execFileSync, execSync } from "child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import {
   containerPath,
   containerTargetPath,
@@ -55,7 +58,7 @@ function hex(value: number): string {
  */
 function prepareSymbolTable(container: Container): string | null {
   if (container.kind === "exe") {
-    execSync("npx tsx tools/build/genDisasmSymbols.ts --write", { cwd: ROOT, stdio: "inherit" });
+    installedExec(process.execPath, currentScriptArgs("tools/build/genDisasmSymbols.ts", ["--write"]), { cwd: projectRoot(), stdio: "inherit" });
     return container.paths.disasmSymbolAddrs;
   }
   const symbols = containerPath(container, "symbolAddrs");
@@ -63,7 +66,7 @@ function prepareSymbolTable(container: Container): string | null {
 }
 
 function runSpimdisasm(container: Container, outDir: string, options: { unknown: boolean }): void {
-  mkdirSync(join(ROOT, outDir), { recursive: true });
+  mkdirSync(join(projectRoot(), outDir), { recursive: true });
   const symbolTable = prepareSymbolTable(container);
 
   const argv = [
@@ -85,11 +88,11 @@ function runSpimdisasm(container: Container, outDir: string, options: { unknown:
     ...(symbolTable ? ["--symbol-addrs", symbolTable] : []),
   ];
 
-  execFileSync(configuredTool("spimdisasm"), argv, { cwd: ROOT, stdio: "inherit" });
+  execFileSync(configuredTool("spimdisasm"), argv, { cwd: projectRoot(), stdio: "inherit" });
 
   /* spimdisasm writes a whole-section `.text.s` beside the per-function dump.
      Nothing downstream reads it and it is large, so it goes. */
-  const dir = join(ROOT, outDir);
+  const dir = join(projectRoot(), outDir);
   for (const entry of readdirSync(dir)) {
     if (entry.endsWith(".text.s")) rmSync(join(dir, entry));
   }

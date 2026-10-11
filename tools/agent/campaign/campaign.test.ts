@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * The project-wide campaign: an evidence graph that bounds what a recovery
  * changes, a loop that converges, a bundle that hands on what it could not
@@ -13,8 +14,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { buildEvidenceGraph, dependentsOf, describeGraph } from "./evidence-graph.js";
 import { runCampaign } from "./campaign.js";
 import { prepareBundle, renderBundle } from "./bundle.js";

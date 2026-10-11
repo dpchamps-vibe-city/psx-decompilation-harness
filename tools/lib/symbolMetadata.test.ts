@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { loadFunctionSpans, loadSubsegments, loadSymbolIndex, loadSymbolAddresses, locateFunction, withSymbolMetadata } from "./symbolIndex.js";
 import { projectFixture } from "../testing/projectFixture.js";

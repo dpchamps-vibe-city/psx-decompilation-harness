@@ -21,7 +21,7 @@ impossibility, because from inside the function that is exactly what it looks
 like. Check all three before modelling a compiler pass:
 
 1. **The symbol boundary.** A symbol that is not a function cannot be
-   decompiled as one. Re-run `make split` on a stuck tiny function; a boundary
+   decompiled as one. Re-run `psx_split_project` on a stuck tiny function; a boundary
    that survives the merge detector is evidence rather than an assumption. See
    `notes/research/symbol-boundary-verification.md` for the decisive evidence
    list (no `jr $ra`; a conditional branch crossing the boundary in *either*

@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
 /**
  * reference.ts — serve one mechanism sheet, chosen by the pass that owns the
  * residual.
@@ -19,9 +20,9 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "./decompToolchain.js";
 
-const DIRECTORY = join(ROOT, "prompts/reference");
+
+const DIRECTORY = () => (join(HARNESS_ROOT, "prompts/reference"));
 
 /** Which sheet answers which residual owner, in the reversal's own vocabulary. */
 export const OWNER_TO_SHEET: Record<string, string> = {
@@ -42,12 +43,12 @@ export const OWNER_TO_SHEET: Record<string, string> = {
 };
 
 export function availableSheets(): string[] {
-  if (!existsSync(DIRECTORY)) return [];
-  return readdirSync(DIRECTORY).filter((name) => name.endsWith(".md")).map((name) => name.replace(/\.md$/, "")).sort();
+  if (!existsSync(DIRECTORY())) return [];
+  return readdirSync(DIRECTORY()).filter((name) => name.endsWith(".md")).map((name) => name.replace(/\.md$/, "")).sort();
 }
 
 function titleOf(sheet: string): string {
-  const first = readFileSync(join(DIRECTORY, `${sheet}.md`), "utf8").split("\n")[0] ?? "";
+  const first = readFileSync(join(DIRECTORY(), `${sheet}.md`), "utf8").split("\n")[0] ?? "";
   return first.replace(/^#\s*/, "");
 }
 
@@ -84,7 +85,7 @@ if (isCLI) {
       console.error(renderIndex());
       process.exitCode = 1;
     } else {
-      process.stdout.write(readFileSync(join(DIRECTORY, `${sheet}.md`), "utf8"));
+      process.stdout.write(readFileSync(join(DIRECTORY(), `${sheet}.md`), "utf8"));
     }
   }
 }

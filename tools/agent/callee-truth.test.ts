@@ -1,9 +1,10 @@
+import { ROOT, test } from "../testing/runtimeTestContext.js";
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "./decompToolchain.js";
+
+
 import {
   callResultUsed,
   callArgumentCounts,

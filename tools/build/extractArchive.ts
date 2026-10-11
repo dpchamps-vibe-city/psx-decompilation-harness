@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * extractArchive.ts — decode the overlay container and publish its manifest.
  *
@@ -29,7 +30,7 @@ import {
   statSync,
 } from "fs";
 import { join, relative } from "path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import { detectArchiveIndex, SECTOR_SIZE, type ArchiveIndexVerdict } from "../lib/archiveIndex.js";
 import {
   loadManifest,
@@ -72,7 +73,7 @@ function fail(message: string): never {
  */
 function discoverArchive(root: string): { index: string; data: string; members: number } | null {
   const files: Array<{ rel: string; size: number }> = [];
-  const stack = [join(ROOT, root)];
+  const stack = [join(projectRoot(), root)];
   while (stack.length > 0) {
     const dir = stack.pop()!;
     if (!existsSync(dir)) continue;
@@ -80,7 +81,7 @@ function discoverArchive(root: string): { index: string; data: string; members: 
       const path = join(dir, entry);
       const stats = statSync(path);
       if (stats.isDirectory()) stack.push(path);
-      else files.push({ rel: relative(ROOT, path), size: stats.size });
+      else files.push({ rel: relative(projectRoot(), path), size: stats.size });
     }
   }
 
@@ -91,7 +92,7 @@ function discoverArchive(root: string): { index: string; data: string; members: 
 
   const hits: Array<{ index: string; data: string; members: number }> = [];
   for (const index of indexes) {
-    const bytes = readFileSync(join(ROOT, index.rel));
+    const bytes = readFileSync(join(projectRoot(), index.rel));
     for (const data of datas) {
       const verdict = detectArchiveIndex(bytes, data.size);
       if (verdict.kind === "resolved") {
@@ -126,10 +127,10 @@ if (!indexRel || !dataRel) {
   if (!quiet) console.log(`Discovered archive: index ${indexRel}, data ${dataRel}`);
 }
 
-const indexPath = join(ROOT, indexRel);
-const dataPath = join(ROOT, dataRel);
-if (!existsSync(indexPath)) fail(`archive index not found: ${indexRel}`);
-if (!existsSync(dataPath)) fail(`archive data not found: ${dataRel}`);
+const indexPath = () => (join(projectRoot(), indexRel));
+const dataPath = () => (join(projectRoot(), dataRel));
+if (!existsSync(indexPath())) fail(`archive index not found: ${indexRel}`);
+if (!existsSync(dataPath())) fail(`archive data not found: ${dataRel}`);
 
 /** Hash a byte range of a file without holding it in memory. */
 function hashRange(path: string, start: number, end: number): string {
@@ -183,10 +184,10 @@ function reportVerdict(verdict: ArchiveIndexVerdict): void {
   }
 }
 
-const indexBytes = readFileSync(indexPath);
-const dataSize = statSync(dataPath).size;
+const indexBytes = () => (readFileSync(indexPath()));
+const dataSize = () => (statSync(dataPath()).size);
 
-const verdict = detectArchiveIndex(indexBytes, dataSize);
+const verdict = detectArchiveIndex(indexBytes(), dataSize());
 if (!quiet) reportVerdict(verdict);
 
 if (verdict.kind === "undetermined") {
@@ -203,7 +204,7 @@ const carried = new Map(previous?.members.map((m) => [m.index, m]) ?? []);
 const members: ManifestMember[] = verdict.members.map((m) => {
   const prior = carried.get(m.index);
   const size = m.end - m.start;
-  const tagWord = size >= 4 ? readRange(dataPath, m.start, m.start + 4).readUInt32LE(0) : 0;
+  const tagWord = size >= 4 ? readRange(dataPath(), m.start, m.start + 4).readUInt32LE(0) : 0;
   const entry: ManifestMember = {
     index: m.index,
     id: memberId(m.index),
@@ -213,7 +214,7 @@ const members: ManifestMember[] = verdict.members.map((m) => {
     sector: m.start / SECTOR_SIZE,
     sectorCount: size / SECTOR_SIZE,
     tag: `0x${tagWord.toString(16).padStart(8, "0")}`,
-    sha256: hashRange(dataPath, m.start, m.end),
+    sha256: hashRange(dataPath(), m.start, m.end),
   };
   if (prior?.classification) entry.classification = prior.classification;
   if (prior?.base) entry.base = prior.base;
@@ -226,9 +227,9 @@ const manifest: OverlayManifest = {
   archive: {
     indexPath: indexRel,
     dataPath: dataRel,
-    dataSize,
-    indexSha256: createHash("sha256").update(indexBytes).digest("hex"),
-    dataSha256: hashRange(dataPath, 0, dataSize),
+    dataSize: dataSize(),
+    indexSha256: createHash("sha256").update(indexBytes()).digest("hex"),
+    dataSha256: hashRange(dataPath(), 0, dataSize()),
     sectorSize: SECTOR_SIZE,
     format: verdict.format,
     formatDescription: verdict.description,
@@ -242,7 +243,7 @@ const manifest: OverlayManifest = {
 
 if (!quiet) {
   console.log();
-  console.log(`${members.length} members, ${dataSize} bytes total`);
+  console.log(`${members.length} members, ${dataSize()} bytes total`);
   const shown = members.filter((m) => extractAll || m.size <= 1 << 20);
   for (const m of shown) {
     console.log(
@@ -256,7 +257,7 @@ if (!quiet) {
 }
 
 if (extractCode) {
-  const outDir = join(ROOT, "extracted/overlays");
+  const outDir = join(projectRoot(), "extracted/overlays");
   mkdirSync(outDir, { recursive: true });
   const wanted = extractAll ? members : members.filter((m) => m.classification?.verdict === "code");
   if (wanted.length === 0) {
@@ -267,7 +268,7 @@ if (extractCode) {
   }
   for (const m of wanted) {
     const path = memberBinPath(m);
-    writeFileSync(path, readRange(dataPath, m.offset, m.end));
+    writeFileSync(path, readRange(dataPath(), m.offset, m.end));
   }
   console.log(`Extracted ${wanted.length} members to extracted/overlays/`);
 }
@@ -283,7 +284,7 @@ if (verify) {
     if (existsSync(path)) hash.update(readFileSync(path));
     else {
       source = "manifest ranges";
-      hash.update(readRange(dataPath, m.offset, m.end));
+      hash.update(readRange(dataPath(), m.offset, m.end));
     }
   }
   const concatenated = hash.digest("hex");

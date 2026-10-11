@@ -1,7 +1,9 @@
+import { HARNESS_ROOT } from "../../lib/runtimeContext.js";
+import { projectRoot } from "../../lib/runtimeContext.js";
 /** Ledger evidence for the source-induction reading, without another compile. */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { readLedger, type LedgerEntry } from "../experimentLedger.js";
 import { computeProvenance, staleReason, type Provenance } from "../provenance.js";
 import type { LoopTraceResult } from "../loopTrace.js";
@@ -35,7 +37,7 @@ export function sourceReadingMeasurements(
 /** Fresh trace/ledger joins only. Missing or obsolete traces leave the reading open. */
 export function alternativeLedgerEvidence(functionName: string, verdicts: PreheaderVerdict[], addressOf: AddressOfSymbol): void {
   if (!verdicts.some((verdict) => verdict.given?.length)) return;
-  const directory = join(ROOT, "build/loopTrace", functionName);
+  const directory = join(projectRoot(), "build/loopTrace", functionName);
   const paths: string[] = [];
   const visit = (path: string): void => {
     if (!existsSync(path)) return;
@@ -52,8 +54,8 @@ export function alternativeLedgerEvidence(functionName: string, verdicts: Prehea
       const traced = JSON.parse(readFileSync(path, "utf8")) as LoopTraceResult & { provenance?: Provenance };
       if (!traced.provenance || traced.functionName !== functionName) continue;
       const fresh = computeProvenance(functionName, {
-        files: [resolve(ROOT, traced.source), join(ROOT, "toolchain.json")], values: { dump: "-dL" },
-        implementation: [join(ROOT, "tools/agent/decompToolchain.ts"), join(ROOT, "tools/agent/loopTrace.ts"), join(ROOT, "tools/agent/loop-trace")],
+        files: [resolve(projectRoot(), traced.source), join(projectRoot(), "toolchain.json")], values: { dump: "-dL" },
+        implementation: [join(HARNESS_ROOT, "tools/agent/decompToolchain.ts"), join(HARNESS_ROOT, "tools/agent/loopTrace.ts"), join(HARNESS_ROOT, "tools/agent/loop-trace")],
       });
       if (staleReason(traced.provenance, fresh)) continue;
       const sourceHash = traced.provenance.files[traced.source];

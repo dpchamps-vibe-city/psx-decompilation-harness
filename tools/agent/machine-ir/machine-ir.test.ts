@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * The CFG/SSA/region spine.
  *
@@ -17,8 +18,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { decodeFunction } from "../matching-reconstruction/decode.js";
 import { assemble, type AsmLine } from "../matching-reconstruction/fixture-asm.js";
 import { buildCfg } from "./cfg.js";

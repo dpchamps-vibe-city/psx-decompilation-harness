@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * Solve for the local-alloc state that reproduces the target's assignment.
  *
@@ -9,7 +10,7 @@
  */
 
 import { join } from "node:path";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { normalizeFunctionName } from "./decompToolchain.js";
 import {
   ensureAllocatorCounterfactual,
   ensureLocalAllocationAnalysis,
@@ -75,7 +76,7 @@ try {
     ]),
   ].join("\n");
 
-  const output = join(ROOT, "build/localAllocationOracle", functionName, "state-solver");
+  const output = join(projectRoot(), "build/localAllocationOracle", functionName, "state-solver");
   writeStableJson(join(output, "analysis.json"), analysis);
   writeStableJson(join(output, "summary.json"), { function: functionName, text });
   process.stdout.write(`${text}\n`);

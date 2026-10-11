@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,9 +8,9 @@ import { compileObject } from "./pipeline.js";
 import { refreshBuildInputs } from "./buildInputs.js";
 import type { Container } from "../lib/container.js";
 
-test("npm build tracks headers, JSON flags, tools and new include members", t => {
+test("npm build tracks headers, .mk flags, tools and new include members", t => {
   const root = mkdtempSync(join(tmpdir(), "npm-dependencies-")); t.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const dir of ["src", "include", "bin"]) mkdirSync(join(root, dir));
+  for (const dir of ["src", "include", "bin", "configs"])  mkdirSync(join(root, dir));
   const compiler = join(root, "bin/compiler.mjs"), assembler = join(root, "bin/assembler.mjs");
   writeFileSync(compiler, `#!${process.execPath}\nimport fs from 'node:fs';const a=process.argv.slice(2),i=a.indexOf('-o');fs.appendFileSync('events','compile\\n');fs.writeFileSync(a[i+1],fs.readFileSync(a[i-1]));\n`, { mode: 0o755 });
   writeFileSync(assembler, `import fs from 'node:fs';const a=process.argv.slice(2);fs.writeFileSync(a[a.indexOf('-o')+1],fs.readFileSync(a.at(-1)));\n`);
@@ -28,7 +28,7 @@ test("npm build tracks headers, JSON flags, tools and new include members", t =>
   run(); assert.equal(count(), 1); assert.equal(statSync(join(root, "build/toolchain-inputs.stamp")).mtimeMs, time);
   writeFileSync(join(root, "include/value.h"), "#define VALUE 2\n"); run(); assert.equal(count(), 2);
   assert.match(readFileSync(join(root, "build/src/f.c.o"), "utf8"), /return 2/);
-  config.fileFlags.f = ["-O1"]; save(); run(); assert.equal(count(), 3);
+  writeFileSync(join(root, "configs/flag_overrides.mk"), "# Synthetic argv dependency witness\nCC1FLAGS_f := -O1\n"); run(); assert.equal(count(), 3);
   writeFileSync(compiler, readFileSync(compiler, "utf8") + "/* compiler changed */\n"); run(); assert.equal(count(), 4);
   writeFileSync(join(root, "include/new.h"), "/* new member */\n"); run(); assert.equal(count(), 5);
 });

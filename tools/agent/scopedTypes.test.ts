@@ -1,12 +1,14 @@
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, copyFileSync } from "node:fs";
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { filesUnder, scopedTypeCatalog } from "./scopedTypes.js";
 
 test("per-file type caching preserves conflicts, forwards, conditionals and private identities", (t) => {
   const root = mkdtempSync(join(tmpdir(), "scoped-type-cache-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  copyFileSync(join(HARNESS_ROOT, "toolchain.json"), join(root, "toolchain.json"));
   mkdirSync(join(root, "include")); mkdirSync(join(root, "src"));
   writeFileSync(join(root, "include/a.h"), "typedef int Public; struct Forward;\n#if __GNUC__ == 2\ntypedef short Conditional;\n#else\ntypedef int Conditional;\n#endif\n");
   writeFileSync(join(root, "include/b.h"), "typedef short Clash;\n"); writeFileSync(join(root, "include/c.h"), "typedef int Clash;\n");

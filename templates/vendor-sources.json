@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    { "name": "old-gcc", "url": "https://github.com/decompals/old-gcc.git", "revision": "c8c4b40f105375d575c030b28f23d6370d676268", "required": ["Makefile", "gcc-2.95.2-psx.Dockerfile"] },
+    { "name": "maspsx", "url": "https://github.com/mkst/maspsx.git", "revision": "0249ed2752a100eed95e8b4124f94af859398ca9", "required": ["maspsx.py", "maspsx/__init__.py"] },
+    { "name": "m2c", "url": "https://github.com/matt-kempster/m2c.git", "revision": "cd96c559d54ea8644177e89cee07e4f0b0ac4825", "required": ["m2c.py", "m2c/main.py"] },
+    { "name": "psx_psyq_signatures", "url": "https://github.com/lab313ru/psx_psyq_signatures.git", "revision": "e9e46e7e133ef275a79bfce650924f98edb086bc", "required": ["470/LIBGPU.LIB.json", "470/LIBCD.LIB.json"] }
+  ]
+}

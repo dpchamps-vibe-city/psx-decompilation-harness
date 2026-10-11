@@ -1,7 +1,9 @@
+import { projectRoot } from "../lib/runtimeContext.js";
+import { currentScriptArgs } from "../lib/installedScripts.js";
 /** Identification observations and configured tools are intentionally separate.
  * This command never edits toolchain.json or invents compiler/ABI flags. */
 import { execFileSync } from "node:child_process";
-import { configuredSdk, HARNESS_ROOT, loadToolchain } from "../lib/toolchain.js";
+import { configuredSdk, loadToolchain } from "../lib/toolchain.js";
 import { detectToolchain } from "../lib/toolchainProfile.js";
 import { loadLibraryProject } from "../lib/project.js";
 import { libraryInventory } from "../lib/libraryTargets.js";
@@ -14,7 +16,7 @@ if (args.includes("--help")) {
     for (const arg of args) if (!["--deep", "--json"].includes(arg)) throw new Error(`Unknown argument: ${arg}`);
     const project = loadLibraryProject();
     if (project && args.includes("--deep")) throw new Error("Deep SDK signature matching needs linked-image geometry; ELF/ar observations are available with --json");
-    if (args.includes("--deep")) execFileSync(process.execPath, ["--import", "tsx", "tools/diagnostics/matchSignatures.ts"], { cwd: HARNESS_ROOT, stdio: ["ignore", "ignore", "inherit"], timeout: 120_000 });
+    if (args.includes("--deep")) execFileSync(process.execPath, currentScriptArgs("tools/diagnostics/matchSignatures.ts"), { cwd: projectRoot(), stdio: ["ignore", "ignore", "inherit"], timeout: 120_000 });
     const config = loadToolchain();
     const report = {
       detected: project ? { status: "undetermined", compiler: "ELF metadata does not identify the historical compiler/flags", target: libraryInventory() }

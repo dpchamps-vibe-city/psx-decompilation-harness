@@ -1,3 +1,5 @@
+import { contextForProject, inRuntimeContext } from "../../lib/runtimeContext.js";
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * callee-signature.ts — The signature oracle (S2 of
  * plans/matching-reconstruction-call-signatures.md) and the
@@ -38,7 +40,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Container } from "../../lib/container.js";
-import { ROOT } from "../decompToolchain.js";
+
 import { definitionPrototype, sdkPrototypes, targetWitness, prototypesIn } from "../calleeTruth.js";
 import {
   children,
@@ -179,7 +181,7 @@ function parseHeaderSignature(
  * Full source types survive; unspecified/variadic contracts remain unknown. */
 function matchedDefinition(callee: string, container: Container): SignatureResult | null {
   if (!warmContextAllowed()) return null;
-  const matched = definitionPrototype(callee, container.projectRoot ?? ROOT);
+  const matched = definitionPrototype(callee, container.projectRoot ?? projectRoot());
   if (!matched) return null;
   if (matched.parameters === null || matched.variadic || !matched.returnType || !matched.paramTypes)
     return { unknown: `incomplete source contract for ${callee}: ${matched.signature}` };
@@ -269,7 +271,7 @@ function sdkPrototype(callee: string): SignatureResult | null {
  * the frame map contributes stack parameters. Marked `abi`, lower confidence.
  */
 function abiEvidence(callee: string): SignatureResult | null {
-  const scratch = join(ROOT, "build/calleeSignature");
+  const scratch = join(projectRoot(), "build/calleeSignature");
   mkdirSync(scratch, { recursive: true });
   const witness = targetWitness(callee, scratch);
   if (!witness?.arity) {
@@ -329,7 +331,7 @@ export interface InferredSignatureRange {
  * @param seq     The call effect's sequence number, for matching against
  *                consumedCallResults.
  */
-export function inferSignatureRange(
+function inferSignatureRangeImpl(
   name: string | null | undefined,
   address: number | undefined,
   container: Container,
@@ -347,7 +349,7 @@ export function inferSignatureRange(
   /* 1. Callee's own machine code via targetWitness. */
   if (name) {
     try {
-      const scratch = join(ROOT, "build/inferredSignatureRange");
+      const scratch = join(projectRoot(), "build/inferredSignatureRange");
       mkdirSync(scratch, { recursive: true });
       const witness = targetWitness(name, scratch);
       if (witness?.arity) {
@@ -427,7 +429,7 @@ export function inferSignatureRange(
  * the process lifetime. */
 const signatureCache = new Map<string, SignatureResult>();
 
-export function resolveSignature(
+function resolveSignatureImpl(
   name: string | null | undefined,
   address: number | undefined,
   container: Container,
@@ -441,7 +443,7 @@ export function resolveSignature(
   /* The overlay's revision is part of the key: publishing a callee's recovered
    * C changes what this function answers, and a cache that outlived the
    * publication would keep serving the ABI bound it replaced. */
-  const cacheKey = `${contextMode()}|${overlayRevision()}|${container.projectRoot ?? ROOT}|${container.id}|${name}|${address ?? ""}`;
+  const cacheKey = `${contextMode()}|${overlayRevision()}|${container.projectRoot ?? projectRoot()}|${container.id}|${name}|${address ?? ""}`;
   const cached = signatureCache.get(cacheKey);
   if (cached) return cached;
   const result = computeSignature(name, address, container);
@@ -464,3 +466,6 @@ function computeSignature(
   if (abi) return abi;
   return { unknown: `no signature evidence for ${name} — not matched, not an SDK entry point, and its target code gives none` };
 }
+export const resolveSignature: typeof resolveSignatureImpl = (...args) => inRuntimeContext(contextForProject(args[2].projectRoot ?? projectRoot()), () => resolveSignatureImpl(...args));
+
+export const inferSignatureRange: typeof inferSignatureRangeImpl = (...args) => inRuntimeContext(contextForProject(args[2].projectRoot ?? projectRoot()), () => inferSignatureRangeImpl(...args));

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { extractSession, classifyCall } from "./sessionBacktest.js";
 const entry = (id: string, parentId: string | null, message: unknown) => JSON.stringify({ type: "message", id, parentId, timestamp: `2026-01-01T00:00:00Z`, message });

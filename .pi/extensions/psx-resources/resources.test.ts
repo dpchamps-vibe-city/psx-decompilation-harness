@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { cpSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
+import { test } from "../../../tools/testing/runtimeTestContext.js";
+import { readFileSync, readdirSync } from "node:fs";
+import { prepareParserProject } from "../../../tools/agent/resource-extraction/parser-builder.ts";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -30,13 +31,10 @@ test("model reports are bounded and retain their full-report pointer", () => {
   assert.ok(boundedReport(Array.from({ length: 3000 }, () => "line")).split("\n").length < 1000);
 });
 function project(full = false) {
-  const f = fixture(); f.put("AGENTS.md", "fixture project"); f.put("tools/agent/marker", "root"); f.put("extracted/resource", tim()); f.put("package.json", '{"type":"module"}\n');
-  if (full) {
-    for (const file of ["resource-extraction", "machine-ir", ...TOOL_SPECS.map(s => s.script)]) cpSync(join(REPOSITORY, "tools/agent", file), join(f.root, "tools/agent", file), { recursive: true });
-    for (const file of ["decode.ts", "types.ts", "failure-category.ts"]) f.put(`tools/agent/matching-reconstruction/${file}`, readFileSync(join(REPOSITORY, "tools/agent/matching-reconstruction", file)));
-    f.put("tools/lib/resourceLocks.ts", readFileSync(join(REPOSITORY, "tools/lib/resourceLocks.ts")));
-    symlinkSync(join(REPOSITORY, "node_modules"), join(f.root, "node_modules"), "dir");
-  }
+  const f = fixture();
+  f.put("extracted/resource", tim()); f.put("package.json", '{"type":"module"}\n');
+  f.put("toolchain.json", readFileSync(join(REPOSITORY, "templates/project/toolchain.json")));
+  if (full) prepareParserProject(f.root);
   return f;
 }
 function host(root: string, role?: (h: any) => Promise<void>) {
@@ -85,14 +83,14 @@ test("one explicit parser work item loads one skill; tested plugin hot-loads thr
       await assert.rejects(h.permitted("bash", {}), /no shell/);
       await assert.rejects(h.permitted("write", { path: "src/anything.c" }), /writes only/);
       await assert.rejects(h.permitted("edit", { path: "../escape.ts" }), /escapes root/);
-      const base = "tools/agent/resource-extraction/", plugins = readFileSync(join(f.root, base, "parser-plugins.ts"), "utf8");
-      f.put(base + "parser-plugins.ts", 'import { FIXTURE } from "./parsers/fixture.ts";\n' + plugins.replace("export const EXTRA_PARSERS: AssetParser[] = [", "export const EXTRA_PARSERS: AssetParser[] = [FIXTURE, "));
-      f.put(base + "parsers/fixture.ts", `import type { AssetParser } from "../registry.ts";
+      const base = "tools/resource-parsers/";
+      f.put(base + "parser-plugins.ts", 'import type { AssetParser } from "psx-decompilation-harness/resource-parsers";\nimport { FIXTURE } from "./fixture.ts";\nexport const EXTRA_PARSERS: AssetParser[] = [FIXTURE];\n');
+      f.put(base + "fixture.ts", `import type { AssetParser } from "psx-decompilation-harness/resource-parsers";
 export const FIXTURE: AssetParser = { id: "fixture-v1", format: "Fixture", version: 1,
  probe: (b,o) => o+5<=b.length && b.toString("ascii",o,o+4)==="FTR1",
  parse: (b,o) => { if (o+5>b.length || b.toString("ascii",o,o+4)!=="FTR1" || o+5+b[o+4]!>b.length) throw new Error("invalid"); return {length:5+b[o+4]!,metadata:{}}; },
  variants: () => [{}], decode: (b,_v,m) => { if(b.length>m)throw new Error("budget"); return [{kind:"raw",extension:"bin",stage:"export",bytes:b,metadata:{}}]; } };\n`);
-      f.put(base + "parsers/fixture.test.ts", `import test from "node:test"; import assert from "node:assert/strict"; import { FIXTURE } from "./fixture.ts";
+      f.put(base + "fixture.test.ts", `import { test } from "node:test"; import assert from "node:assert/strict"; import { FIXTURE } from "./fixture.ts";
 test("layout",()=>assert.equal(FIXTURE.parse(Buffer.from([70,84,82,49,2,0,0]),0).length,7));
 test("truncated",()=>assert.throws(()=>FIXTURE.parse(Buffer.from([70,84,82,49,2]),0)));
 test("budget",()=>assert.throws(()=>FIXTURE.decode(Buffer.alloc(7),{},1)));\n`);
@@ -111,9 +109,9 @@ test("budget",()=>assert.throws(()=>FIXTURE.decode(Buffer.alloc(7),{},1)));\n`);
 test("cancelled or unfinished parser work retains drafts and restores tools without auto-retry", async () => {
   const f = project(true);
   try {
-    const h = host(f.root, async h => { f.put("tools/agent/resource-extraction/parsers/draft.ts", "export const unfinished = 1;\n"); await h.emit("input", { source: "interactive", text: "stop" }); });
+    const h = host(f.root, async h => { f.put("tools/resource-parsers/draft.ts", "export const unfinished = 1;\n"); await h.emit("input", { source: "interactive", text: "stop" }); });
     await h.commands.get("build-resource-parser").handler("Investigate an unknown format", h.ctx);
-    assert.equal(h.prompts.length, 1); assert.match(readFileSync(join(f.root, "tools/agent/resource-extraction/parsers/draft.ts"), "utf8"), /unfinished/);
+    assert.equal(h.prompts.length, 1); assert.match(readFileSync(join(f.root, "tools/resource-parsers/draft.ts"), "utf8"), /unfinished/);
     assert.deepEqual(h.active(), ["read", "bash", "sentinel"]);
   } finally { f.cleanup(); }
 });

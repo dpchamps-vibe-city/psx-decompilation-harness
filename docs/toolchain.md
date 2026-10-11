@@ -1,8 +1,10 @@
 # Toolchain and npm tasks
 
-Use this repository as a **cloned/exported project template**, with target assets,
-configuration and harness tools in the same tree. It is not an installed CLI.
-The root Makefile has been removed; the original remains in the BTN example.
+Install with `pi install --local` and explicitly run
+`/skill:psx-bootstrap-project [exe|library]`, or use a cloned/exported template.
+[Bootstrap](bootstrap.md) creates project-owned configuration and headers only.
+The installed implementation receives explicit package/project/runtime context;
+installation alone writes no scaffold. There is no operational Make dependency.
 
 ## Configuration
 
@@ -12,7 +14,9 @@ preparation, compiler analysis, SDK integration and Pi verification share it.
 
 - `tools`: one executable/script path per entry, **not a shell command**.
   Bare executable names use `PATH`; paths containing `/` are relative to the
-  repository root (absolute paths also work). Spaces in paths remain one argv
+  project root (absolute paths also work). Owned paths explicitly select
+  `harness`, `project`, `runtime` or `external`; no resolver tries alternate roots.
+  Spaces in paths remain one argv
   item. For wrappers, configure an executable wrapper file, not `node file.js`.
 - `compiler`: candidate family/version, optional pinned source directory, and
   explicitly supported analysis capabilities. The production compile protocol
@@ -30,14 +34,17 @@ preparation, compiler analysis, SDK integration and Pi verification share it.
 - `containerProfiles`: explicitly select a profile by exact owner id, then
   kind (`exe`, `overlay` or `library`). Unselected owners inherit base flags. There is
   **no automatic `-G8` → `-G0` swap**. Measure each container's ABI first.
-- `fileFlags`: extra cc1 arguments keyed by source/function stem (member ID for
-  library TUs). These still
-  require project evidence and policy allowlisting. Workers cannot edit the
-  toolchain to manufacture a match; configuration changes require human review.
-- `sdk`: selected version, original LIB directory, converted object directory,
-  and version-specific signature directory. Selection is not identification.
-  The retained SDK/header/object assets are 4.7; another release requires its
-  own coherent inputs. `tools.psyq2elf` optionally supplies the converter.
+- Per-TU overrides live only in `configs/flag_overrides.mk` as
+  `CC1FLAGS_<stem> := <extra cc1 flags>`, directly preceded by an evidence
+  comment and accompanied by the matching `flag-override` allowlist entry in
+  `.pi/autoloop.json`. The shared strict reader rejects unsupported non-comment
+  lines with file/line diagnostics. Effective argv is container/profile base
+  followed by the applicable override. JSON `fileFlags` is refused.
+- `sdk`: explicit version, originals, converted directory, signatures and
+  optional headers. Fresh inputs live in `library-input/psyq/{LIB,INCLUDE}`;
+  converted objects live in trackable `lib/`. No retained package SDK fallback
+  exists. Supply `tools.psyq2elf` for supported LIB/LNK conversion; both colliding
+  and non-colliding members retain provenance and refuse differing outputs.
 
 The shipped GCC 2.95.2 / ASPSX 2.80 / `-O2 -G8` choices are a **supported starting
 candidate**, not facts about a new target. Owners inherit it until
@@ -51,14 +58,14 @@ human evidence references live in `configs/project-info.json`. Optional root
 header roles and member profiles; see [Library targets](library-targets.md).
 Target adapters expose the same source/assembly/flags/verification contract to
 matching tools and skills. Absent manifests or `linked-image` selection use the
-EXE/overlay layout. Root paths and the one-EXE/paired-archive container model are
-still conventions; see the generalization checklist.
+EXE/overlay layout. The one-EXE/paired-archive container model remains a convention; see the generalization checklist.
 
 ## Commands
 
 ```sh
 npm ci
 npm run setup
+npm run profile -- --write                 # once target metadata is available
 npm run identify -- --json                 # evidence vs configured choices
 npm run disassemble                       # main EXE, two disassembly passes
 npm run disassemble -- --archives          # opt into paired-index archive adapter
@@ -78,7 +85,8 @@ npm run wipe -- --container ovl_1
 `build`, `check`, `split`, `disassemble`, `clean` and `wipe` also accept `--all`.
 The `*-all` tasks select all containers; `check-exe` names the executable check.
 `config-check` needs Git and guards tracked files only; review new outputs too.
-`clean --container` is scoped; plain `clean` deletes build outputs. `wipe`
+`clean --container` is scoped; plain `clean` removes known derived build outputs
+and preserves durable ledger/preparation/evidence records. `wipe`
 removes generated configuration, never original target assets or recovered C.
 Do not run destructive commands merely to identify an unfamiliar project.
 
@@ -101,6 +109,13 @@ scoped member checks. Image-only SDK integration/config-check/wipe tasks are not
 library adapters. Plain `clean` removes build outputs, not original inputs/C.
 The linked-image incremental/link behavior described above remains unchanged.
 
+`npm run bootstrap -- --mode exe|library --root DIRECTORY` previews a source
+scaffold; add `--write` to apply. It preserves input/configuration files and
+refuses implementation/task conflicts. In an installed package, use the Pi
+bootstrap skill/tool or the absolute script path documented in
+[bootstrap.md](bootstrap.md), not commands run in the package checkout.
+Bootstrap prints a supply checklist before any target is present.
+
 ## Fresh clones and exports
 
 A recursive clone supplies pinned vendors:
@@ -112,11 +127,11 @@ npm ci
 npm run setup
 ```
 
-`setup` initializes Git submodules and prepares patched m2c. It does **not** build
-or download compiler binaries, install system tools, or obtain proprietary game
-assets. Follow `tools/vendor/old-gcc/README.md` to provision the configured cc1;
-install/configure Python, cross-binutils, splat and spimdisasm yourself. The local
-ignored compiler build is not a portable distribution.
+`setup` prepares pinned public dependencies and patched m2c in the runtime cache,
+without initializing consumer submodules. The supported default compiler is
+provisioned on demand through the package Docker recipe, never copied from local
+builds. Configure custom compiler executables and external Python/cross-binutils/
+splat/spimdisasm capabilities explicitly. No proprietary input is downloaded.
 
 A degit/archive export may omit submodules. Either populate the exact revisions
 recorded in `.gitmodules`/`docs/migration.md`, or use a recursive clone to obtain

@@ -1,4 +1,6 @@
 #!/usr/bin/env npx tsx
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * loopTrace.ts — observe GCC 2.95's loop optimizer.
  *
@@ -29,13 +31,7 @@
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import {
-  ROOT,
-  compileSource,
-  normalizeFunctionName,
-  preprocessOnly,
-  resolveSource,
-} from "./decompToolchain.js";
+import { compileSource, normalizeFunctionName, preprocessOnly, resolveSource } from "./decompToolchain.js";
 import {
   ensureArtifact,
   projectPath,
@@ -125,7 +121,7 @@ function resolveSymbols(trace: LoopTrace, directory: string, stem: string): void
 }
 
 function traceDirectory(functionName: string): string {
-  return join(ROOT, "build/loopTrace", functionName);
+  return join(projectRoot(), "build/loopTrace", functionName);
 }
 
 /**
@@ -166,12 +162,12 @@ export function loopTrace(
     functionName,
     costHint: "one cc1 compile",
     inputs: {
-      files: [source, join(ROOT, "toolchain.json")],
+      files: [source, join(projectRoot(), "toolchain.json")],
       values: { dump: "-dL", contextHash: sha256(preprocessed) },
       implementation: [
-        join(ROOT, "tools/agent/decompToolchain.ts"),
-        join(ROOT, "tools/agent/loopTrace.ts"),
-        join(ROOT, "tools/agent/loop-trace"),
+        join(HARNESS_ROOT, "tools/agent/decompToolchain.ts"),
+        join(HARNESS_ROOT, "tools/agent/loopTrace.ts"),
+        join(HARNESS_ROOT, "tools/agent/loop-trace"),
       ],
     },
     produce: (provenance) => {
@@ -246,12 +242,12 @@ export function lineMapFor(functionName: string, sourceOverride?: string): LineM
     functionName,
     costHint: "two cc1 compiles",
     inputs: {
-      files: [source, join(ROOT, "toolchain.json")],
+      files: [source, join(projectRoot(), "toolchain.json")],
       values: { debug: "-g", contextHash: sha256(preprocessed) },
       implementation: [
-        join(ROOT, "tools/agent/decompToolchain.ts"),
-        join(ROOT, "tools/agent/loopTrace.ts"),
-        join(ROOT, "tools/agent/loop-trace"),
+        join(HARNESS_ROOT, "tools/agent/decompToolchain.ts"),
+        join(HARNESS_ROOT, "tools/agent/loopTrace.ts"),
+        join(HARNESS_ROOT, "tools/agent/loop-trace"),
       ],
     },
     produce: (provenance) => {
@@ -296,7 +292,7 @@ export function cachedLoopTrace(functionName: string): { trace: LoopTrace; sourc
     if (!stored?.trace?.passes || typeof stored.source !== "string") return undefined;
     const recorded = stored.provenance?.files?.[stored.source];
     if (typeof recorded !== "string") return undefined;
-    const absolute = isAbsolute(stored.source) ? stored.source : join(ROOT, stored.source);
+    const absolute = isAbsolute(stored.source) ? stored.source : join(projectRoot(), stored.source);
     if (!existsSync(absolute) || sha256(readFileSync(absolute, "utf8")) !== recorded) return undefined;
     return { trace: stored.trace, source: stored.source };
   } catch {
@@ -322,7 +318,7 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ functions: names, solution }, null, 2));
       return;
     }
-    console.log(renderThreshold(solution, { ledgerFunctions: names, ledgerPath: projectPath(LEDGER_PATH) }).join("\n"));
+    console.log(renderThreshold(solution, { ledgerFunctions: names, ledgerPath: projectPath(LEDGER_PATH()) }).join("\n"));
     return;
   }
 
@@ -347,7 +343,7 @@ async function main(): Promise<void> {
     functionName,
     /* `projectPath` leaves an out-of-tree source absolute, so it must not be
        re-joined against ROOT. */
-    sourceHash: hashSource(readFileSync(isAbsolute(result.source) ? result.source : join(ROOT, result.source), "utf8")),
+    sourceHash: hashSource(readFileSync(isAbsolute(result.source) ? result.source : join(projectRoot(), result.source), "utf8")),
     constraints: result.constraints,
     toolchainHash: toolchainHash(),
   });
@@ -382,7 +378,7 @@ async function main(): Promise<void> {
   console.log(renderTrace(result.trace, solution, {
     source: result.source,
     ledgerFunctions: recorded.functions,
-    ledgerPath: projectPath(LEDGER_PATH),
+    ledgerPath: projectPath(LEDGER_PATH()),
     rejected: result.rejected,
   }));
 

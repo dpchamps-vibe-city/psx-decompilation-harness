@@ -3,8 +3,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { HARNESS_ROOT } from "./runtimeContext.js";
+import { installedScriptArgs } from "./installedScripts.js";
+import { test } from "../testing/runtimeTestContext.js";
 import { Store } from "../agent/resource-extraction/storage.ts";
 import { recoverAbandonedResourceLocks } from "./resourceLocks.ts";
 
@@ -60,11 +61,12 @@ test("the real deterministic CLI recovers an abandoned publication lock without 
   const f = fixture();
   try {
     mkdirSync(join(f.root, "extracted"));
+    writeFileSync(join(f.root, "toolchain.json"), readFileSync(join(HARNESS_ROOT, "templates/project/toolchain.json")));
     const bytes = Buffer.alloc(22);
     bytes.writeUInt32LE(16); bytes.writeUInt32LE(2, 4); bytes.writeUInt32LE(14, 8); bytes.writeUInt16LE(1, 16); bytes.writeUInt16LE(1, 18);
     writeFileSync(join(f.root, "extracted/resource"), bytes);
     f.store.atomic("locks/extraction.lock", `${f.exitedPid}\n`);
-    const command = spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("../agent/resourceExtract.ts", import.meta.url))], { cwd: f.root, encoding: "utf8", env: { ...process.env, NODE_TEST_CONTEXT: "" } });
+    const command = spawnSync(process.execPath, installedScriptArgs("tools/agent/resourceExtract.ts", [], f.root), { cwd: f.root, encoding: "utf8", env: { ...process.env, NODE_TEST_CONTEXT: "" } });
     assert.equal(command.status, 0, command.stderr); assert.match(command.stdout, /"outcome": "validated"/);
     assert.equal(existsSync(f.store.path("locks/extraction.lock")), false);
     assert.deepEqual(readFileSync(join(f.root, "extracted/resource")), bytes);

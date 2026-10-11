@@ -1,6 +1,8 @@
+import { HARNESS_ROOT } from "../../lib/runtimeContext.js";
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { sha256, sha256File, stableJson, writeStableJson } from "../variant-lab/artifacts.js";
 import { C_FRONTEND_IDENTITY } from "./tree-sitter-c.js";
 import type { CausalClosure, ResidualDomain, ResidualGrammar, SemanticGraph, BaselineBundle } from "./types.js";
@@ -11,9 +13,9 @@ import type { CausalClosure, ResidualDomain, ResidualGrammar, SemanticGraph, Bas
  * change to either changes what a run means, so it must change the run id.
  */
 export function residualImplementationHash(): string {
-  const directory = join(ROOT, "tools/agent/residual-source-search");
+  const directory = join(HARNESS_ROOT, "tools/agent/residual-source-search");
   const files = [
-    join(ROOT, "tools/agent/searchResidualSourceSpace.ts"),
+    join(HARNESS_ROOT, "tools/agent/searchResidualSourceSpace.ts"),
     ...readdirSync(directory)
       .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
       .sort()
@@ -21,12 +23,12 @@ export function residualImplementationHash(): string {
   ];
   const sources = files.map((path) => {
     try {
-      return `${relative(ROOT, path)}:${sha256File(path)}`;
+      return `${relative(projectRoot(), path)}:${sha256File(path)}`;
     } catch {
-      return `${relative(ROOT, path)}:absent`;
+      return `${relative(projectRoot(), path)}:absent`;
     }
   });
-  return sha256([...sources, `frontend:${stableJson(C_FRONTEND_IDENTITY)}`].join("\n"));
+  return sha256([...sources, `frontend:${stableJson(C_FRONTEND_IDENTITY())}`].join("\n"));
 }
 
 /** Deterministic run id from pre-derivation inputs only, so resume finds the same directory. */
@@ -57,7 +59,7 @@ export function writeDerivationArtifacts(runRoot: string, artifacts: {
   /** Absent when the grammar was already too large to serialize a domain for. */
   domain?: ResidualDomain;
 }): { bundleHash: string; grammarHash: string } {
-  writeStableJson(join(runRoot, "frontend.json"), C_FRONTEND_IDENTITY);
+  writeStableJson(join(runRoot, "frontend.json"), C_FRONTEND_IDENTITY());
   writeStableJson(join(runRoot, "baseline.json"), artifacts.bundle);
   writeStableJson(join(runRoot, "semantic-graph.json"), artifacts.graph);
   writeStableJson(join(runRoot, "causal-closure.json"), artifacts.closure);

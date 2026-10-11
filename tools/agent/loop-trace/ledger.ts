@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * ledger.ts — the running record of what the loop threshold can still be.
  *
@@ -16,11 +17,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { sha256, writeStableJson } from "../provenance.js";
 import type { Constraint } from "./threshold.js";
 
-export const LEDGER_PATH = join(ROOT, "build/loopTrace/threshold.json");
+export const LEDGER_PATH = () => (join(projectRoot(), "build/loopTrace/threshold.json"));
 const SCHEMA_VERSION = 1;
 
 interface LedgerDocument {
@@ -33,7 +34,7 @@ function empty(toolchainHash: string): LedgerDocument {
   return { schemaVersion: SCHEMA_VERSION, toolchainHash, functions: {} };
 }
 
-export function readThresholdLedger(toolchainHash: string, path = LEDGER_PATH): LedgerDocument {
+export function readThresholdLedger(toolchainHash: string, path = LEDGER_PATH()): LedgerDocument {
   if (!existsSync(path)) return empty(toolchainHash);
   try {
     const document = JSON.parse(readFileSync(path, "utf8")) as LedgerDocument;
@@ -55,7 +56,7 @@ export function recordConstraints(
     path?: string;
   },
 ): { all: Constraint[]; functions: string[] } {
-  const path = options.path ?? LEDGER_PATH;
+  const path = options.path ?? LEDGER_PATH();
   const document = readThresholdLedger(options.toolchainHash, path);
   document.functions[options.functionName] = {
     sourceHash: options.sourceHash,

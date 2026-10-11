@@ -5,8 +5,8 @@
    pulled in the SDK's type header first, which every translation unit that
    reaches it through an SDK header already has. Naming that dependency here
    keeps this header usable from a translation unit that includes nothing else. */
-#include "psyq/stddef.h"
-#include "psyq/libetc.h"
+#include <stddef.h>
+#include <libetc.h>
 
 /*
  * Scratch-pad stack switch — reconstruction of a studio macro left in the

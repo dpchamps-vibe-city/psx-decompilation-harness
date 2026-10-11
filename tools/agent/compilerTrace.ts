@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * compilerTrace.ts — expose GCC 2.95 RTL/allocation/scheduling decisions.
  *
@@ -22,15 +23,7 @@ import {
   writeFileSync,
 } from "fs";
 import { basename, isAbsolute, join, relative } from "path";
-import {
-  ROOT,
-  assembleCompilerOutput,
-  assembleTarget,
-  compileSource,
-  disassembleObject,
-  normalizeFunctionName,
-  resolveSource,
-} from "./decompToolchain.js";
+import { assembleCompilerOutput, assembleTarget, compileSource, disassembleObject, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { requireCompilerCapability } from "../lib/toolchain.js";
 import { detectAllocationFeedback } from "./compiler-trace/hard-register-hazards.js";
 import { analyzeAllocation, applyAllocation } from "./compiler-trace/local-allocation.js";
@@ -104,7 +97,7 @@ function summarizeStages(
     const stageMetadata = metadata.get(stageSuffix(file));
     return {
       suffix: stageSuffix(file),
-      file: relative(ROOT, path),
+      file: relative(projectRoot(), path),
       bytes: Buffer.byteLength(content),
       instructionCount: countInstructions(content),
       noteCount: stageMetadata?.notes.length || 0,
@@ -171,7 +164,7 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
   const outputDirectory = options.outputDirectory;
   mkdirSync(outputDirectory, { recursive: true });
   const files = dumpFiles(options.dumpDirectory, funcName);
-  if (files.length === 0) throw new Error(`no preserved GCC dump files found in ${relative(ROOT, options.dumpDirectory)}`);
+  if (files.length === 0) throw new Error(`no preserved GCC dump files found in ${relative(projectRoot(), options.dumpDirectory)}`);
   const availableStages = new Set(files.map(stageSuffix));
   for (const required of ["sched", "lreg", "greg", "sched2"]) {
     if (!availableStages.has(required)) throw new Error(`preserved compiler trace is missing .${required}`);
@@ -266,10 +259,10 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
   const report: CompilerTraceReport = {
     schemaVersion: 2,
     function: funcName,
-    source: relative(ROOT, source),
-    outputDirectory: relative(ROOT, outputDirectory),
-    assembly: relative(ROOT, options.assemblyPath),
-    reportArtifact: relative(ROOT, reportPath),
+    source: relative(projectRoot(), source),
+    outputDirectory: relative(projectRoot(), outputDirectory),
+    assembly: relative(projectRoot(), options.assemblyPath),
+    reportArtifact: relative(projectRoot(), reportPath),
     flags: options.flags,
     stages: summarizeStages(options.dumpDirectory, files, parsed.metadata),
     stageMetadata: [...parsed.metadata.values()],
@@ -293,8 +286,8 @@ export function buildTraceReport(
   requireCompilerCapability("gcc-rtl-dumps");
   const source = resolveSource(funcName, requestedSource);
   const outputDirectory = requestedOutputDirectory
-    ? (isAbsolute(requestedOutputDirectory) ? requestedOutputDirectory : join(ROOT, requestedOutputDirectory))
-    : join(ROOT, "build/compilerTrace", funcName);
+    ? (isAbsolute(requestedOutputDirectory) ? requestedOutputDirectory : join(projectRoot(), requestedOutputDirectory))
+    : join(projectRoot(), "build/compilerTrace", funcName);
   rmSync(outputDirectory, { recursive: true, force: true });
   /* -dp annotates the first assembly line of each RTL instruction with its UID
    * and pattern name, which is the only sound source for where one RTL

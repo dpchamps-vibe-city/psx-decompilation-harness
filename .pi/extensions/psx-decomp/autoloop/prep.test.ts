@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { PREP_TOOLS, prepHandoffMessage, prepMessage, prepStatus, prepSystemPrompt } from "./prep.ts";
 import { escalationMessage } from "./prompts.ts";
 import type { PreparationPacket } from "../../../../tools/agent/campaign/packet.ts";

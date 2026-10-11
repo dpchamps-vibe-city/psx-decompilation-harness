@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { sha256File } from "./artifacts.js";
 import { analyzeCSource, matchingConstructs, walkActiveC } from "../cSourceGuard.js";
 import { parseC } from "../residual-source-search/tree-sitter-c.js";
@@ -76,7 +77,7 @@ export function validateManifest(value: unknown, functionName?: string): Variant
 }
 
 export function loadManifest(path: string, functionName: string): VariantManifest {
-  const absolute = isAbsolute(path) ? path : join(ROOT, path);
+  const absolute = isAbsolute(path) ? path : join(projectRoot(), path);
   if (!existsSync(absolute)) throw new Error(`variant manifest not found: ${path}`);
   try {
     return validateManifest(JSON.parse(readFileSync(absolute, "utf8")), functionName);
@@ -239,7 +240,7 @@ export function resolveHypotheses(hypotheses: VariantHypothesis[]): ResolvedVari
   const read = hypotheses.map((hypothesis) => {
     const absoluteSourcePath = isAbsolute(hypothesis.sourcePath)
       ? hypothesis.sourcePath
-      : join(ROOT, hypothesis.sourcePath);
+      : join(projectRoot(), hypothesis.sourcePath);
     if (!existsSync(absoluteSourcePath)) throw new Error(`variant source not found: ${hypothesis.sourcePath}`);
     if (!hypothesis.sourcePath.endsWith(".c")) throw new Error(`variant source must be a .c file: ${hypothesis.sourcePath}`);
     return { hypothesis, absoluteSourcePath, source: readFileSync(absoluteSourcePath, "utf8") };

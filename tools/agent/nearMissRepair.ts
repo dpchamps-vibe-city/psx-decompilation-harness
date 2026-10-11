@@ -31,7 +31,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "./decompToolchain.js";
+
 import { requireFunctionLocation } from "../lib/symbolIndex.js";
 import { buildMachineIr, type MachineIrReport } from "./machine-ir/index.js";
 import { decodeFunctionWords } from "./family-transfer/signature.js";
@@ -310,4 +310,4 @@ function main(): void {
 
 if (process.argv[1]?.endsWith("nearMissRepair.ts")) main();
 
-export { existsSync, join, ROOT };
+export { existsSync, join };

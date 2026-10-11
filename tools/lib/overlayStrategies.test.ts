@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import {
   LAYOUT_STRATEGIES,
   PSYQ_SECTION_ORDER,

@@ -1,3 +1,5 @@
+import { compilationIdentity, stableHash, semanticPath } from "../lib/cacheIdentity.js";
+import { projectRoot, HARNESS_ROOT } from "../lib/runtimeContext.js";
 /**
  * provenance.ts — every artifact carries the identity of what produced it.
  *
@@ -31,7 +33,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { ROOT, configuredToolchainIdentity } from "./decompToolchain.js";
+import { configuredToolchainIdentity } from "./decompToolchain.js";
 
 /* ---- primitives ---------------------------------------------------------
  * These lived in variant-lab/artifacts.ts, which re-exports them so existing
@@ -69,7 +71,7 @@ export function writeStableJson(path: string, value: unknown): void {
 
 export function projectPath(path: string): string {
   if (!isAbsolute(path)) return path.replace(/\\/g, "/");
-  const related = relative(ROOT, path).replace(/\\/g, "/");
+  const related = relative(projectRoot(), path).replace(/\\/g, "/");
   return related.startsWith("../") ? path : related;
 }
 
@@ -110,7 +112,7 @@ export interface Provenance {
 
 /** Config and executable edits invalidate long-running analysis sessions too. */
 export function toolchainHash(): string {
-  return sha256(stableJson(configuredToolchainIdentity()));
+  return stableHash(compilationIdentity());
 }
 
 /**
@@ -123,8 +125,8 @@ export function toolchainHash(): string {
 export function implementationHash(paths: string[]): string {
   const files: string[] = [];
   const visit = (path: string): void => {
-    const absolute = isAbsolute(path) ? path : join(ROOT, path);
-    if (!existsSync(absolute)) return;
+    const absolute = isAbsolute(path) ? path : join(HARNESS_ROOT, path);
+    if (!existsSync(absolute)) throw new Error(`Missing producing component: ${absolute}`);
     if (!statSync(absolute).isDirectory()) {
       files.push(absolute);
       return;
@@ -137,14 +139,14 @@ export function implementationHash(paths: string[]): string {
   };
   for (const path of paths) visit(path);
   files.sort();
-  return sha256(files.map((path) => `${projectPath(path)}:${sha256File(path)}`).join("\n"));
+  return sha256(files.map((path) => `${semanticPath(path)}:${sha256File(path)}`).join("\n"));
 }
 
 /** Compute the provenance stamp for an artifact about to be produced. */
 export function computeProvenance(functionName: string, inputs: ProvenanceInputs): Provenance {
   const files: Record<string, string> = {};
   for (const path of (inputs.files ?? []).slice().sort()) {
-    const absolute = isAbsolute(path) ? path : join(ROOT, path);
+    const absolute = isAbsolute(path) ? path : join(projectRoot(), path);
     files[projectPath(absolute)] = existsSync(absolute) ? sha256File(absolute) : "absent";
   }
 

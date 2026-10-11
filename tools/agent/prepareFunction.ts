@@ -1,3 +1,6 @@
+import { COMPONENT_CONTRACTS, compilationIdentity, stableHash } from "../lib/cacheIdentity.js";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot, inRuntimeContext, contextForProject } from "../lib/runtimeContext.js";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { configuredTool, configuredFlags, executablePath, toolchainExecutables } from "../lib/toolchain.js";
@@ -11,9 +14,7 @@ import { Timings, digest, snapshot, readCache, writeCache } from "../lib/content
 import { cachedPreprocess, withPreprocessorMetadata } from "./preprocessedCache.js";
 import { containerTargetPath, loadContainers, type Container } from "../lib/container.js";
 import { compareFunction } from "../lib/functionOracle.js";
-import { ROOT, configuredCppFlags, configuredCompilerPath, configuredMaspsxFlags, configuredAsFlagsForContainer,
-  configuredCc1FlagsForContainer, configuredToolchainIdentity, loadFlagOverrides,
-  resolveAsmSource, sourceDependencyFiles, rejectionFromDiagnostics } from "./decompToolchain.js";
+import { configuredCppFlags, configuredCompilerPath, configuredMaspsxFlags, configuredAsFlagsForContainer, configuredCc1FlagsForContainer, configuredToolchainIdentity, loadFlagOverrides, resolveAsmSource, sourceDependencyFiles, rejectionFromDiagnostics } from "./decompToolchain.js";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { extractSignaturesFromSource } from "./sdkTypes.js";
 import { sdkPrototypes, scopeFromPreprocessed, targetWitness, contradictionsAgainst, prototypesIn, parameterWitnesses, type Prototype, type Witness } from "./calleeTruth.js";
@@ -53,14 +54,21 @@ export function projectCalleeParameters(text: string, definition: Prototype, wit
 
 export const hashText = (text: string | Buffer) => createHash("sha256").update(text).digest("hex");
 export const hashFile = (path: string) => existsSync(path) ? hashText(readFileSync(path)) : "absent";
-export function packetIsFresh(packet: PreparationPacket, root = ROOT): boolean {
+export function preparationTools(name: string, root: string, m2c = prepareM2c(root)): unknown {
+  const target = resolveFunctionTarget(name, root);
+  return { compilation: compilationIdentity(root, target.flags, target.owner.kind === "library" ? target.owner.id : name),
+    m2c: { compatibility: "patched-m2c-v1", source: m2c.identity.sha256, flags: configuredFlags("m2c", target.flags, root) },
+    context: COMPONENT_CONTRACTS.context };
+}
+export function packetIsFresh(packet: PreparationPacket, root = projectRoot()): boolean {
   try {
     if (packet.schemaVersion !== 1) return false;
+    if (packet.identity.compatibility && packet.identity.compatibility !== COMPONENT_CONTRACTS.preparation) return false;
     return Object.entries(packet.identity.memberships ?? {}).every(([path, members]) =>
       JSON.stringify(allFiles(resolve(root, path)).filter(p => packet.identity.targetKind !== "relocatable-library" || (!p.includes("__pycache__") && !p.endsWith(".pyc"))).map((p) => relative(root, p)).sort()) === JSON.stringify(members)) &&
       Object.entries(packet.identity.inputs).every(([path, hash]) => hashFile(resolve(root, path)) === hash) &&
       (!packet.primary || hashFile(join(root, packet.primary.path)) === packet.primary.sha256) &&
-      JSON.stringify(packet.identity.tools) === JSON.stringify(configuredToolchainIdentity()) &&
+      stableHash(packet.identity.tools) === stableHash(packet.identity.compatibility ? preparationTools(packet.identity.functionName, root) : configuredToolchainIdentity()) &&
       [packet.compilation.preprocessed, packet.compilation.assembly, packet.compilation.object].every((a) => !a || hashFile(join(root, a.path)) === a.sha256) &&
       (!packet.generation.raw || !packet.generation.rawHash || hashFile(join(root, packet.generation.raw)) === packet.generation.rawHash);
   } catch { return false; } /* malformed/interrupted packets are never fresh */
@@ -90,13 +98,14 @@ interface PreflightReport { macroIdentity: PreparationPacket["discovery"]["macro
 interface PreparationOptions { root?: string; signal?: AbortSignal; alternative?: boolean; contextFile?: string;
   inferenceView?: { withhold?: string[]; disableSeeds?: string[]; permittedSeeds?: string[]; disableTransfers?: boolean } }
 export function prepareFunction(functionName: string, options: PreparationOptions = {}): Promise<{ packet: PreparationPacket; path: string }> {
-  if (loadLibraryProject(options.root ?? ROOT)) return prepareLibraryFunction(functionName, options);
-  return withSymbolMetadata(() => withPreprocessorMetadata(() => prepareFunctionInView(functionName, options)));
+  const root = options.root ?? projectRoot();
+  return inRuntimeContext(contextForProject(root), () => loadLibraryProject(root) ? prepareLibraryFunction(functionName, { ...options, root }) :
+    withSymbolMetadata(() => withPreprocessorMetadata(() => prepareFunctionInView(functionName, { ...options, root }))));
 }
 async function prepareFunctionInView(functionName: string, options: PreparationOptions): Promise<{ packet: PreparationPacket; path: string }> {
   const timings = new Timings();
   options.signal?.throwIfAborted();
-  const root = options.root ?? ROOT;
+  const root = options.root ?? projectRoot();
   const discoveryStart = performance.now();
   const location = requireFunctionLocation(functionName);
   const container = location.container;
@@ -117,35 +126,21 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
   const inputs: Record<string, string> = {};
   const ledger = join(root, "build/experimentLedger", `${functionName}.jsonl`);
   const input = (path: string) => { const key = relative(root, path); inputs[key] = hashFile(path); };
-  /* Complete declaration/config/decompiler sources, plus actual transitive compile inputs.
-     Deliberately content hashes: timestamp and Git HEAD are not input identities. */
-  for (const path of [assembly, join(root, destination), containerTargetPath(container), join(root, "toolchain.json"),
-    ...loadContainers().map(containerTargetPath), ...original.inputs,
-    ...allFiles(join(root, "configs")), ...allFiles(join(root, "include")), ...allFiles(join(root, "src")),
-    ...allFiles(join(root, "tools/vendor/m2c/m2c")).filter((p) => p.endsWith(".py")),
-    ...allFiles(join(root, "tools/vendor/m2c/m2c_pycparser")).filter((p) => p.endsWith(".py")),
-    ...allFiles(join(root, "tools/vendor/maspsx/maspsx")).filter((p) => p.endsWith(".py")),
-    ...allFiles(join(root, "tools/vendor/tree-sitter-c")),
-    ...allFiles(join(root, "tools/diagnostics")).filter((p) => /\/macro[^/]*\.ts$/.test(p) && !p.endsWith(".test.ts")),
-    join(root, "tools/diagnostics/nestedFunctionScan.ts"),
-    join(root, ".pi/autoloop.json"), join(root, ".pi/extensions/shared/source-policy.ts"), join(root, ".pi/extensions/shared/types.ts"),
-    join(root, "tools/build/prepareM2c.ts"), join(root, "package-lock.json"),
-    ...["web-tree-sitter.js", "web-tree-sitter.wasm"].map((p) => join(root, "node_modules/web-tree-sitter", p)),
-    join(root, "tools/vendor/m2c/m2c.py"), ...["tools/agent", "tools/lib"].flatMap((p) => allFiles(join(root, p))).filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts")),
+  /* Target/declaration inputs only. Compatibility names the producing algorithm;
+     distribution paths, unrelated implementation and package metadata are not inputs. */
+  for (const path of [assembly, join(root, destination), containerTargetPath(container),
+    ...loadContainers(root).map(containerTargetPath), ...original.inputs,
+    ...allFiles(join(root, "include")), ...allFiles(join(root, "src")),
     ...data, ...[container.paths.splat, container.paths.symbolAddrs, container.paths.undefinedFuncs, container.paths.undefinedSyms,
       container.paths.ldScript, container.paths.functionsCsv, container.paths.sectionLayout, "build/engine_syms.txt", "build/callGraph.json"].map((p) => join(root, p))]) input(path);
   for (const path of sourceDependencyFiles(join(root, destination))) input(path);
   const m2c = prepareM2c(root);
-  for (const path of [...m2c.identity.inputs, ...m2c.sources]) input(path);
-  const tools = configuredToolchainIdentity();
-  input(join(root, tools.compiler.path)); input(join(root, tools.assemblerShim.path));
-  for (const tool of Object.values(toolchainExecutables(root))) if (tool.path) input(tool.path);
-  input(process.execPath);
-  const flags = [...configuredCc1FlagsForContainer(container.kind, container.id), ...(loadFlagOverrides().get(functionName) ?? [])];
+  const tools = preparationTools(functionName, root, m2c);
+  const flags = [...configuredCc1FlagsForContainer(container.kind, container.id), ...(loadFlagOverrides(root).get(functionName) ?? [])];
   if (options.contextFile) input(join(root, options.contextFile));
-  const memberships = Object.fromEntries(["src", "include", "configs", ...loadContainers().map((c) => c.paths.asmDir)]
+  const memberships = Object.fromEntries(["src", "include", ...loadContainers(root).map((c) => c.paths.asmDir)]
     .map((p) => [p, allFiles(join(root, p)).map((f) => relative(root, f)).sort()]));
-  const fingerprint = hashText(JSON.stringify({ inputs, memberships, tools, flags, alternative: options.alternative ?? false, inferenceView: options.inferenceView ?? {} }));
+  const fingerprint = stableHash({ compatibility: COMPONENT_CONTRACTS.preparation, inputs, memberships, tools, flags, alternative: options.alternative ?? false, inferenceView: options.inferenceView ?? {} });
   timings.phases.push({ phase: "discovery-fingerprinting", durationMs: performance.now() - discoveryStart });
   const baseDirectory = join(root, "build/preparation", functionName, fingerprint);
   let directory = baseDirectory;
@@ -192,7 +187,7 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
       const commands = [...packet.compilation.commands, ...packet.discovery.preflight, ...(packet.generation.command ? [packet.generation.command] : [])];
       if (packet.preparationState !== "running" && !commands.some((c) => c.cancelled || c.timedOut)) {
         if (packet.diagnosticsIdentity !== hashFile(ledger)) {
-          const refresh = await recordedCommand("npx", ["tsx", "tools/agent/triage.ts", functionName, "--src", packet.primary?.path ?? destination, "--prepared", relative(root, packetPath), "--json"],
+          const refresh = await recordedCommand(process.execPath, currentScriptArgs("tools/agent/triage.ts", [functionName, "--src", packet.primary?.path ?? destination, "--prepared", relative(root, packetPath), "--json"]),
             root, directory, `refresh-${Date.now()}-triage`, options.signal, 120_000, false);
           packet.discovery.preflight.push(refresh);
           if (refresh.status !== 0) packet.integration.blockers.push("refreshed mandatory preflight failed");
@@ -213,7 +208,7 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
     directory = join(baseDirectory, `retry-${retry}`); packetPath = join(directory, "packet.json");
   }
   const packet: PreparationPacket = {
-    schemaVersion: 1, preparationState: "running", identity: { functionName, container: container.id, destination, assembly: relative(root, assembly),
+    schemaVersion: 1, preparationState: "running", identity: { compatibility: COMPONENT_CONTRACTS.preparation, functionName, container: container.id, destination, assembly: relative(root, assembly),
       data: data.map((p) => relative(root, p)), inputs, memberships, fingerprint, tools, flags }, primary: existing && !options.alternative ? {
       origin: "existing-attempt", path: destination, sha256: hashText(source), text: source, declarationsRequired: [],
     } : null,
@@ -512,7 +507,7 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
     /* The old scanner wire discarded every successful finding. Run it before
        the first draft measurement, parse its byte/census routing, and edit
        only a build/ copy; raw output and existing live attempts stay primary. */
-    const beforeDefinition = await command("npx", ["tsx", "tools/agent/scanReadBeforeDef.ts", functionName, "--json"], "read-before-definition");
+    const beforeDefinition = await command(process.execPath, currentScriptArgs("tools/agent/scanReadBeforeDef.ts", [functionName, "--json"]), "read-before-definition");
     packet.discovery.preflight.push(beforeDefinition);
     if (beforeDefinition.status !== 0) packet.integration.blockers.push("read-before-definition preflight unavailable; inspect preserved streams");
     else {
@@ -563,7 +558,7 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
     /* Target-side frame/SDK/flag evidence remains applicable when generation
        or compilation fails. Triage itself separates unavailable compiled facts. */
     savePacket(root, directory, packet);
-    const preflight = await command("npx", ["tsx", "tools/agent/triage.ts", functionName, "--src", packet.primary?.path ?? destination, "--prepared", relative(root, packetPath), "--json"], "triage");
+    const preflight = await command(process.execPath, currentScriptArgs("tools/agent/triage.ts", [functionName, "--src", packet.primary?.path ?? destination, "--prepared", relative(root, packetPath), "--json"]), "triage");
     packet.discovery.preflight.push(preflight);
     if (preflight.status !== 0) packet.integration.blockers.push("mandatory preflight failed; inspect preserved triage streams");
     else {
@@ -598,7 +593,7 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
 
 /** Compare-and-swap integration. Only an unchanged, clean committed target stub
  * is eligible, and only the preparer's own source is changed. No header publication. */
-export function stagePrepared(packet: PreparationPacket, root = ROOT): { staged: boolean; reason?: string } {
+export function stagePrepared(packet: PreparationPacket, root = projectRoot()): { staged: boolean; reason?: string } {
   if (!packet.primary || packet.primary.origin !== "m2c" || packet.compilation.status !== "succeeded" || packet.integration.blockers.length)
     return { staged: false, reason: "candidate is not eligible for safe staging" };
   if (packet.discovery.staticChain && !["verified", "not-needed"].includes(packet.discovery.staticChain.status))
@@ -664,7 +659,7 @@ async function measurePreparation(packet: PreparationPacket, root: string, direc
   writeFileSync(join(root, report), JSON.stringify(comparison, null, 2));
   packet.comparison = { status: comparison.verdict === "match" ? "exact" : comparison.verdict === "mismatch" ? "mismatching" : "undetermined", report };
   if (comparison.verdict === "mismatch") {
-    const residual = await command("npx", ["tsx", "tools/agent/residualObjective.ts", name, "--source", packet.primary.path, "--json"], "residual");
+    const residual = await command(process.execPath, currentScriptArgs("tools/agent/residualObjective.ts", [name, "--source", packet.primary.path, "--json"]), "residual");
     if (residual.status === 0) { try { packet.comparison.residual = JSON.parse(readFileSync(residual.stdout, "utf8")); } catch { /* original streams remain explicit */ } }
   }
 }

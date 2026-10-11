@@ -1,8 +1,9 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import type { BlockComparison, ProgramComparison } from "./compare.js";
 import { blockKey, compareObjectives, rankBlocks, residualObjective } from "./objective.js";
 import { reversePipeline } from "./reverse.js";

@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The fixed-point campaign — solve what can be solved, requeue only what the
  * solving changed, and prepare a bundle for the rest.
@@ -28,7 +29,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { loadContainers, type Container } from "../../lib/container.js";
 import { loadFunctionSpans } from "../../lib/symbolIndex.js";
 import { buildFamilyIndex, donorsFor, type FamilyIndex } from "../family-transfer/family-index.js";
@@ -107,7 +108,7 @@ function unmatchedFunctions(containers: Container[]): string[] {
   const names: string[] = [];
   for (const container of containers) {
     for (const span of loadFunctionSpans(container)) {
-      const sourcePath = join(ROOT, container.paths.srcDir, `${span.name}.c`);
+      const sourcePath = join(projectRoot(), container.paths.srcDir, `${span.name}.c`);
       if (!existsSync(sourcePath)) {
         names.push(span.name);
         continue;
@@ -238,7 +239,7 @@ export function runCampaign(options: CampaignOptions = {}): CampaignReport {
 
   const bundles: string[] = [];
   if (options.writeBundles) {
-    mkdirSync(join(ROOT, "build/preparedBundles"), { recursive: true });
+    mkdirSync(join(projectRoot(), "build/preparedBundles"), { recursive: true });
     for (const outcome of outcomes) {
       if (outcome.verdict === "exact") continue;
       try {
@@ -317,7 +318,7 @@ function attempt(
         route: "reconstruction",
         verdict: "exact",
         detail: `reconstructed (${result.winner!.id})`,
-        sourcePath: join(ROOT, "build/matchingReconstruction", functionName, "winner.c"),
+        sourcePath: join(projectRoot(), "build/matchingReconstruction", functionName, "winner.c"),
       };
     }
     if (result.bestEffort) {
@@ -326,7 +327,7 @@ function attempt(
         route: "reconstruction",
         verdict: "draft",
         detail: result.bestEffort.diffSummary,
-        sourcePath: join(ROOT, "build/matchingReconstruction", functionName, "best-effort.c"),
+        sourcePath: join(projectRoot(), "build/matchingReconstruction", functionName, "best-effort.c"),
       };
     }
     return {
@@ -342,7 +343,7 @@ function attempt(
 
 function writeBundle(bundle: PreparedBundle): void {
   const markdown = bundlePath(bundle.functionName, "md");
-  mkdirSync(join(ROOT, "build/preparedBundles"), { recursive: true });
+  mkdirSync(join(projectRoot(), "build/preparedBundles"), { recursive: true });
   writeFileSync(markdown, `${renderBundle(bundle).join("\n")}\n`);
   writeFileSync(bundlePath(bundle.functionName, "json"), JSON.stringify(bundle, null, 1));
 }

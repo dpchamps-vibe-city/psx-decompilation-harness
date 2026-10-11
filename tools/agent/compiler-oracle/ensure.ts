@@ -1,3 +1,5 @@
+import { HARNESS_ROOT } from "../../lib/runtimeContext.js";
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * ensure.ts — the allocator-forensics chain, produced on demand.
  *
@@ -28,7 +30,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runAllocatorCounterfactual } from "../analyzeAllocatorCounterfactual.js";
-import { ROOT, resolveSource } from "../decompToolchain.js";
+import { resolveSource } from "../decompToolchain.js";
 import {
   type EnsuredArtifact,
   type ProvenanceInputs,
@@ -44,16 +46,16 @@ import { parseOracleEvents, runCompilerOracle } from "./run.js";
 import type { CompilerOracleReport } from "./types.js";
 
 /** Source files whose logic decides these artifacts. */
-const CHAIN_IMPLEMENTATION = [
-  join(ROOT, "tools/agent/analyzeAllocatorCounterfactual.ts"),
-  join(ROOT, "tools/agent/analyzeTargetSchedule.ts"),
-  join(ROOT, "tools/agent/allocator-counterfactual"),
-  join(ROOT, "tools/agent/compiler-oracle"),
-  join(ROOT, "tools/agent/target-schedule"),
-];
+const CHAIN_IMPLEMENTATION = () => ([
+  join(HARNESS_ROOT, "tools/agent/analyzeAllocatorCounterfactual.ts"),
+  join(HARNESS_ROOT, "tools/agent/analyzeTargetSchedule.ts"),
+  join(HARNESS_ROOT, "tools/agent/allocator-counterfactual"),
+  join(HARNESS_ROOT, "tools/agent/compiler-oracle"),
+  join(HARNESS_ROOT, "tools/agent/target-schedule"),
+]);
 
 function stampPath(kind: string, functionName: string): string {
-  return join(ROOT, "build", kind, functionName, "provenance.json");
+  return join(projectRoot(), "build", kind, functionName, "provenance.json");
 }
 
 /** The fingerprint of a stage, without producing it. */
@@ -64,7 +66,7 @@ function fingerprintOf(functionName: string, inputs: ProvenanceInputs): string {
 /* ---- stage 1: allocator counterfactual ---------------------------------- */
 
 function allocatorInputs(functionName: string): ProvenanceInputs {
-  return { files: [resolveSource(functionName)], implementation: CHAIN_IMPLEMENTATION };
+  return { files: [resolveSource(functionName)], implementation: CHAIN_IMPLEMENTATION() };
 }
 
 /**
@@ -76,7 +78,7 @@ function allocatorInputs(functionName: string): ProvenanceInputs {
 export function ensureAllocatorCounterfactual(
   functionName: string,
 ): EnsuredArtifact<AllocatorCounterfactualAnalysis> {
-  const analysisPath = join(ROOT, "build/allocatorCounterfactual", functionName, "analysis.json");
+  const analysisPath = join(projectRoot(), "build/allocatorCounterfactual", functionName, "analysis.json");
 
   return ensureArtifact<AllocatorCounterfactualAnalysis>({
     artifactPath: stampPath("allocatorCounterfactual", functionName),
@@ -110,7 +112,7 @@ function oracleInputs(functionName: string, forceBuild: boolean): ProvenanceInpu
       allocatorCounterfactual: fingerprintOf(functionName, allocatorInputs(functionName)),
       forceBuild,
     },
-    implementation: CHAIN_IMPLEMENTATION,
+    implementation: CHAIN_IMPLEMENTATION(),
   };
 }
 
@@ -134,7 +136,7 @@ export function ensureCompilerOracleReport(
     produce: (provenance) => {
       const upstream = ensureAllocatorCounterfactual(functionName);
       const report = runCompilerOracle(functionName, { forceBuild, analysis: upstream.value });
-      const reportPath = join(ROOT, report.runDirectory, "report.json");
+      const reportPath = join(projectRoot(), report.runDirectory, "report.json");
       writeStableJson(
         stampPath("compilerOracle", functionName),
         stamped({ report: projectPath(reportPath) }, provenance),
@@ -144,7 +146,7 @@ export function ensureCompilerOracleReport(
     read: (stored) => {
       const value = stored as { report?: string };
       if (!value.report) throw new Error("compiler-oracle stamp has no report path");
-      const reportPath = join(ROOT, value.report);
+      const reportPath = join(projectRoot(), value.report);
       if (!existsSync(reportPath)) throw new Error("compiler-oracle report is missing");
       return { report: JSON.parse(readFileSync(reportPath, "utf8")) as CompilerOracleReport, reportPath };
     },
@@ -170,7 +172,7 @@ export function ensureLocalAllocationAnalysis(
   options: { forceBuild?: boolean } = {},
 ): EnsuredArtifact<LocalAllocationArtifact> {
   const forceBuild = options.forceBuild ?? false;
-  const analysisPath = join(ROOT, "build/localAllocationOracle", functionName, "analysis.json");
+  const analysisPath = join(projectRoot(), "build/localAllocationOracle", functionName, "analysis.json");
 
   return ensureArtifact<LocalAllocationArtifact>({
     artifactPath: analysisPath,
@@ -179,7 +181,7 @@ export function ensureLocalAllocationAnalysis(
     inputs: {
       files: [resolveSource(functionName)],
       values: { compilerOracle: fingerprintOf(functionName, oracleInputs(functionName, forceBuild)) },
-      implementation: CHAIN_IMPLEMENTATION,
+      implementation: CHAIN_IMPLEMENTATION(),
     },
     produce: (provenance) => {
       const { report, reportPath } = ensureCompilerOracleReport(functionName, { forceBuild }).value;
@@ -190,7 +192,7 @@ export function ensureLocalAllocationAnalysis(
         throw new Error("compiler-oracle report lacks baseline/local counterfactual variants");
       }
       const readEvents = (artifactDirectory: string) => {
-        const path = join(ROOT, artifactDirectory, "events.jsonl");
+        const path = join(projectRoot(), artifactDirectory, "events.jsonl");
         return parseOracleEvents(existsSync(path) ? readFileSync(path, "utf8") : "");
       };
       const replay = replayLocalAllocation(

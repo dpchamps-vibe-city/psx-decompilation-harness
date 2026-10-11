@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * feedbackLoop.ts — does a recovery make the next attempt a different question?
  *
@@ -34,7 +35,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../agent/decompToolchain.js";
+
 import { buildFamilyIndex, donorsFor } from "../agent/family-transfer/family-index.js";
 import { transferFromDonor } from "../agent/family-transfer/transfer.js";
 import { reconstructFunction } from "../agent/matching-reconstruction/engine.js";
@@ -169,7 +170,7 @@ export function runFeedbackExperiment(
     retractRecovered();
     for (const entry of preserved.entries) {
       try {
-        const source = readFileSync(join(ROOT, entry.sourcePath), "utf-8");
+        const source = readFileSync(join(projectRoot(), entry.sourcePath), "utf-8");
         withContextMode(entry.contextMode, () => publishRecovered(entry.functionName, source, entry.route));
       } catch { /* an entry whose file is gone cannot be restored */ }
     }

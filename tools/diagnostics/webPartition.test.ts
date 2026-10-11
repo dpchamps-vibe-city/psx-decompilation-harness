@@ -1,5 +1,6 @@
+import { ROOT } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assemble, type AsmLine } from "../agent/matching-reconstruction/fixture-asm.js";
@@ -12,7 +13,7 @@ import { allocationDominant, fingerprintWebPartition, pinAuditNames, probeRegist
 import { unpinDeclarations } from "./webPartitionAudit.js";
 import { matchingConstructs } from "../agent/cSourceGuard.js";
 import { webPartitionFindings } from "../agent/triage.js";
-import { ROOT, configuredCompilerPath } from "../agent/decompToolchain.js";
+import { configuredCompilerPath } from "../agent/decompToolchain.js";
 import type { ResidualObjective } from "../agent/pipeline-reversal/objective.js";
 const base = 0x80010000;
 function partition(lines: AsmLine[], side: "target" | "candidate" = "target"): WebPartition {

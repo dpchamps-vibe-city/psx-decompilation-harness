@@ -1,0 +1,530 @@
+{
+  "schemaVersion": 1,
+  "baseline": "fdedbe9f68cce6de7a5811e7b05ff32fd74bf601",
+  "entries": [
+    {
+      "kind": "restoration",
+      "file": "prompts/reference/flags.md",
+      "line": 32,
+      "baselineText": "the bar is met, apply the override yourself: add the `CC1FLAGS_<stem>` entry\nin `configs/flag_overrides.mk` with a comment stating the evidence, and add\nthe matching `flag-override` allowlist entry in the project configuration in\nthe same change — the allowlist entry is the audit trail the policy gate\nenforces. Do not stop at \"proposing\" an override the evidence already\nsupports; do not add one without a fingerprint. A probe that shows baseline\nequal to the flag delta means the flag is NOT the answer and the source shape\nis (func_8001FF98: the probe's matrix exposed exactly this, killing a wrong\noverride within minutes).",
+      "newText": "the bar is met, apply the override yourself: add the `CC1FLAGS_<stem>` entry\nin `configs/flag_overrides.mk` with a comment stating the evidence, and add\nthe matching `flag-override` allowlist entry in the project configuration in\nthe same change — the allowlist entry is the audit trail the policy gate\nenforces. Do not stop at \"proposing\" an override the evidence already\nsupports; do not add one without a fingerprint. A probe that shows baseline\nequal to the flag delta means the flag is NOT the answer and the source shape\nis (func_8001FF98: the probe's matrix exposed exactly this, killing a wrong\noverride within minutes).",
+      "forcingChange": "I2: authoritative fdedbe9f lines 32–40; restore the agent-owned .mk/evidence/allowlist idiom verbatim. Initial divergence is preserved in build/installed-runtime/audit/preexisting.diff.",
+      "oldObservedText": "the bar is met, propose a human-reviewed change to `toolchain.json.fileFlags`,\nrecord its evidence in project metadata, and add the matching `flag-override`\nallowlist entry in `.pi/autoloop.json` in the same change. The allowlist is the\naudit trail the policy gate enforces; workers may not edit the toolchain or\ngrant themselves an exception. Do not add an override without a fingerprint,\nand never switch off an optimization the target shows signs of using. A probe\nthat shows baseline equal to the flag delta kills that flag hypothesis; measure\na different source shape rather than treating historical examples as target\nevidence."
+    },
+    {
+      "kind": "restoration",
+      "file": ".pi/skills/psx-decompile-function/SKILL.md",
+      "line": 146,
+      "baselineText": "Consult the reference sheet for the owning pass only now, and only the one:",
+      "newText": "Consult the reference sheet for the owning pass only now, and only the one:",
+      "forcingChange": "I2: remove the non-tooling OBSERVE/re-reading addition; restore authoritative line 146.",
+      "oldObservedText": "Use only the reference sheet for the owning pass; do not reread one already\nloaded in OBSERVE:"
+    },
+    {
+      "kind": "restoration",
+      "file": ".pi/skills/psx-decompile-function/SKILL.md",
+      "line": 253,
+      "baselineText": "   for the pass is the short form. `psx_compiler_source` searches the exact\n   patched compiler tree cc1 is built from, and is the authority where no sheet\n   covers the decision. One read of the function that makes the choice can name\n   the source change outright, or end a search: a proof that a form is\n   unreachable is worth more than any number of failed experiments, and it is the\n   only evidence that converts \"we could not find it\" into \"it is not there\".",
+      "newText": "   for the pass is the short form. `psx_compiler_source` searches the exact\n   patched compiler tree cc1 is built from, and is the authority where no sheet\n   covers the decision. One read of the function that makes the choice can name\n   the source change outright, or end a search: a proof that a form is\n   unreachable is worth more than any number of failed experiments, and it is the\n   only evidence that converts \"we could not find it\" into \"it is not there\".",
+      "forcingChange": "I2: restore authoritative lines 253–258; remove added compiler-evidence sentences, preserving all surrounding bytes.",
+      "oldObservedText": "   for the pass is the short form. `psx_compiler_source` searches the configured\n   compiler source; for a supported, verified compiler build it is the authority\n   where no sheet covers the decision. One read of the function that makes the\n   choice can name the source change outright, or end a search: a proof that a\n   form is unreachable is worth more than any number of failed experiments, and\n   it is the only evidence that converts \"we could not find it\" into \"it is not\n   there\". A default compiler profile alone does not establish that premise."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-decompile-function/SKILL.md",
+      "line": 253,
+      "baselineText": "exact\n   patched compiler tree cc1 is built from",
+      "newText": "configured\n   compiler source",
+      "forcingChange": "B1: compiler.source names configured, explicitly owned source rather than an unconditional fixed patched tree."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-prepare-function/SKILL.md",
+      "line": 38,
+      "baselineText": "npx tsx tools/build/classifyGlobals.ts --write",
+      "newText": "psx_classify_globals({write: true})",
+      "forcingChange": "B3: registered narrow classification tool invokes installed implementation with explicit project context."
+    },
+    {
+      "kind": "tooling",
+      "file": "prompts/reference/declarations.md",
+      "line": 50,
+      "baselineText": "tools/build/deriveTuOwnedGlobals.ts <function>",
+      "newText": "psx_derive_tu_globals({functionName: \"<function>\"})",
+      "forcingChange": "B3: narrow independently witnessed TU-global report tool."
+    },
+    {
+      "kind": "tooling",
+      "file": "prompts/reference/stuck.md",
+      "line": 24,
+      "baselineText": "make split",
+      "newText": "psx_split_project",
+      "forcingChange": "A4/B3: installed shared split operation, no Makefile dependency."
+    },
+    {
+      "kind": "tooling",
+      "file": "prompts/reference/population.md",
+      "line": 494,
+      "baselineText": "make check",
+      "newText": "psx_verify_build",
+      "forcingChange": "E1: executable-only byte verification, same 120 s scope."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-decompile-function/SKILL.md",
+      "line": 380,
+      "baselineText": "tools/agent/pipeline-reversal/README.md",
+      "newText": "../../../tools/agent/pipeline-reversal/README.md",
+      "forcingChange": "B3/I3: skill-relative installed package resource, not a project-relative tools path."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-build-resource-parser/SKILL.md",
+      "line": 18,
+      "baselineText": "tools/agent/resource-extraction/parsers/<format>.ts",
+      "newText": "tools/resource-parsers/<format>.ts",
+      "forcingChange": "C4: project-authored parser implementations live outside installed package."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-build-resource-parser/SKILL.md",
+      "line": 20,
+      "baselineText": "tools/agent/resource-extraction/parser-plugins.ts",
+      "newText": "tools/resource-parsers/parser-plugins.ts",
+      "forcingChange": "C4: project registry is prepared/preserved independently of built-ins."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/tools/diagnostics.ts",
+      "line": 211,
+      "baselineText": "tools/vendor/gcc/<GCC_VERSION>, the exact patched tree cc1 is built from",
+      "newText": "the configured compiler source",
+      "forcingChange": "B1/I2: only the stale fixed-tree clause is replaced in the authoritative description."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/tools/diagnostics.ts",
+      "line": 217,
+      "baselineText": "defaults to the Makefile's GCC_VERSION",
+      "newText": "defaults to toolchain.json compiler.version",
+      "forcingChange": "B1/I2: configured compiler version replaces removed Make variable; every surrounding description byte stays authoritative."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/tools/diagnostics.ts",
+      "line": 584,
+      "baselineText": "psx_finalize_function / make check afterward",
+      "newText": "psx_finalize_function / psx_verify_build afterward",
+      "forcingChange": "B3/E1/I2: provided terminal/finalize and executable verification operations replace the obsolete Make invocation."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/autoloop/prompts.ts",
+      "line": 180,
+      "baselineText": "npx tsx tools/build/deriveRodataSplits.ts \" +\n        \"--container <id>",
+      "newText": "psx_split_project(\" +\n        \"{container: \\\"<id>\\\", repairRodata: true})",
+      "forcingChange": "B3: project preparation performs internal rodata derivation/repair and splitting through the shared configured API."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 3,
+      "baselineText": "complete project source scaffold",
+      "newText": "complete project scaffold",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 19,
+      "baselineText": "entire source scaffold",
+      "newText": "entire project scaffold",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 20,
+      "baselineText": "configs, build/diagnostic tools, reference sheets, local matching and\n   resource extensions/skills, and pinned public vendor tooling sources (copied\n   when present, downloaded automatically when missing)",
+      "newText": "configs, project loop settings, plugin directories, and pinned public\n   tooling sources in build/dependencies/ (prepared from the installed package\n   when present, downloaded automatically when missing)",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 25,
+      "baselineText": "merges `.gitignore` and npm scripts/dependencies",
+      "newText": "merges `.gitignore`",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 39,
+      "baselineText": "matching release headers under `include/psyq/`",
+      "newText": "matching release headers under `library-input/psyq/INCLUDE/`",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 43,
+      "baselineText": "EXE SDK\n     integration still requires first-time conversion of non-colliding members",
+      "newText": "EXE SDK\n     integration performs supported first-time conversion of non-colliding members",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 45,
+      "baselineText": "project `npm install`",
+      "newText": "installed package dependencies",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 49,
+      "baselineText": "Install project dependencies with `npm install --ignore-scripts` from the\n   target repository, then run `npm run setup` to verify/prepare m2c.",
+      "newText": "Prepare supported tooling with `psx_prepare_tooling` from the\n   target repository to verify/prepare m2c.",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "line": 56,
+      "baselineText": "`docs/bootstrap.md` rather than",
+      "newText": "[the onboarding contract](../../../docs/bootstrap.md) rather than",
+      "forcingChange": "C1/B3: remove copied implementation/dependency mutation boundaries; psx_prepare_tooling verified through Pi 0.85.1, installed resource links remain skill-relative.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/tools/call-graph.ts",
+      "line": 10,
+      "baselineText": "with tools/agent/callGraph.ts",
+      "newText": "with the installed implementation",
+      "occurrence": 1,
+      "forcingChange": "B3: the registered operation executes installed code, not a missing consumer path."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/tools/diagnostics.ts",
+      "line": 350,
+      "baselineText": "finalizeEngineMatches --write",
+      "newText": "psx_finalize_engine_matches({write: true})",
+      "occurrence": 1,
+      "forcingChange": "B3: the existing registered integration tool replaces the raw CLI follow-up."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 15,
+      "baselineText": "`.pi/skills/psx-identify-project/`",
+      "newText": "`./`",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 23,
+      "baselineText": "Bootstrap materializes this skill and its tools locally",
+      "newText": "The installed package supplies this skill and its tools",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 38,
+      "baselineText": "`npm ci` installs TypeScript tooling;\n   `npm run setup` prepares vendors",
+      "newText": "The installed package supplies TypeScript tooling;\n   `psx_prepare_tooling` prepares vendors",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 92,
+      "baselineText": "npm run identify -- --deep --json",
+      "newText": "psx_identify_project({deep: true, json: true})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 55,
+      "baselineText": "npm run identify -- --json",
+      "newText": "psx_identify_project({json: true})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 90,
+      "baselineText": "npm run identify -- --json",
+      "newText": "psx_identify_project({json: true})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 65,
+      "baselineText": "npx tsx tools/diagnostics/headerInfo.ts extracted/YOUR-EXE build/identification/header.md",
+      "newText": "psx_inspect_exe({input: \"extracted/YOUR-EXE\", output: \"build/identification/header.md\"})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 135,
+      "baselineText": "npm run disassemble -- --archives",
+      "newText": "psx_disassemble_project({archives: true})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 91,
+      "baselineText": "npm run disassemble",
+      "newText": "psx_disassemble_project({})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 102,
+      "baselineText": "`tools/diagnostics/matchSignatures.ts`",
+      "newText": "`psx_match_sdk_signatures`",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 108,
+      "baselineText": "npx tsx tools/diagnostics/matchSignatures.ts --version VERSION",
+      "newText": "psx_match_sdk_signatures({version: \"VERSION\"})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 107,
+      "baselineText": "npx tsx tools/diagnostics/matchSignatures.ts",
+      "newText": "psx_match_sdk_signatures({})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 119,
+      "baselineText": "npm run split-sdk-libs",
+      "newText": "psx_prepare_sdk",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 120,
+      "baselineText": "npx tsx tools/build/detectLibFunctions.ts",
+      "newText": "psx_prepare_sdk({verifyPlacements: true})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 124,
+      "baselineText": "headers under `include/psyq/`",
+      "newText": "headers under `library-input/psyq/INCLUDE/`",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 125,
+      "baselineText": "First-time non-colliding conversion is\nnot performed",
+      "newText": "First-time non-colliding conversion is\nperformed for supported inputs",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 136,
+      "baselineText": "npx tsx tools/diagnostics/overlayFlagFingerprint.ts",
+      "newText": "psx_inspect_container_abi({})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 141,
+      "baselineText": "`tools/build/extractArchive.ts` for explicit `--index`/`--data` selection",
+      "newText": "`psx_extract_archive` for explicit `index`/`data` selection",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 169,
+      "baselineText": "- `fileFlags`: leave empty without per-TU target fingerprints, dominant probe\n  evidence, no contrary regional witness and a human-approved policy allowlist.\n  Ordinary workers must not modify toolchain authority.",
+      "newText": "- `configs/flag_overrides.mk`: leave empty without per-TU target fingerprints, dominant probe\n  evidence, no contrary regional witness and a matching policy allowlist.\n  Ordinary workers must not modify toolchain authority.",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 185,
+      "baselineText": "npm run split-all",
+      "newText": "psx_split_project({all: true})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 186,
+      "baselineText": "npm run check-all",
+      "newText": "psx_verify_project({})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 187,
+      "baselineText": "npx tsx tools/build/genProjectProfile.ts --write",
+      "newText": "psx_generate_project_profile({write: true})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 188,
+      "baselineText": "npm run progress",
+      "newText": "psx_project_progress({})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 191,
+      "baselineText": "npm run split -- --container ID",
+      "newText": "psx_split_project({container: \"ID\"})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 192,
+      "baselineText": "npm run check -- --container ID",
+      "newText": "psx_verify_project({container: \"ID\"})",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "line": 193,
+      "baselineText": "npm run config-check",
+      "newText": "psx_check_configuration",
+      "occurrence": 1,
+      "forcingChange": "B3/C1/D1: registered narrow installed operations replace missing consumer scripts/tasks; SDK header ownership and .mk mutation boundary moved. Surrounding bytes retained.",
+      "baselineSource": "preimplementation"
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/tools/verify-build.ts",
+      "line": 10,
+      "baselineText": "full byte-identity verification with make check",
+      "newText": "executable-only byte-identity verification (120 s timeout)",
+      "forcingChange": "E1: restore the provided executable-only 120 s verification scope; finalize retains all-container 300 s verification."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-bootstrap/index.ts",
+      "line": 14,
+      "baselineText": "merges npm scripts/dependencies and .gitignore, refuses implementation collisions.",
+      "newText": "merges .gitignore without copying implementation.",
+      "baselineSource": "preimplementation",
+      "forcingChange": "C1/A2: bootstrap no longer merges dependencies/npm tasks or copies package implementation."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/autoloop/park.ts",
+      "line": 221,
+      "baselineText": "npx tsx tools/build/deriveRodataSplits.ts --container <id>",
+      "newText": "psx_split_project({container: \\\"<id>\\\", repairRodata: true})",
+      "forcingChange": "B3: registered split operation owns the internal rodata derivation; parked-function follow-ups cannot invoke missing consumer scripts."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-resources/controller.ts",
+      "line": 79,
+      "baselineText": "npm run extract-assets",
+      "newText": "psx_resource_extract({})",
+      "forcingChange": "B3/C4: the installed resource tool loads project-authored plugins; a fresh consumer has no copied extraction npm task."
+    },
+    {
+      "kind": "tooling",
+      "file": ".pi/extensions/psx-decomp/autoloop/oracles.ts",
+      "line": 155,
+      "baselineText": "npm run check-all",
+      "newText": "all-container verification",
+      "baselineSource": "preimplementation",
+      "forcingChange": "E1/B3: report the internal all-container build gate, not a nonexistent consumer npm invocation; scope and surrounding output retained."
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The recovered-artifact overlay — where a verified recovery goes so the next
  * attempt can use it.
@@ -33,7 +34,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { ROOT, compileSource, rejectionFromDiagnostics } from "../decompToolchain.js";
+import { compileSource, rejectionFromDiagnostics } from "../decompToolchain.js";
 import { requireFunctionLocation } from "../../lib/symbolIndex.js";
 import { compareFunction } from "../../lib/functionOracle.js";
 import { excludedReason } from "../idiom-corpus/corpus.js";
@@ -78,7 +79,7 @@ export interface Overlay {
  */
 export function overlayRoot(): string {
   const configured = process.env["PSX_OVERLAY_ROOT"];
-  return configured ? (isAbsolute(configured) ? configured : join(ROOT, configured)) : join(ROOT, "build/recoveredOverlay");
+  return configured ? (isAbsolute(configured) ? configured : join(projectRoot(), configured)) : join(projectRoot(), "build/recoveredOverlay");
 }
 
 const manifestPath = (): string => join(overlayRoot(), "overlay.json");
@@ -133,7 +134,7 @@ export function visibleEntries(): OverlayEntry[] {
 export function overlaySourceFor(functionName: string): { path: string; text: string } | null {
   const entry = visibleEntries().find((candidate) => candidate.functionName === functionName);
   if (!entry) return null;
-  const path = isAbsolute(entry.sourcePath) ? entry.sourcePath : join(ROOT, entry.sourcePath);
+  const path = isAbsolute(entry.sourcePath) ? entry.sourcePath : join(projectRoot(), entry.sourcePath);
   if (!existsSync(path)) return null;
   const text = readFileSync(path, "utf-8");
   /* A published entry whose file no longer hashes to its manifest entry is not
@@ -201,7 +202,7 @@ export function publishRecovered(
     /* Relative to the repository when the overlay lives inside it, so the
      * manifest is the same on every machine; absolute only when a private root
      * was configured outside the tree. */
-    sourcePath: published.startsWith(`${ROOT}/`) ? published.slice(ROOT.length + 1) : published,
+    sourcePath: published.startsWith(`${projectRoot()}/`) ? published.slice(projectRoot().length + 1) : published,
     sha256: sha256(source),
     route,
     contextMode: contextMode(),

@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * coldContextEvaluation.ts — what reconstruction recovers with the recovered
  * game C withheld.
@@ -38,7 +39,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../agent/decompToolchain.js";
+
 import { writeStableJson } from "../agent/provenance.js";
 import { loadContainers, requireContainer, type Container } from "../lib/container.js";
 import { loadFunctionSpans } from "../lib/symbolIndex.js";
@@ -146,7 +147,7 @@ function sampleMatched(containers: Container[], count: number): Array<{ name: st
   const population: Array<{ name: string; containerId: string; sizeBytes: number }> = [];
   for (const container of containers) {
     for (const span of loadFunctionSpans(container)) {
-      const sourcePath = join(ROOT, container.paths.srcDir, `${span.name}.c`);
+      const sourcePath = join(projectRoot(), container.paths.srcDir, `${span.name}.c`);
       if (!existsSync(sourcePath)) continue;
       const text = readFileSync(sourcePath, "utf-8");
       if (text.includes("INCLUDE_ASM(") && text.includes(span.name)) continue;
@@ -241,7 +242,7 @@ function main(): void {
       .filter((name) => spans.has(name))
       .map((name) => ({ name, ...spans.get(name)! }));
   } else if (setName === "development") {
-    const manifestPath = join(ROOT, "configs/reconstruction/benchmark-manifest.json");
+    const manifestPath = join(projectRoot(), "configs/reconstruction/benchmark-manifest.json");
     if (!existsSync(manifestPath)) {
       console.error("no benchmark manifest; run benchmarkReconstruction.ts --freeze-manifest first");
       process.exit(2);
@@ -264,7 +265,7 @@ function main(): void {
   }
 
   const evaluation = evaluate(targets, ["warm", "cold", "family-held-out"], (line) => console.error(line));
-  const artifact = join(ROOT, "build/coldContextEvaluation.json");
+  const artifact = join(projectRoot(), "build/coldContextEvaluation.json");
   writeStableJson(artifact, evaluation);
 
   if (json) {
@@ -293,7 +294,7 @@ function main(): void {
   if (evaluation.warmOnly.length > 12) console.log(`  … and ${evaluation.warmOnly.length - 12} more`);
   console.log("");
   for (const note of evaluation.notes) console.log(`note: ${note}`);
-  console.log(`written: ${artifact.slice(ROOT.length + 1)}`);
+  console.log(`written: ${artifact.slice(projectRoot().length + 1)}`);
 }
 
 if (process.argv[1]?.endsWith("coldContextEvaluation.ts")) main();

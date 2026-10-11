@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * Family transfer: retrieval by word shape, anti-unification into a
  * substitution, AST instantiation, and verification by the byte oracle.
@@ -13,8 +14,8 @@ import { strict as assert } from "node:assert";
 import fs, { existsSync, readFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { antiUnify } from "./anti-unify.js";
 import { applyEdits, enumerateCandidates, identityEdits, planInstantiation } from "./instantiate.js";
 import { signatureFor } from "./signature.js";

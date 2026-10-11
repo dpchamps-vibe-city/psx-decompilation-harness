@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { groupHeadingOf, readGroups, siblingsOf } from "./fileGroupings.js";
 
 /** A note in the shape the real one has: prose bullets mixed into the lists. */

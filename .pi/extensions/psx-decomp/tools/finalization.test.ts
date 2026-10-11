@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { installedCommandFixture } from "../../../../tools/testing/commandFixture.js";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -13,7 +14,6 @@ import { HARNESS_ROOT } from "../../../../tools/lib/toolchain.js";
  * commands replace the expensive byte/build oracles, not their acceptance order. */
 function fixture(t: { after: (f: () => void) => void }, scenario: Record<string, unknown> = {}) {
   const root = mkdtempSync(join(tmpdir(), "finalization-sequence-"));
-  const oldPath = process.env.PATH;
   for (const dir of ["src", "include", "configs", "build", "bin"]) mkdirSync(join(root, dir));
   writeFileSync(join(root, "src/f.c"), "void f(void) {}\n");
   writeFileSync(join(root, "toolchain.json"), readFileSync(join(HARNESS_ROOT, "toolchain.json")));
@@ -28,7 +28,7 @@ function fixture(t: { after: (f: () => void) => void }, scenario: Record<string,
 const fs=require('node:fs'),path=require('node:path');
 const root=process.cwd(),s=JSON.parse(fs.readFileSync('scenario.json','utf8'));
 const events=fs.existsSync('events')?fs.readFileSync('events','utf8').trim().split('\\n'):[];
-const isBuild=path.basename(process.argv[1])==='npm';
+const isBuild=process.argv[1].includes('pipeline.ts');
 let kind=isBuild?'build':process.argv.some(a=>a.includes('contextExport.ts'))?'export':'diff';
 const count=events.filter(e=>e.startsWith(kind+':')).length+1;
 const label=kind+':'+count;fs.appendFileSync('events',label+'\\n');
@@ -40,13 +40,12 @@ else if(kind==='export') { if(s.exportFailure) process.exitCode=9;else {
   if(!s.missingOutcome) console.log('CONTEXT_EXPORT_STATUS '+JSON.stringify({status:s.skipExport?'skipped':'published',skipped:!!s.skipExport,signatureMatches:!s.skipExport||!!s.sameSignature,reason:s.skipExport?'fixture skip':undefined,signatures:['void f(void);'],localPrototypes:[]}));
   if(s.policyAfterExport) fs.writeFileSync('src/f.c','void f(void) { __asm__("nop"); }\\n');if(s.compilerAfterExport) fs.appendFileSync('include/common.h','/* changed */\\n');if(s.outputAfterExport) fs.writeFileSync('build/src/machine.c.o','changed bytes');} }
 `;
-  for (const command of ["npx", "npm"]) writeFileSync(join(root, "bin", command), script, { mode: 0o755 });
+  installedCommandFixture(t, root, Object.fromEntries(["tools/agent/diffFunc.ts", "tools/agent/contextExport.ts", "tools/build/pipeline.ts"].map(entry => [entry, script])));
   execFileSync("git", ["init", "-q"], { cwd: root }); execFileSync("git", ["add", "src", "include", "configs"], { cwd: root });
   const tree = execFileSync("git", ["write-tree"], { cwd: root, encoding: "utf8" }).trim();
   const revision = execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", tree, "-m", "fixture"], { cwd: root, encoding: "utf8" }).trim();
   execFileSync("git", ["update-ref", "HEAD", revision], { cwd: root });
-  process.env.PATH = join(root, "bin") + ":" + oldPath;
-  t.after(() => { process.env.PATH = oldPath; rmSync(root, { recursive: true, force: true }); });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   const config = structuredClone(DEFAULT_CONFIG);
   const options = { projectRoot: root, config, functionName: "f", changedFiles: ["src/f.c"], patch: "" };
   const events = () => existsSync(join(root, "events")) ? readFileSync(join(root, "events"), "utf8").trim().split("\n") : [];

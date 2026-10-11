@@ -1,20 +1,13 @@
 /** Content identity for builds and verification receipts, including executable
  * contents, configuration, environment and include search membership. */
-import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { digest, filesUnder, snapshot, writeIfChanged } from "../lib/contentCache.js";
-import { configuredTool, executablePath, loadToolchain, TOOLCHAIN_FILE, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredCppFrontend, configuredTool, loadToolchain, TOOLCHAIN_FILE, toolchainExecutables } from "../lib/toolchain.js";
 
 export function buildToolInputs(root: string): string[] {
   const paths = Object.values(toolchainExecutables(root)).flatMap(tool => tool.path ? [tool.path] : []);
-  // GCC cpp is a driver: its frontend is a separate binary that also invalidates
-  // builds. Other preprocessors may not implement this query.
-  if (loadToolchain(root).compiler.family === "gcc") {
-    const cpp = configuredTool("cpp", root);
-    const frontend = execFileSync(cpp, ["-print-prog-name=cc1"], { cwd: root, encoding: "utf8" }).trim();
-    const path = executablePath(frontend, root);
-    if (path) paths.push(path);
-  }
+  const frontend = configuredCppFrontend(root);
+  if (frontend) paths.push(frontend);
   return [...paths, TOOLCHAIN_FILE, "package.json", "package-lock.json", "tools/build/pipeline.ts", "tools/build/buildInputs.ts",
     "tools/lib/toolchain.ts", "tools/lib/contentCache.ts", "tools/agent/decompToolchain.ts", "tools/agent/preprocessedCache.ts",
     join(dirname(configuredTool("maspsx", root)), "maspsx")];

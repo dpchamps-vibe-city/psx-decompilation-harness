@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * campaignRun.ts — an unattended reconstruction campaign to a fixed point.
  *
@@ -29,7 +30,7 @@
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "./decompToolchain.js";
+
 import { writeStableJson } from "./provenance.js";
 import { loadContainers, requireContainer } from "../lib/container.js";
 import { buildEvidenceGraph, describeGraph } from "./campaign/evidence-graph.js";
@@ -112,8 +113,8 @@ function main(): void {
     notify: (line) => console.error(line),
   });
 
-  mkdirSync(join(ROOT, "build/campaign"), { recursive: true });
-  const artifact = join(ROOT, "build/campaign", "report.json");
+  mkdirSync(join(projectRoot(), "build/campaign"), { recursive: true });
+  const artifact = join(projectRoot(), "build/campaign", "report.json");
   writeStableJson(artifact, report);
 
   if (json) {
@@ -121,7 +122,7 @@ function main(): void {
     return;
   }
   console.log(renderCampaign(report).join("\n"));
-  console.log(`written: ${artifact.slice(ROOT.length + 1)}`);
+  console.log(`written: ${artifact.slice(projectRoot().length + 1)}`);
   if (report.exact.length > 0) {
     console.log("");
     console.log("Nothing was written to src/. To integrate the exact candidates, run:");

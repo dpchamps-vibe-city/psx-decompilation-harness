@@ -1,11 +1,12 @@
+import { ROOT } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCSV, type CsvEntry } from "../build/analyzeLayout.js";
-import { ROOT } from "./psxExeInfo.js";
+
 import { overlayDirectCalls, overlayFunctionSymbols, overlayFunctionsFromContext, overlaySectionSplits } from "./overlayFunctionBoundaries.js";
 import type { OverlayLayout } from "./overlayLayout.js";
 

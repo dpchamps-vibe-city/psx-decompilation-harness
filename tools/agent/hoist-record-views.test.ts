@@ -1,11 +1,12 @@
+import { ROOT, test } from "../testing/runtimeTestContext.js";
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { discoverRecordViews, measureViewExpressions, normalizeRecordViews } from "./hoist-record-views.js";
 import { enumerateHoistSites, invariantGlobals, invariantAddressLocals, hoistMasks, hoistVariant } from "./hoist-knob-sites.js";
-import { ROOT, configuredToolchainIdentity } from "./decompToolchain.js";
+import { configuredToolchainIdentity } from "./decompToolchain.js";
 
 const available = (() => { try { return configuredToolchainIdentity().compiler.sha256.length > 0; } catch { return false; } })();
 const hostAvailable = (() => { try { execFileSync("cc", ["--version"], { stdio: "ignore" }); return true; } catch { return false; } })();

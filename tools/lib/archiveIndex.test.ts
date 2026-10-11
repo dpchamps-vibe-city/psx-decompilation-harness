@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { detectArchiveIndex, readIndexEntries, SECTOR_SIZE } from "./archiveIndex.ts";
 
 function u32Table(values: number[]): Uint8Array {

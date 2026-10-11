@@ -1,7 +1,8 @@
+import { ROOT, test } from "../testing/runtimeTestContext.js";
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
+
 import {
   type RenderedWord,
   type SymbolContext,
@@ -16,7 +17,7 @@ import {
   signExtend16,
   symboliseWord,
 } from "./functionOracle.js";
-import { ROOT } from "./psxExeInfo.js";
+
 
 // --- relocation arithmetic -------------------------------------------------
 

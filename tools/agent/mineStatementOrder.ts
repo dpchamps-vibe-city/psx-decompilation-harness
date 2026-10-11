@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * mineStatementOrder.ts — read suspected SOURCE statement order off a target
  * function's emission order.
@@ -25,13 +26,7 @@
  */
 
 import { join } from "path";
-import {
-  ROOT,
-  type DisassembledInstruction,
-  assembleTarget,
-  disassembleObject,
-  normalizeFunctionName,
-} from "./decompToolchain.js";
+import { type DisassembledInstruction, assembleTarget, disassembleObject, normalizeFunctionName } from "./decompToolchain.js";
 import { BRANCH_MNEMONICS, buildBlocks, registersIn } from "./webAnalysis.js";
 
 const LOADS = new Set(["lbu", "lb", "lhu", "lh", "lw", "lwl", "lwr"]);
@@ -234,7 +229,7 @@ if (isCLI) {
       const positional = args.filter((arg) => !arg.startsWith("--"));
       if (positional.length !== 1) usage();
       name = normalizeFunctionName(positional[0]);
-      object = assembleTarget(name, join(ROOT, "build/mineStatementOrder", name));
+      object = assembleTarget(name, join(projectRoot(), "build/mineStatementOrder", name));
     }
     const reports = mineStatementOrder(disassembleObject(object));
     if (json) console.log(JSON.stringify({ function: name, blocks: reports }, null, 2));

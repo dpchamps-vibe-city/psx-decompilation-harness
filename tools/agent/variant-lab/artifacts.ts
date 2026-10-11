@@ -1,6 +1,8 @@
+import { HARNESS_ROOT } from "../../lib/runtimeContext.js";
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { copyFileSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { implementationHash, projectPath, sha256, sha256File, stableJson, writeStableJson } from "../provenance.js";
 import type { ResolvedVariantHypothesis, ToolIdentity, VariantRunManifest, VariantRunSummary } from "./types.js";
 
@@ -11,8 +13,8 @@ export { projectPath, sha256, sha256File, stableJson, stableValue, writeStableJs
 
 export function variantLabImplementationHash(): string {
   return implementationHash([
-    join(ROOT, "tools/agent/fuzzVariants.ts"),
-    join(ROOT, "tools/agent/variant-lab"),
+    join(HARNESS_ROOT, "tools/agent/fuzzVariants.ts"),
+    join(HARNESS_ROOT, "tools/agent/variant-lab"),
   ]);
 }
 

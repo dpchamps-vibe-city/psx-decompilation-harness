@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * migrateLedger.ts — bring the experiment ledgers up to schema 2, on evidence.
  *
@@ -39,18 +40,18 @@
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { ROOT } from "./decompToolchain.js";
+
 import { sha256 } from "./provenance.js";
 import { handsSymbolToAssembler } from "./cSourceGuard.js";
 import { LEDGER_SCHEMA_VERSION, readLedger, type LedgerEntry } from "./experimentLedger.js";
 import { loadContainers } from "../lib/container.js";
 
-const LEDGER_DIR = join(ROOT, "build/experimentLedger");
+const LEDGER_DIR = () => (join(projectRoot(), "build/experimentLedger"));
 
 /** Where a function's source lives today, across every container. */
 function sourceOf(functionName: string): string | null {
   for (const container of loadContainers()) {
-    const path = join(ROOT, container.paths.srcDir, `${functionName}.c`);
+    const path = join(projectRoot(), container.paths.srcDir, `${functionName}.c`);
     if (existsSync(path)) return path;
   }
   return null;
@@ -82,7 +83,7 @@ function decide(entry: LedgerEntry, currentText: string | null, currentIsStub: b
 
 function main(): void {
   const write = process.argv.includes("--write");
-  if (!existsSync(LEDGER_DIR)) {
+  if (!existsSync(LEDGER_DIR())) {
     console.log("no ledgers to migrate");
     return;
   }
@@ -92,7 +93,7 @@ function main(): void {
   let retired = 0;
   const retiredRows: string[] = [];
 
-  for (const file of readdirSync(LEDGER_DIR).filter((name) => name.endsWith(".jsonl")).sort()) {
+  for (const file of readdirSync(LEDGER_DIR()).filter((name) => name.endsWith(".jsonl")).sort()) {
     const functionName = basename(file, ".jsonl");
     const entries = readLedger(functionName);
     if (entries.length === 0) continue;
@@ -130,7 +131,7 @@ function main(): void {
     if (!changed) continue;
     files++;
     if (write) {
-      writeFileSync(join(LEDGER_DIR, file), kept.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+      writeFileSync(join(LEDGER_DIR(), file), kept.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
     }
   }
 

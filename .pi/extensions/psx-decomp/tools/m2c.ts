@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
@@ -26,8 +27,8 @@ export function registerM2cTool(pi: ExtensionAPI): void {
         runProjectCommand(
           pi,
           ctx.cwd,
-          "npx",
-          ["tsx", "tools/agent/m2cFunc.ts", params.functionName, ...(params.alternative ? ["--alternative"] : []), ...(params.stage ? ["--write"] : [])],
+          process.execPath,
+          installedScriptArgs("tools/agent/m2cFunc.ts", [params.functionName, ...(params.alternative ? ["--alternative"] : []), ...(params.stage ? ["--write"] : [])], ctx.cwd),
           signal,
           600_000,
         ),

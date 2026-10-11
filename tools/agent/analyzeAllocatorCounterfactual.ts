@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * Diagnose the minimum lifetime/allocation changes needed for target hard-register roles.
  *
@@ -14,7 +15,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { analyzeTargetSchedule } from "./analyzeTargetSchedule.js";
 import { parseRtlInstructions } from "./compiler-trace/rtl-parser.js";
 import type { CompilerTraceReport } from "./compiler-trace/types.js";
-import { ROOT, normalizeFunctionName } from "./decompToolchain.js";
+import { normalizeFunctionName } from "./decompToolchain.js";
 import { analyzeAllocatorCounterfactual } from "./allocator-counterfactual/analyze.js";
 import { renderAllocatorCounterfactual } from "./allocator-counterfactual/render-text.js";
 import { assertTargetScheduleAnalysis, type TargetScheduleAnalysis } from "./target-schedule/types.js";
@@ -67,7 +68,7 @@ function parseCli(args: string[]): CliOptions {
 }
 
 function absolute(path: string): string {
-  return isAbsolute(path) ? path : join(ROOT, path);
+  return isAbsolute(path) ? path : join(projectRoot(), path);
 }
 
 function readTrace(path: string, functionName: string): CompilerTraceReport {
@@ -95,7 +96,7 @@ function loadInputs(options: CliOptions): {
     return {
       trace: readTrace(options.tracePath, options.functionName),
       targetSchedule: readTargetSchedule(options.analysisPath, options.functionName),
-      targetScheduleArtifact: relative(ROOT, absolute(options.analysisPath)),
+      targetScheduleArtifact: relative(projectRoot(), absolute(options.analysisPath)),
     };
   }
   const targetSchedule = analyzeTargetSchedule({ functionName: options.functionName, maxInterventions: 3 });
@@ -111,8 +112,8 @@ export function runAllocatorCounterfactual(options: CliOptions) {
   const lregStage = loaded.trace.stages.find((stage) => stage.suffix === "lreg");
   if (!lregStage) throw new Error("compiler trace has no .lreg stage");
   const lregContent = readFileSync(absolute(lregStage.file), "utf8");
-  const outputDirectory = join(ROOT, "build/allocatorCounterfactual", options.functionName);
-  const outputRelative = relative(ROOT, outputDirectory);
+  const outputDirectory = join(projectRoot(), "build/allocatorCounterfactual", options.functionName);
+  const outputRelative = relative(projectRoot(), outputDirectory);
   const analysis = analyzeAllocatorCounterfactual({
     functionName: options.functionName,
     trace: loaded.trace,

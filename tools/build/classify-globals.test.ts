@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { overrideSymbolsFrom, generateM2cContextFromHeader } from "./classifyGlobals.js";
 test("an address in a comment/string does not suppress a generated declaration", () => {

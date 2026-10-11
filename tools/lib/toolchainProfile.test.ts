@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { UNKNOWN_TOOLCHAIN, detectToolchain, profileMatches } from "./toolchainProfile.ts";
 import { projectFixture, SDK_BANNER } from "../testing/projectFixture.js";
 

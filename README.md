@@ -1,16 +1,32 @@
 # PSX Decompilation Harness
 
 Pi-assisted PlayStation matching-decompilation tools, compiler diagnostics,
-build generators and resource workflows. Start a project by cloning this repo
-(or exporting it with its vendor sources), adding your assets, and configuring
-`toolchain.json` and the project metadata.
+build generators and resource workflows. Install it locally as a Pi package,
+then explicitly bootstrap the project:
 
-**Scaffolding in progress.** Supported compiler/SDK defaults are not evidence
+```sh
+pi install --local git:github.com/software-factory-vibe-city/psx-decompilation-harness@REF
+pi
+```
+
+```text
+/skill:psx-bootstrap-project          # defaults to exe
+/skill:psx-bootstrap-project library  # ELF/ar library target
+```
+
+Replace `REF` with a reviewed commit/tag; `-l` is the short form of `--local`.
+Bootstrap creates the project source scaffold, headers, input directories and
+ignore rules, then tells you what to supply. It does not fetch assets or compiler
+binaries, clear existing inputs, or overwrite project configuration. See
+[installation and bootstrap](docs/bootstrap.md) for the full contract.
+
+**Generalization in progress.** Supported compiler/SDK defaults are not evidence
 about your game. Remaining assumptions are listed in
-[docs/game-agnosticity.md](docs/game-agnosticity.md). The tools live inside the
-project tree; this is not a separately installed harness CLI.
+[docs/game-agnosticity.md](docs/game-agnosticity.md). Bootstrap creates project-owned
+scaffolding; tools run from the installed package with separate project and runtime
+roots. Cloning/exporting this repo is also supported.
 
-## Quick start
+## Clone/development quick start
 
 ```sh
 npm ci
@@ -53,7 +69,9 @@ npx tsx tools/diagnostics/headerInfo.ts /path/to/PS-X-EXE /tmp/header-info.md
 | `tools/agent/` | Matching, compiler analysis, source search and resource extraction |
 | `tools/build/` | npm pipeline, disassembly, SDK integration and build generators |
 | `tools/diagnostics/`, `tools/lib/` | Identification, progress, byte oracles and shared utilities |
-| `tools/vendor/`, `lib/` | Pinned sources and retained SDK inputs |
+| `tools/vendor/` | Pinned sources and retained reference inputs (SDK rights still need review) |
+| `extracted/`, `library-input/` | Ignored local game and original-library inputs; created by bootstrap |
+| `lib/` | Trackable selected library targets or converted ELF inputs; not bundled with the package |
 | `include/`, `configs/` | Platform support and project scaffolding |
 | `examples/btn-decompilation/` | Original project's configuration, headers and build file |
 | `notes/` | Tooling inventory only; no inherited game plans or research logs |
@@ -85,6 +103,7 @@ tests remain guarded and skipped without their inputs; strict TypeScript checkin
 still has inherited errors. Fixture checks do not establish target-byte identity.
 The locally provisioned compiler is an ignored artifact, not a distribution.
 
+- [Install and bootstrap a project](docs/bootstrap.md)
 - [Toolchain configuration and npm tasks](docs/toolchain.md)
 - [Library targets and verification scope](docs/library-targets.md)
 - [Migration inventory, pins and measured validation](docs/migration.md)

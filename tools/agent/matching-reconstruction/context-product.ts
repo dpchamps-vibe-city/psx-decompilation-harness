@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The recovered-context product — what the target's own words prove about a
  * function's interface and the storage it touches, independent of whether any
@@ -28,7 +29,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { containerTargetPath, vramToRom, type Container } from "../../lib/container.js";
 import { loadSymbolIndex, requireFunctionLocation, resolveAddress } from "../../lib/symbolIndex.js";
-import { ROOT } from "../decompToolchain.js";
+
 import { computeLiveIn, canon, decodeBytes, executeFunction, UnsupportedTarget, type ExecResult } from "./exec.js";
 import { isLoad, isStore, loadSigned, loadWidth, REGISTER_NAMES, type DecodedInsn } from "./decode.js";
 import { resolveSignature, inferSignatureRange } from "./callee-signature.js";
@@ -685,7 +686,7 @@ export function calleePrototypes(context: RecoveredContext): string[] {
 
 /** Where a function's recovered context is persisted. */
 export function contextPath(functionName: string): string {
-  return join(ROOT, "build/matchingReconstruction", functionName, "context.json");
+  return join(projectRoot(), "build/matchingReconstruction", functionName, "context.json");
 }
 
 /** Human-readable summary; the CLI's output and a bundle's context section. */

@@ -1,3 +1,4 @@
+import { ROOT, test } from "../testing/runtimeTestContext.js";
 /**
  * Near-miss repair: a residual localised to the target's own structure, and
  * the source moves that follow from it.
@@ -16,8 +17,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "./decompToolchain.js";
+
+
 import { repairReport } from "./nearMissRepair.js";
 import { reconstructFunction } from "./matching-reconstruction/engine.js";
 

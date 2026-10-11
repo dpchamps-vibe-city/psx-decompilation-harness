@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * familyTransfer.ts — find a function's family, instantiate a donor's C for
  * it, and verify every member independently.
@@ -25,7 +26,7 @@
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "./decompToolchain.js";
+
 import { writeStableJson } from "./provenance.js";
 import { buildFamilyIndex, donorsFor } from "./family-transfer/family-index.js";
 import { replayFamily, replayFamilyOf } from "./family-transfer/replay.js";
@@ -180,8 +181,8 @@ function survey(tier: SignatureTier, minimumMembers: number, json: boolean): voi
     skipped: index.skipped.length,
   };
 
-  const artifact = join(ROOT, "build/familyTransfer", `survey-${tier}.json`);
-  mkdirSync(join(ROOT, "build/familyTransfer"), { recursive: true });
+  const artifact = join(projectRoot(), "build/familyTransfer", `survey-${tier}.json`);
+  mkdirSync(join(projectRoot(), "build/familyTransfer"), { recursive: true });
   writeStableJson(artifact, { summary, families });
 
   if (json) {
@@ -210,7 +211,7 @@ function survey(tier: SignatureTier, minimumMembers: number, json: boolean): voi
     );
   }
   console.log();
-  console.log(`written: ${artifact.slice(ROOT.length + 1)}`);
+  console.log(`written: ${artifact.slice(projectRoot().length + 1)}`);
 }
 
 if (process.argv[1]?.endsWith("familyTransfer.ts")) main();

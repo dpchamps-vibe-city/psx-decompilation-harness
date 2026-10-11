@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { controlShapes, decisionTailSite } from "./control-shapes.js";
 import { field, namedChildren, parseC, type Node } from "./residual-source-search/tree-sitter-c.js";
 

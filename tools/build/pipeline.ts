@@ -1,3 +1,17 @@
+import { projectRoot, harnessRoot } from "../lib/runtimeContext.js";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { splitSdkLibs } from "./splitSdkLibs.js";
+import { runRodataDerivation } from "./deriveRodataSplits.js";
+import { generateProjectProfile } from "./genProjectProfile.js";
+import { cleanRuntime } from "../lib/runtimeCleanup.js";
+
+interface BuildInvocation { built: Set<string>; sdk: boolean; identity?: string; exporting: boolean; exported: boolean }
+const builds = new AsyncLocalStorage<BuildInvocation>();
+function invocation<T>(operation: () => T): T {
+  return builds.getStore() ? operation() : withContentMemo(() => builds.run({ built: new Set(), sdk: false, exporting: false, exported: false }, operation));
+}
+function state(): BuildInvocation { const current = builds.getStore(); if (!current) throw new Error("Build invocation missing"); return current; }
 /** npm task implementation. Existing split/analysis tools remain the owners of
  * their derivations; this module replaces Make's dependency/orchestration rules. */
 import { execFileSync, spawnSync } from "node:child_process";
@@ -5,34 +19,36 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Container, loadContainers, requireContainer, unresolvedCodeMembers } from "../lib/container.js";
-import { HARNESS_ROOT, configuredFlags, configuredFileFlags, configuredSdk, configuredTool, loadToolchain } from "../lib/toolchain.js";
-import { digest, fileDigest, filesUnder, readCache, snapshot, writeCache, writeIfChanged } from "../lib/contentCache.js";
+import { configuredFlags, configuredFileFlags, configuredSdk, configuredTool, loadToolchain } from "../lib/toolchain.js";
+import { withContentMemo, digest, fileDigest, filesUnder, readCache, snapshot, writeCache, writeIfChanged } from "../lib/contentCache.js";
 import { dependencyPaths } from "../agent/preprocessedCache.js";
 import { buildInputIdentity, refreshBuildInputs } from "./buildInputs.js";
 import { loadLibraryProject } from "../lib/project.js";
 import { runLibraryTask } from "../agent/libraryTarget.js";
 
-function command(tool: string, args: string[], root = HARNESS_ROOT, capture = false, env: NodeJS.ProcessEnv = process.env): string {
-  const result = spawnSync(tool, args, { cwd: root, env, encoding: "utf8", stdio: capture ? "pipe" : "inherit", maxBuffer: 64 * 1024 * 1024 });
+function command(tool: string, args: string[], root = projectRoot(), capture = false, env: NodeJS.ProcessEnv = process.env): string {
+  const result = spawnSync(tool, args, { cwd: root, env, encoding: "utf8", stdio: capture ? ["ignore", "pipe", "pipe"] : ["ignore", "inherit", "inherit"], maxBuffer: 64 * 1024 * 1024 });
   if (result.error) throw new Error(`${tool}: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`${tool} exited ${result.status}${capture ? `\n${result.stderr ?? ""}\n${result.stdout ?? ""}` : ""}`);
   return result.stdout ?? "";
 }
 function script(path: string, args: string[] = [], capture = false): string {
-  return command(process.execPath, ["--import", "tsx", `tools/${path}.ts`, ...args], HARNESS_ROOT, capture);
+  return command(process.execPath, currentScriptArgs(`tools/${path}.ts`, args), projectRoot(), capture);
 }
 function splat(container: Container): void {
-  command(configuredTool("splat"), ["split", container.paths.splat], HARNESS_ROOT, false, { ...process.env, SPIMDISASM_ARCHLEVEL: "1" });
+  const support = join(projectRoot(), "build/runtime-splat.yaml");
+  writeIfChanged(support, `options:\n  extensions_path: ${JSON.stringify(join(harnessRoot(), "tools/vendor/splat_ext"))}\n`);
+  command(configuredTool("splat"), ["split", container.paths.splat, support], projectRoot(), false, { ...process.env, SPIMDISASM_ARCHLEVEL: "1" });
 }
 function appendLinkIncludes(container: Container): void {
-  const ld = join(HARNESS_ROOT, container.paths.ldScript);
+  const ld = join(projectRoot(), container.paths.ldScript);
   let content = readFileSync(ld, "utf8");
   if (container.kind === "overlay") {
-    const includes = readFileSync(join(HARNESS_ROOT, `build/${container.id}/ld_includes.txt`), "utf8");
+    const includes = readFileSync(join(projectRoot(), `build/${container.id}/ld_includes.txt`), "utf8");
     for (const line of includes.split("\n").filter(Boolean)) if (!content.includes(line)) content += `\n${line}\n`;
   } else {
     for (const path of [container.paths.undefinedFuncs, container.paths.undefinedSyms, "build/dep_syms.txt", "build/lib_bss_syms.txt"]) {
-      if (!existsSync(join(HARNESS_ROOT, path))) continue;
+      if (!existsSync(join(projectRoot(), path))) continue;
       const line = `INCLUDE "${path}"`;
       if (!content.includes(line)) content += `\n${line}\n`;
     }
@@ -40,12 +56,18 @@ function appendLinkIncludes(container: Container): void {
   writeIfChanged(ld, content);
 }
 export function splitSdk(): void {
-  const config = loadToolchain();
-  script("build/splitSdkLibs", ["--write", ...(config.tools.psyq2elf ? ["--converter", configuredTool("psyq2elf")] : [])]);
+  invocation(() => {
+    if (state().sdk) return;
+    const config = loadToolchain(), sdk = configuredSdk();
+    const map = splitSdkLibs({ root: projectRoot(), sdkDir: sdk.originalDir, convertedDir: sdk.convertedDir, signatures: sdk.signatures, version: sdk.version, write: true,
+      ...(config.tools.psyq2elf ? { converter: configuredTool("psyq2elf") } : {}) });
+    console.log(`Wrote SDK ${map.version}: ${map.members.length} members, ${new Set(map.members.filter(m => m.collision).map(m => m.oPath)).size} collision-safe objects, ${map.signatures.length} signature mappings`);
+    state().sdk = true;
+  });
 }
 export function splitContainer(container: Container): void {
   if (container.kind === "overlay") {
-    refreshEngineExports();
+    refreshEngineExports(true);
     script("build/bootstrapOverlay", ["--container", container.id, "--write"]);
     splat(container);
     appendLinkIncludes(container);
@@ -73,7 +95,7 @@ export function splitContainer(container: Container): void {
 
 /** Only configured overlay C subsegments. Retired sources stay reviewable but
  * must not be compiled accidentally on a cold tree. EXE retains its flat src/. */
-export function selectedCSources(container: Container, root = HARNESS_ROOT): string[] {
+export function selectedCSources(container: Container, root = projectRoot()): string[] {
   const dir = join(root, container.paths.srcDir);
   if (container.kind === "exe") return filesUnder(dir).filter(p => dirname(p) === dir && p.endsWith(".c"));
   const yaml = readFileSync(join(root, container.paths.splat), "utf8");
@@ -90,7 +112,7 @@ function artifactCurrent(path: string, key: string): boolean {
 }
 function publishArtifact(path: string, key: string): void { writeCache(`${path}.inputs.json`, key, { outputHash: fileDigest(path) }); }
 
-export function compileObject(container: Container, source: string, root = HARNESS_ROOT, identity = buildInputIdentity(root)): string {
+export function compileObject(container: Container, source: string, root = projectRoot(), identity = buildInputIdentity(root)): string {
   source = resolve(root, source);
   const stem = basename(source, ".c");
   const output = join(root, container.paths.objDir, `${stem}.c.o`), deps = `${output}.d`;
@@ -124,20 +146,26 @@ function assembleObject(container: Container, source: string, root: string, iden
   publishArtifact(output, key);
   return output;
 }
-let exportingEngine = false;
-function refreshEngineExports(): void {
-  if (exportingEngine) return;
-  exportingEngine = true;
-  try {
-    const exe = requireContainer("exe");
-    try { buildContainer(exe); }
-    catch (error) {
-      // Never let a previously linked but now stale ELF masquerade as authority.
-      rmSync(join(HARNESS_ROOT, exe.paths.builtElf), { force: true });
-      console.warn(`note: executable does not link yet; engine export uses project symbol tables: ${String(error)}`);
-    }
-    script("build/exportEngineSymbols", ["--write"]);
-  } finally { exportingEngine = false; }
+function refreshEngineExports(allowUnlinked = false): void {
+  invocation(() => {
+    const current = state();
+    if (current.exporting || current.exported) return;
+    current.exporting = true;
+    try {
+      const exe = requireContainer("exe"), elf = join(projectRoot(), exe.paths.builtElf);
+      try { buildContainer(exe); }
+      catch (error) {
+        rmSync(elf, { force: true });
+        rmSync(join(projectRoot(), "build/engine_syms.txt"), { force: true });
+        if (!allowUnlinked) throw error;
+        console.warn(`note: executable does not link yet; fresh engine exports use configured symbol tables: ${String(error)}`);
+      }
+      const output = join(projectRoot(), "build/engine_syms.txt");
+      const key = digest(JSON.stringify({ elf: fileDigest(elf), fallback: existsSync(elf) ? undefined : snapshot(projectRoot(), [exe.paths.symbolAddrs, exe.paths.undefinedFuncs, exe.paths.undefinedSyms]) }));
+      if (!artifactCurrent(output, key)) { script("build/exportEngineSymbols", ["--write"]); publishArtifact(output, key); }
+      current.exported = true;
+    } finally { current.exporting = false; }
+  });
 }
 function linkerInputs(root: string, container: Container): string[] {
   // INCLUDEs and SDK/engine inputs are generated alongside the linker script.
@@ -148,28 +176,36 @@ function linkerInputs(root: string, container: Container): string[] {
     configuredSdk(root).convertedDir, "build/sdk"];
 }
 export function buildContainer(container: Container, retry = false): void {
+  return invocation(() => buildContainerInInvocation(container, retry));
+}
+function buildContainerInInvocation(container: Container, retry: boolean): void {
+  if (state().built.has(container.id)) return;
   if (container.kind === "exe") splitSdk();
   else refreshEngineExports();
-  if (!existsSync(join(HARNESS_ROOT, container.paths.ldScript))) throw new Error(`Missing ${container.paths.ldScript}; run npm run split -- --container ${container.id}`);
-  refreshBuildInputs(HARNESS_ROOT);
-  const identity = readFileSync(join(HARNESS_ROOT, "build/toolchain-inputs.stamp"), "utf8").trim();
-  const objects = selectedCSources(container).map(source => compileObject(container, source, HARNESS_ROOT, identity));
-  for (const source of filesUnder(join(HARNESS_ROOT, container.paths.asmDir)).filter(p => p.endsWith(".s") && !p.includes("/nonmatchings/"))) {
-    objects.push(assembleObject(container, source, HARNESS_ROOT, identity));
+  if (!existsSync(join(projectRoot(), container.paths.ldScript))) throw new Error(`Missing ${container.paths.ldScript}; run npm run split -- --container ${container.id}`);
+  if (!state().identity) {
+    refreshBuildInputs(projectRoot());
+    state().identity = readFileSync(join(projectRoot(), "build/toolchain-inputs.stamp"), "utf8").trim();
   }
-  try { script("build/deriveRodataSplits", ["--container", container.id], true); }
+  const identity = state().identity!;
+  const objects = selectedCSources(container).map(source => compileObject(container, source, projectRoot(), identity));
+  for (const source of filesUnder(join(projectRoot(), container.paths.asmDir)).filter(p => p.endsWith(".s") && !p.includes("/nonmatchings/"))) {
+    objects.push(assembleObject(container, source, projectRoot(), identity));
+  }
+  const elf = join(projectRoot(), container.paths.builtElf), bin = join(projectRoot(), container.paths.builtBin);
+  const key = digest(JSON.stringify({ identity, flags: configuredFlags("ld", container), objects, inputs: snapshot(projectRoot(), [...objects, ...linkerInputs(projectRoot(), container)]) }));
+  const linkNeeded = !artifactCurrent(elf, key);
+  try { if (linkNeeded) runRodataDerivation(["--container", container.id]); }
   catch (error) {
     if (retry) throw new Error(`Rodata attribution still inconsistent after rederivation: ${String(error)}`);
     console.log(`${container.id}: rederiving rodata attribution and rebuilding once`);
-    script("build/deriveRodataSplits", ["--container", container.id, "--write"]);
+    runRodataDerivation(["--container", container.id, "--write"]);
     splitContainer(container);
     buildContainer(container, true);
     return;
   }
-  if (container.kind === "overlay") script("build/exportEngineSymbols", ["--check"]);
-  const elf = join(HARNESS_ROOT, container.paths.builtElf), bin = join(HARNESS_ROOT, container.paths.builtBin);
-  const key = digest(JSON.stringify({ identity, flags: configuredFlags("ld", container), objects, inputs: snapshot(HARNESS_ROOT, [...objects, ...linkerInputs(HARNESS_ROOT, container)]) }));
-  if (!artifactCurrent(elf, key)) {
+  if (container.kind === "overlay" && linkNeeded) script("build/exportEngineSymbols", ["--check"]);
+  if (linkNeeded) {
     rmSync(elf, { force: true });
     command(configuredTool("ld"), [...configuredFlags("ld", container), "-T", container.paths.ldScript, "-Map", elf.replace(/\.elf$/, ".map"), "-o", elf]);
     publishArtifact(elf, key);
@@ -180,10 +216,11 @@ export function buildContainer(container: Container, retry = false): void {
     command(configuredTool("objcopy"), ["-O", "binary", elf, bin]);
     publishArtifact(bin, binaryKey);
   }
+  state().built.add(container.id);
 }
 /** Verify the entire payload, never a truncated slice or just function scores.
  * EXE headers are excluded; raw overlays are compared in their entirety. */
-export function verifyContainer(container: Container, root = HARNESS_ROOT): void {
+export function verifyContainer(container: Container, root = projectRoot()): void {
   const original = readFileSync(resolve(root, container.targetPath)), built = readFileSync(join(root, container.paths.builtBin));
   let a = original, b = built;
   if (container.kind === "exe") {
@@ -197,6 +234,21 @@ export function verifyContainer(container: Container, root = HARNESS_ROOT): void
   if (!a.equals(b)) throw new Error(`MISMATCH: ${container.id} does not match the original ${container.kind === "exe" ? "payload" : "member"}`);
   console.log(`OK: ${container.id} matches original bytes`);
 }
+/** The verification phase is separate from required build-time rodata work.
+ * Keeping this sequence explicit makes success/failure side effects testable. */
+export function verifyBuiltContainers(containers: Container[], all: boolean, root = projectRoot(), actions = {
+  verify: verifyContainer,
+  profile: () => generateProjectProfile(["--write"]),
+  rodata: runRodataDerivation,
+}): void {
+  for (const container of containers) {
+    if (!existsSync(join(root, container.paths.builtElf))) throw new Error(`${container.id}: no successful final link to verify`);
+    actions.verify(container, root);
+    if (container.kind === "exe") actions.profile();
+    if (!all) actions.rodata(["--container", container.id]);
+  }
+  if (all) actions.rodata(["--all"]);
+}
 function selection(args: string[], all = false): Container[] {
   const index = args.indexOf("--container");
   if (index >= 0 && !args[index + 1]) throw new Error("--container needs an id");
@@ -204,6 +256,9 @@ function selection(args: string[], all = false): Container[] {
   return all || args.includes("--all") ? loadContainers() : [requireContainer(index >= 0 ? args[index + 1]! : "exe")];
 }
 export function runTask(task: string, args: string[]): void {
+  return invocation(() => runTaskInInvocation(task, args));
+}
+function runTaskInInvocation(task: string, args: string[]): void {
   if (args.includes("--help")) {
     console.log(loadLibraryProject() ? `npm run ${task} -- [--all]\nLibrary targets: project.json; toolchain: toolchain.json. npm run library -- --help for member tools.` :
       `npm run ${task} -- [--container ID | --all]\nTool paths, flags, SDK and profiles: toolchain.json. No Makefile is used.\nDisassemble: --archives opts into the paired-index archive discovery adapter.`);
@@ -219,23 +274,21 @@ export function runTask(task: string, args: string[]): void {
     if (args[i] === "--container") i++;
   }
   if (task === "setup") {
-    if (existsSync(join(HARNESS_ROOT, ".git"))) command("git", ["submodule", "update", "--init", "--recursive"]);
-    // A degit export may omit gitlinks entirely: do not silently prepare an
-    // unchecked m2c. Its preparation tool reports missing/pinned inputs clearly.
-    script("build/prepareM2c", []);
-    console.log("Vendor sources ready. Provision configured cc1/binutils/Python packages; see docs/toolchain.md.");
+    script("build/prepareDependencies");
+    script("build/prepareM2c");
+    console.log("Pinned public sources prepared in the runtime cache; supply configured external compiler/binutils/Python capabilities when unavailable.");
     return;
   }
   if (task === "split-sdk-libs") { splitSdk(); return; }
   if (task === "clean") {
     if (loadLibraryProject() && args.includes("--container")) throw new Error("Libraries have members, not image containers; npm run clean removes build/ only");
-    if (!args.length || args.includes("--all")) rmSync(join(HARNESS_ROOT, "build"), { recursive: true, force: true });
+    if (!args.length || args.includes("--all")) cleanRuntime(join(projectRoot(), "build"));
     else for (const container of selection(args)) {
       if (container.kind === "exe") {
-        for (const path of ["build/asm", "build/functions", container.paths.builtElf, container.paths.builtBin, container.paths.ldScript]) rmSync(join(HARNESS_ROOT, path), { recursive: true, force: true });
-        for (const path of filesUnder(join(HARNESS_ROOT, container.paths.objDir)).filter(p => dirname(p) === join(HARNESS_ROOT, container.paths.objDir))) rmSync(path, { force: true });
+        for (const path of ["build/asm", "build/functions", container.paths.builtElf, container.paths.builtBin, container.paths.ldScript]) rmSync(join(projectRoot(), path), { recursive: true, force: true });
+        for (const path of filesUnder(join(projectRoot(), container.paths.objDir)).filter(p => dirname(p) === join(projectRoot(), container.paths.objDir))) rmSync(path, { force: true });
       }
-      else for (const path of [`build/${container.id}`, container.paths.objDir]) rmSync(join(HARNESS_ROOT, path), { recursive: true, force: true });
+      else for (const path of [`build/${container.id}`, container.paths.objDir]) rmSync(join(projectRoot(), path), { recursive: true, force: true });
     }
     return;
   }
@@ -263,20 +316,20 @@ export function runTask(task: string, args: string[]): void {
   }
   if (task === "wipe") {
     for (const container of containers) {
-      rmSync(join(HARNESS_ROOT, container.paths.symbolAddrs), { force: true });
+      rmSync(join(projectRoot(), container.paths.symbolAddrs), { force: true });
       if (container.kind === "overlay") {
-        rmSync(join(HARNESS_ROOT, container.paths.splat), { force: true });
-        rmSync(join(HARNESS_ROOT, `build/${container.id}`), { recursive: true, force: true });
-        rmSync(join(HARNESS_ROOT, container.paths.objDir), { recursive: true, force: true });
+        rmSync(join(projectRoot(), container.paths.splat), { force: true });
+        rmSync(join(projectRoot(), `build/${container.id}`), { recursive: true, force: true });
+        rmSync(join(projectRoot(), container.paths.objDir), { recursive: true, force: true });
       } else {
-        const path = join(HARNESS_ROOT, container.paths.splat);
+        const path = join(projectRoot(), container.paths.splat);
         if (existsSync(path)) {
           const lines = readFileSync(path, "utf8").split("\n"), index = lines.findIndex(l => l.trim() === "subsegments:");
           if (index < 0) throw new Error(`No subsegments in ${path}; refusing to wipe configuration`);
           writeFileSync(path, lines.slice(0, index + 1).join("\n") + "\n");
         }
-        rmSync(join(HARNESS_ROOT, "configs/disassembler_symbol_addrs.txt"), { force: true });
-        rmSync(join(HARNESS_ROOT, "build"), { recursive: true, force: true });
+        rmSync(join(projectRoot(), "configs/disassembler_symbol_addrs.txt"), { force: true });
+        cleanRuntime(join(projectRoot(), "build"));
       }
     }
     console.log("Generated configs wiped. Run npm run split -- --all, then npm run check-all.");
@@ -287,12 +340,7 @@ export function runTask(task: string, args: string[]): void {
   if (task !== "build") {
     // Overlay convergence may refresh the EXE link. Verify final images once,
     // after all builds, rather than reporting an earlier EXE as final evidence.
-    for (const container of containers) {
-      if (!existsSync(join(HARNESS_ROOT, container.paths.builtElf))) throw new Error(`${container.id}: no successful final link to verify`);
-      verifyContainer(container);
-    }
-    script("build/deriveRodataSplits", containers.length > 1 || task === "check-all" ? ["--all"] : ["--container", containers[0]!.id]);
-    if (containers.some(c => c.kind === "exe")) script("build/genProjectProfile", ["--write"]);
+    verifyBuiltContainers(containers, task === "check-all");
     if (task === "check-all") {
       const unresolved = unresolvedCodeMembers();
       console.log(`All ${containers.length} configured containers match.${unresolved.length ? ` ${unresolved.length} unresolved code members are not verified.` : ""}`);

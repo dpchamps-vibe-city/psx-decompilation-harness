@@ -1,8 +1,9 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, relative } from "path";
-import { assembleTarget, normalizeFunctionName, resolveSource, ROOT } from "./decompToolchain.js";
+import { assembleTarget, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { buildDiagnosticCompiler } from "./compiler-oracle/build.js";
 import { replayLocalAllocation, type LocalAllocationReplay } from "./compiler-oracle/local-allocation.js";
 import { compileOracleVariant, deriveOracleInterventions, instructionComparison } from "./compiler-oracle/run.js";
@@ -23,7 +24,7 @@ function usage(): never {
 }
 
 function rel(path: string): string {
-  return relative(ROOT, path).replaceAll("\\", "/");
+  return relative(projectRoot(), path).replaceAll("\\", "/");
 }
 
 function assigned(replay: LocalAllocationReplay, pseudo: number): number | undefined {
@@ -55,12 +56,12 @@ const runId = createHash("sha256").update(JSON.stringify({
   compiler: compiler.buildId,
   requests,
 })).digest("hex").slice(0, 16);
-const output = join(ROOT, "build/localAllocationOracle", functionName, "minimizer", runId);
-mkdirSync(output, { recursive: true });
-const target = assembleTarget(functionName, join(output, "target"));
+const output = () => (join(projectRoot(), "build/localAllocationOracle", functionName, "minimizer", runId));
+mkdirSync(output(), { recursive: true });
+const target = () => (assembleTarget(functionName, join(output(), "target")));
 
 function compile(id: string, forbidden: ForbiddenLocalCandidate[]): { events: CompilerOracleEvent[]; object: string; directory: string } {
-  const directory = join(output, id);
+  const directory = join(output(), id);
   const interventions: CompilerOracleInterventions = {
     scheduleEdges: [],
     forcedLocalAssignments: [],
@@ -118,7 +119,9 @@ for (let iteration = 0; iteration < 32; iteration++) {
   forbidden.push(...added);
 }
 
-const necessity = [];
+const necessity: Array<{ candidate: ForbiddenLocalCandidate; required: boolean;
+  assignments: Array<{ pseudo: number; desired: number; observed: number | undefined }>;
+  artifactDirectory: string }> = [];
 let minimalForbidden = [...forbidden];
 if (converged) {
   for (const candidate of [...forbidden]) {
@@ -142,8 +145,8 @@ if (converged) {
   finalRun = minimized;
   finalReplay = replayLocalAllocation(minimized.events, choiceRequests);
 }
-const targetComparison = instructionComparison(finalRun.object, target);
-const analysis = {
+const targetComparison = () => (instructionComparison(finalRun.object, target()));
+const analysis = () => ({
   schemaVersion: 1,
   function: functionName,
   source: rel(source),
@@ -164,26 +167,26 @@ const analysis = {
     desired: request.hardRegister,
     observed: assigned(finalReplay, request.pseudo),
   })),
-  finalTargetComparison: targetComparison,
+  finalTargetComparison: targetComparison(),
   caveats: [
     "Each exclusion is pseudo-local and diagnostic; it represents occupancy that clean C must create naturally, not a source solution.",
     "The greedy minimizer excludes only the currently selected register when the desired register remains legal, then verifies every exclusion by leave-one-out recompilation.",
     "Requests whose desired register is absent initially are delegated to the scheduler/lifetime oracle.",
   ],
-};
-writeFileSync(join(output, "analysis.json"), JSON.stringify(analysis, null, 2) + "\n");
-const lines = [
+});
+writeFileSync(join(output(), "analysis.json"), JSON.stringify(analysis(), null, 2) + "\n");
+const lines = () => ([
   `Local-allocation minimizer: ${functionName}`,
   `stock replay: ${baselineReplay.replayedChoices}/${baselineReplay.ordinaryChoices}`,
   `converged: ${converged ? "yes" : "no"}`,
   `minimal forbidden candidates: ${minimalForbidden.map((item) => `${item.pseudo}:$${item.registerName}`).join(", ") || "none"}`,
-  `target instructions at converged allocation: ${targetComparison.exact}/${targetComparison.total}`,
+  `target instructions at converged allocation: ${targetComparison().exact}/${targetComparison().total}`,
   "",
   ...iterations.map((iteration) => `iteration ${iteration.iteration}: ${iteration.assignments.map((item) => `${item.pseudo}=${item.observed ?? "spill"}/${item.desired}${item.satisfied ? "✓" : ""}`).join(" ")} add=${iteration.added.map((item) => `${item.pseudo}:$${item.registerName}`).join(",") || "-"}`),
   "",
   ...necessity.map((item) => `${item.candidate.pseudo}:$${item.candidate.registerName} required=${item.required ? "yes" : "no"}`),
   ...excludedRequests.map((item) => `pseudo ${item.pseudo}: desired $${item.registerName} requires lifetime/class change`),
   "",
-];
-writeFileSync(join(output, "summary.txt"), lines.join("\n"));
-process.stdout.write(lines.join("\n"));
+]);
+writeFileSync(join(output(), "summary.txt"), lines().join("\n"));
+process.stdout.write(lines().join("\n"));

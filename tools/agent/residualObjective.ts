@@ -1,4 +1,6 @@
 #!/usr/bin/env npx tsx
+import { comparisonDomain, compilationIdentity, semanticPath, stableHash } from "../lib/cacheIdentity.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 
 /**
  * residualObjective.ts — the iteration primitive.
@@ -19,8 +21,8 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import { ROOT, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
+import { isAbsolute, join, resolve } from "node:path";
+import { normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { type EnsuredArtifact, projectPath, renderProvenance } from "./provenance.js";
 import { priorMeasurement, recordExperiment } from "./experimentLedger.js";
 import { createHash } from "node:crypto";
@@ -58,6 +60,7 @@ interface Entry {
    * a loop that counts them separately never terminates.
    */
   objectHash: string;
+  targetHash?: string;
   /** What the scored object was derived from, and whether it was rebuilt. */
   provenance: EnsuredArtifact<{ object: string; source: string }>;
 }
@@ -90,7 +93,7 @@ function parseCli(args: string[]): CliOptions {
     } else if (argument === "--dir") {
       const value = args[++index];
       if (!value) usage("--dir needs a path");
-      const directory = isAbsolute(value) ? value : join(ROOT, value);
+      const directory = isAbsolute(value) ? value : join(projectRoot(), value);
       if (!existsSync(directory)) usage(`no such directory: ${value}`);
       for (const file of readdirSync(directory).filter((name) => name.endsWith(".c")).sort()) {
         sources.push(join(directory, file));
@@ -147,7 +150,7 @@ function score(functionName: string, label: string, source?: string): Entry {
   const artifacts = reversePipeline({
     functionName,
     replay: false,
-    ...(source ? { source, outputDirectory: join(ROOT, "build/pipelineReversal", functionName, "objective", label) } : {}),
+    ...(source ? { source, outputDirectory: join(projectRoot(), "build/pipelineReversal", functionName, "objective", label) } : {}),
   });
   const entry: Entry = {
     label,
@@ -159,6 +162,7 @@ function score(functionName: string, label: string, source?: string): Entry {
         ? relocatableOutputIdentity(readRelocatableObject(readFileSync(artifacts.objectPath)))
         : artifacts.candidate.machine.insns.map((insn) => (insn.word ?? 0).toString(16)).join(","))
       .digest("hex"),
+    targetHash: stableHash(artifacts.target.machine.insns.map(insn => insn.word ?? insn.text)),
     provenance: artifacts.candidateProvenance,
   };
   if (source) entry.source = source;
@@ -374,7 +378,12 @@ function recordAndWarn(functionName: string, entries: Entry[]): string {
     if (entry.stub) continue;
     const sourcePath = entry.source ?? resolveSource(functionName);
     const sourceText = readFileSync(sourcePath, "utf8");
-    const prior = priorMeasurement(functionName, sourceText, entry.objectHash);
+    const target = resolveFunctionTarget(functionName);
+    const dependencies = Object.entries(entry.provenance.provenance.files).filter(([p]) => /\.(h|inc)$/.test(p));
+    const domain = comparisonDomain(entry.targetHash!,
+      Object.fromEntries(dependencies.map(([p, hash]) => [semanticPath(resolve(projectRoot(), p)), hash])),
+      compilationIdentity(projectRoot(), target.flags, target.owner.kind === "library" ? target.owner.id : functionName));
+    const prior = priorMeasurement(functionName, sourceText, entry.objectHash, domain);
     if (prior.sameOutput && prior.sameOutput.sourceHash !== prior.sameSource?.sourceHash) {
       lines.push(`  ${entry.label} compiles to words already measured on ${prior.sameOutput.at.slice(0, 10)} ` +
         `from ${prior.sameOutput.source} — same experiment, different spelling`);
@@ -385,6 +394,7 @@ function recordAndWarn(functionName: string, entries: Entry[]): string {
       sourceText,
       objectPath: entry.provenance.value.object,
       outputHash: entry.objectHash,
+      comparisonDomain: domain,
       objective: entry.objective,
       matchedWords: entry.matchedWords,
       totalWords: entry.totalWords,

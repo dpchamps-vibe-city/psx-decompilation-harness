@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Project-owned GTE command encoding oracle. Discover the GAS definitions
  * included by a real common.h compile, then compile probes with the SAME
  * cpp -> configured cc1 -> maspsx -> GAS pipeline as production C. No foreign
@@ -6,14 +7,14 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { compileSource, configuredMaspsxFlags, configuredToolchainIdentity, ROOT } from "../agent/decompToolchain.js";
+import { compileSource, configuredMaspsxFlags, configuredToolchainIdentity } from "../agent/decompToolchain.js";
 import { configuredFlags, type FlagContext } from "../lib/toolchain.js";
 import { libraryContext } from "../lib/project.js";
 import { elf32SectionSizes } from "../lib/elfSections.js";
 import type { CommandEncodingEvidence, MacroTemplate, TemplateLibrary } from "./macroTemplates.js";
 
 const digest = (bytes: string | Buffer): string => createHash("sha256").update(bytes).digest("hex");
-const projectPath = (path: string): string => relative(ROOT, path).split("\\").join("/");
+const projectPath = (path: string): string => relative(projectRoot(), path).split("\\").join("/");
 export interface GasMacroDefinition { header: string; headerSha256: string; line: number; macro: string; parameters: string[] }
 export interface RepoEncodingReport {
   containerKind: FlagContext["kind"];
@@ -78,7 +79,7 @@ export function parseGasMacroDefinitions(source: string, header: string): GasMac
 /** Follow the literal .include graph emitted by the real compiler. Resolution
  * uses production cwd/-I flags. We do not infer an include from a C comment. */
 function includeClosure(assembly: string, asFlags: string[]): Array<{ path: string; source: string }> {
-  const directories = [ROOT, ...asFlags.filter(f => f.startsWith("-I")).map(f => f.slice(2))];
+  const directories = [projectRoot(), ...asFlags.filter(f => f.startsWith("-I")).map(f => f.slice(2))];
   const seen = new Set<string>(), includes: Array<{ path: string; source: string }> = [];
   function visit(source: string): void {
     for (const match of assemblyWithoutComments(source).matchAll(/^\s*\.include\s+"([^"\n]+)"\s*$/gm)) {
@@ -140,7 +141,7 @@ export function deriveRepoMacroEncodings(library: TemplateLibrary, containerKind
   if (library.templates.some(t => t.encodingEvidence.length)) throw new Error("Production encoding derivation requires raw header templates, not previously translated libraries");
   const flagContext: FlagContext = containerKind === "library" ? libraryContext(containerId!) : { kind: containerKind, ...(containerId ? { id: containerId } : {}) };
   const ownerOptions = { containerKind, ...(containerId ? { containerId } : {}) };
-  const base = join(ROOT, "build/macroIdentity/repo-encodings", containerKind, containerId ?? "default");
+  const base = join(projectRoot(), "build/macroIdentity/repo-encodings", containerKind, containerId ?? "default");
   mkdirSync(base, { recursive: true });
   const dir = mkdtempSync(join(base, "probe-"));
   const contextSource = join(dir, "context.c");

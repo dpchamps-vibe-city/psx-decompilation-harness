@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../tools/lib/installedScripts.js";
 import { basename, extname } from "node:path";
 import type { AutodecompConfig, DiffResult, GateResult, WorkMode } from "./types.ts";
 import { runCommand } from "./process.ts";
@@ -37,7 +38,7 @@ export async function runFunctionDiff(
      one ambiguity a name cannot: two overlays sharing a RAM slot. Without it
      the oracle derives the container from the name, which is right for every
      other case. */
-  const command = await runCommand("npx", ["tsx", "tools/agent/diffFunc.ts", functionName, ...(container && !loadLibraryProject(projectRoot) ? ["--container", container] : [])], {
+  const command = await runCommand(process.execPath, installedScriptArgs("tools/agent/diffFunc.ts", [functionName, ...(container && !loadLibraryProject(projectRoot) ? ["--container", container] : [])], projectRoot), {
     cwd: projectRoot,
     timeoutMs,
     maxCaptureBytes: 4 * 1024 * 1024,
@@ -83,7 +84,7 @@ export async function runResidualObjective(
   signal?: AbortSignal,
 ): Promise<ResidualReading | null> {
   try {
-    const command = await runCommand("npx", ["tsx", "tools/agent/residualObjective.ts", functionName, "--json"], {
+    const command = await runCommand(process.execPath, installedScriptArgs("tools/agent/residualObjective.ts", [functionName, "--json"], projectRoot), {
       cwd: projectRoot,
       timeoutMs,
       maxCaptureBytes: 4 * 1024 * 1024,
@@ -158,14 +159,10 @@ export interface ResidualReading {
  * container's binary had silently changed.
  */
 export async function runBuildCheck(projectRoot: string, timeoutMs = 5 * 60_000, signal?: AbortSignal, memberIds: string[] = []) {
-  // Libraries have a reconstruction backlog, not an original-object fallback.
-  // The loop guard rechecks prior verified members; a finalizer also checks the
-  // active/edited members. Only npm check-all claims whole-library completion.
-  if (loadLibraryProject(projectRoot)) {
-    const args = ["run", "library", "--", "check", ...(memberIds.length ? memberIds.flatMap(id => ["--member", id]) : ["--accepted"])];
-    return runCommand("npm", args, { cwd: projectRoot, timeoutMs, signal, maxCaptureBytes: 4 * 1024 * 1024 });
-  }
-  return runCommand("npm", ["run", "check-all"], { cwd: projectRoot, timeoutMs, signal, maxCaptureBytes: 4 * 1024 * 1024 });
+  // Full acceptance checks every configured container/member; pending library
+  // reconstruction is not permission to narrow this boundary.
+  return runCommand(process.execPath, installedScriptArgs("tools/build/pipeline.ts", ["check-all"], projectRoot),
+    { cwd: projectRoot, timeoutMs, signal, maxCaptureBytes: 4 * 1024 * 1024 });
 }
 
 function sourceNames(changedFiles: string[]): string[] {

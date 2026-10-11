@@ -17,6 +17,10 @@ policy, stop and ask rather than silently weakening the policy.
 
 ## Route by task
 
+- Scaffolding a repo after `pi install --local`: load
+  `.pi/skills/psx-bootstrap-project/SKILL.md` from the installed package. Default
+  to `exe`; use `library` only when requested. See `docs/bootstrap.md`. The
+  consumer project is the current working directory, not the package checkout.
 - Identifying unfamiliar assets or configuring a new project: load `.pi/skills/psx-identify-project/SKILL.md`.
 - Preparing m2c output to compile (autoloop `prep` role): load
   `.pi/skills/psx-prepare-function/SKILL.md`. This is preparation, not matching;

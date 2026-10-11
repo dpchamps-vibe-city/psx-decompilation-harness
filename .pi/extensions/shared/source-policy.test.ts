@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "../../../tools/testing/runtimeTestContext.js";
 import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
 import { checkSourcePolicy, isPendingStub } from "./source-policy.ts";
 

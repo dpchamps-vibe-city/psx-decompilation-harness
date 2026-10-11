@@ -1,6 +1,7 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, configuredToolchainIdentity } from "../decompToolchain.js";
+import { configuredToolchainIdentity } from "../decompToolchain.js";
 import { projectPath, sha256, stableJson, writeStableJson } from "../variant-lab/artifacts.js";
 import type { NormalizedInstruction } from "../variant-lab/types.js";
 import {
@@ -162,7 +163,7 @@ export async function runResidualSourceSearch(options: RunResidualSearchOptions)
   const toolchainHash = sha256(stableJson(configuredToolchainIdentity()));
   const implementationHash = residualImplementationHash();
   const runId = computeRunId({ functionName, sourceHash, toolchainHash, implementationHash });
-  const runRoot = options.runRootOverride ?? join(ROOT, "build/residualSourceSearch", functionName, runId);
+  const runRoot = options.runRootOverride ?? join(projectRoot(), "build/residualSourceSearch", functionName, runId);
   mkdirSync(runRoot, { recursive: true });
   const shard = WHOLE_DOMAIN;
   const jobs = options.jobs ?? defaultJobs();
@@ -574,7 +575,7 @@ function readPilotRecords(runRoot: string): {
 }
 
 export function defaultRunRoot(functionName: string, runId: string): string {
-  return join(ROOT, "build/residualSourceSearch", functionName, runId);
+  return join(projectRoot(), "build/residualSourceSearch", functionName, runId);
 }
 
 export function shardSizeFor(domain: DomainRuntime, shard: ShardSpec): bigint {
@@ -582,7 +583,7 @@ export function shardSizeFor(domain: DomainRuntime, shard: ShardSpec): bigint {
 }
 
 export function ensureProjectRelative(path: string, context: string): string {
-  const absolute = path.startsWith("/") ? path : join(ROOT, path);
+  const absolute = path.startsWith("/") ? path : join(projectRoot(), path);
   if (!existsSync(absolute)) throw new Error(`${context} not found: ${path}`);
   return absolute;
 }

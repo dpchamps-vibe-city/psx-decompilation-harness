@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The family index — every configured function grouped by the shape of its
  * original words, and the donor question answered from it.
@@ -22,7 +23,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { loadContainers, type Container } from "../../lib/container.js";
 import { loadFunctionSpans } from "../../lib/symbolIndex.js";
 import { excludedReason, type Exclusion } from "../idiom-corpus/corpus.js";
@@ -96,7 +97,7 @@ function classifySource(functionName: string, container: Container): { sourcePat
    * cold measurement still says "this function has eleven siblings", which is
    * the useful part of the retrieval even with nothing to transfer. */
   if (!warmContextAllowed()) return { excluded: "no-source" };
-  const path = join(ROOT, container.paths.srcDir, `${functionName}.c`);
+  const path = join(projectRoot(), container.paths.srcDir, `${functionName}.c`);
   if (!existsSync(path)) return { excluded: "no-source" };
   let text: string;
   try {

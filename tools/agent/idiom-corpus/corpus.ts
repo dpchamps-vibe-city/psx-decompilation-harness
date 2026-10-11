@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * corpus.ts — target assembly in, matched C out.
  *
@@ -32,7 +33,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { loadLibraryProject } from "../../lib/project.js";
 import { requireLibraryFunction } from "../../lib/libraryTargets.js";
 import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
@@ -285,17 +286,17 @@ export interface BuildOptions {
 
 /** Every function whose source is clean, matched C, with where it lives. */
 export function corpusCandidates(): Array<{ functionName: string; sourcePath: string }> {
-  const graph = loadCallGraph(ROOT);
+  const graph = loadCallGraph(projectRoot());
   const out: Array<{ functionName: string; sourcePath: string }> = [];
   const containers = loadLibraryProject() ? [] : loadContainers();
   for (const entry of graph.functions) {
     if (entry.dead || entry.handwritten === "asm") continue;
-    if (loadLibraryProject() && !isLibraryMemberVerified(requireLibraryFunction(entry.name).member, ROOT)) continue;
+    if (loadLibraryProject() && !isLibraryMemberVerified(requireLibraryFunction(entry.name).member, projectRoot())) continue;
     const relative = entry.source ?? `src/${entry.name}.c`;
-    let path = join(ROOT, relative);
+    let path = join(projectRoot(), relative);
     if (!existsSync(path)) {
       const found = containers
-        .map((container) => join(ROOT, container.paths.srcDir, `${entry.name}.c`))
+        .map((container) => join(projectRoot(), container.paths.srcDir, `${entry.name}.c`))
         .find((candidate) => existsSync(candidate));
       if (!found) continue;
       path = found;
@@ -332,10 +333,10 @@ export function loadCorpus(
   return withSymbolMetadata(() => {
     const tier = options.tier ?? 0;
     const skip = new Set(options.exclude ?? []);
-    const implementation = digest(JSON.stringify(snapshot(ROOT, ["tools/agent/idiom-corpus", "tools/agent/idiomSearch.ts",
+    const implementation = digest(JSON.stringify(snapshot(projectRoot(), ["tools/agent/idiom-corpus", "tools/agent/idiomSearch.ts",
       "tools/agent/pipeline-reversal", "tools/agent/webAnalysis.ts", "tools/lib", "tools/agent/decompToolchain.ts", "package-lock.json"],
       (p) => !p.endsWith(".test.ts"))));
-    const identities = new Map((loadLibraryProject() ? [] : loadContainers()).map((c) => [c.id, digest(JSON.stringify(snapshot(ROOT, [
+    const identities = new Map((loadLibraryProject() ? [] : loadContainers()).map((c) => [c.id, digest(JSON.stringify(snapshot(projectRoot(), [
       containerTargetPath(c), c.paths.splat, c.paths.symbolAddrs, c.paths.undefinedFuncs, c.paths.undefinedSyms,
       c.paths.asmDir, c.paths.ldScript, "build/engine_syms.txt", "build/dep_syms.txt", "build/lib_bss_syms.txt",
     ], (p) => p.endsWith(".s"))))]));
@@ -353,7 +354,7 @@ export function loadCorpus(
       const location = target.coordinate.kind === "image" ? requireFunctionLocation(candidate.functionName) : undefined;
       const originalIdentity = location ? identities.get(location.container.id) : requireLibraryFunction(candidate.functionName).member.sha256;
       const key = digest(JSON.stringify([tier, implementation, originalIdentity, location?.span ?? target.coordinate]));
-      const path = join(ROOT, "build/idiomCorpus/regions", target.owner.id, `tier${tier}`, `${candidate.functionName}.json`);
+      const path = join(projectRoot(), "build/idiomCorpus/regions", target.owner.id, `tier${tier}`, `${candidate.functionName}.json`);
       let regions = readCache<Region[]>(path, key);
       if (regions) hits++;
       else {

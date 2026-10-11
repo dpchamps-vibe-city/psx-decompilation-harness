@@ -218,7 +218,7 @@ export function buildApprovalNote(record: ParkRecord, attemptSource: string, pla
           "matched it. This is a configuration defect, not a verdict on the function or the model.",
           "The report below names the words the oracle could not resolve and the block they sit in.",
           "The usual cause is a jump table with no `.rodata` attribution in the container's splat",
-          "config: run `npx tsx tools/build/deriveRodataSplits.ts --container <id>` to see the",
+          "config: run `psx_split_project({container: \"<id>\", repairRodata: true})` to see the",
           "derivation, and the container's link rule rederives and re-splits on its own once the",
           "attribution is possible. Fix that, then re-open the function — it may well match on the",
           "attempt already preserved below.",

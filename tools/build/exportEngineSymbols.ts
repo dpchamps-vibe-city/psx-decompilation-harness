@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * exportEngineSymbols.ts — the PS-X EXE's symbol table, as absolute definitions.
  *
@@ -24,7 +25,7 @@
 import { execFileSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { ROOT } from "../lib/psxExeInfo.js";
+
 import {
   EXE_CONTAINER_ID,
   containerPath,
@@ -103,7 +104,7 @@ if (symbols.length === 0) {
  * would give an overlay link two definitions of the same address — one of them
  * the wrong one.
  */
-const overlays = loadContainers().filter((c) => c.kind === "overlay");
+const overlays = () => (loadContainers().filter((c) => c.kind === "overlay"));
 
 /** splat names an anonymous symbol after its address; a real name outranks that. */
 const GENERATED_NAME = /^(?:D|B|func|jtbl|T|_)_?[0-9A-Fa-f]{8}$/;
@@ -131,7 +132,7 @@ function betterName(a: string, b: string): string {
 const byAddress = new Map<number, ExportedSymbol>();
 for (const symbol of symbols) {
   if (symbol.address < 0x80000000 || symbol.address >= 0x80200000) continue;
-  if (overlays.some((container) => containsVram(container, symbol.address))) continue;
+  if (overlays().some((container) => containsVram(container, symbol.address))) continue;
   const existing = byAddress.get(symbol.address);
   if (!existing) {
     byAddress.set(symbol.address, symbol);
@@ -175,12 +176,12 @@ const provenance = [
   "",
 ].join("\n");
 
-const outPath = join(ROOT, ENGINE_EXPORT_PATH);
+const outPath = () => (join(projectRoot(), ENGINE_EXPORT_PATH));
 
 if (check) {
   /* A stale export links cleanly and calls the wrong function, so staleness has
      to fail the build rather than be reported. */
-  const current = existsSync(outPath) ? readFileSync(outPath, "utf-8") : null;
+  const current = existsSync(outPath()) ? readFileSync(outPath(), "utf-8") : null;
   if (current === lines) {
     console.log(`${ENGINE_EXPORT_PATH} is current (${exported.length} symbols)`);
     process.exit(0);
@@ -195,9 +196,9 @@ if (check) {
 }
 
 if (write) {
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, lines);
-  writeFileSync(`${outPath.replace(/\.txt$/, "")}.provenance.txt`, provenance);
+  mkdirSync(dirname(outPath()), { recursive: true });
+  writeFileSync(outPath(), lines);
+  writeFileSync(`${outPath().replace(/\.txt$/, "")}.provenance.txt`, provenance);
   console.log(
     `Wrote ${ENGINE_EXPORT_PATH}: ${exported.length} engine symbols from ${source} ` +
       `(${aliasesDropped} alias or out-of-scope symbol(s) dropped)`

@@ -1,9 +1,10 @@
+import { projectRoot } from "./runtimeContext.js";
 /** Format adapters present one function/TU contract to the matching tools.
  * Coordinates and acceptance scope stay explicit: a section offset is not VRAM.
  * Original assembly remains INCLUDE_ASM-backed until replaced with recovered C. */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
-import { HARNESS_ROOT, type FlagContext } from "./toolchain.js";
+import { type FlagContext } from "./toolchain.js";
 import { EXE_CONTAINER_ID, containerOfSymbol, loadContainers, symbolPrefix, type Container } from "./container.js";
 import { loadFunctionSpans } from "./symbolIndex.js";
 import { libraryContext, loadLibraryProject } from "./project.js";
@@ -31,14 +32,14 @@ export interface FunctionTarget {
 }
 
 /** Image compatibility lookup. Unconfigured fixtures retain the old src/ layout. */
-export function imageContainerFor(name: string, root = HARNESS_ROOT): Container | null {
+export function imageContainerFor(name: string, root = projectRoot()): Container | null {
   try {
     const containers = loadContainers(root);
     return containerOfSymbol(name, containers) ?? containers.find(c => c.id === EXE_CONTAINER_ID) ?? null;
   } catch { return null; }
 }
 
-export function libraryFunctionTarget(member: LibraryMember, fn: LibraryMember["functions"][number], root = HARNESS_ROOT): FunctionTarget {
+export function libraryFunctionTarget(member: LibraryMember, fn: LibraryMember["functions"][number], root = projectRoot()): FunctionTarget {
   const project = loadLibraryProject(root)!;
   const folder = `build/libraries/nonmatchings/${member.id}`;
   return { key: libraryTargetKey(member, fn.name), symbol: fn.name, owner: { id: member.id, kind: "library" }, source: member.source,
@@ -80,7 +81,7 @@ function imageFunctionTarget(name: string, root: string): FunctionTarget {
     capabilities: { linkedImageAnalysis: true, functionInstructionView: true, automaticSingleStubStaging: true } };
 }
 
-export function resolveFunctionTarget(value: string, root = HARNESS_ROOT): FunctionTarget {
+export function resolveFunctionTarget(value: string, root = projectRoot()): FunctionTarget {
   if (loadLibraryProject(root)) {
     const { member, fn } = requireLibraryFunction(value, root);
     return libraryFunctionTarget(member, fn, root);
@@ -91,7 +92,7 @@ export function resolveFunctionTarget(value: string, root = HARNESS_ROOT): Funct
 }
 
 /** Context/flag ownership for preprocessing an arbitrary live source path. */
-export function sourceFlagContext(source: string, root = HARNESS_ROOT): FlagContext | undefined {
+export function sourceFlagContext(source: string, root = projectRoot()): FlagContext | undefined {
   const path = relative(root, resolve(root, source)).replaceAll("\\", "/");
   if (loadLibraryProject(root)) {
     const member = libraryMembers(root).find(m => m.source === path);
@@ -100,7 +101,7 @@ export function sourceFlagContext(source: string, root = HARNESS_ROOT): FlagCont
   return imageContainerFor(basename(source).replace(/\.c$/, ""), root) ?? undefined;
 }
 
-export function requireTargetCapability(name: string, capability: keyof FunctionTarget["capabilities"], root = HARNESS_ROOT): FunctionTarget {
+export function requireTargetCapability(name: string, capability: keyof FunctionTarget["capabilities"], root = projectRoot()): FunctionTarget {
   const target = resolveFunctionTarget(name, root);
   if (!target.capabilities[capability]) throw new Error(`${capability} is unavailable for ${target.key}; use the preparation handoff and ${target.verification.mode} report`);
   return target;

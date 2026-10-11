@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { chooseParkAttempt } from "./best-attempt.ts";
 import { recordExperiment } from "../../../../tools/agent/experimentLedger.ts";
 import type { ResidualObjective } from "../../../../tools/agent/pipeline-reversal/objective.ts";

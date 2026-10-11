@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runProjectCommand, validateFunctionName } from "./shared.ts";
@@ -14,11 +15,11 @@ export function registerAnalyzeTargetScheduleTool(pi: ExtensionAPI): void {
     }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       validateFunctionName(params.functionName);
-      const args = ["tsx", "tools/agent/analyzeTargetSchedule.ts", params.functionName];
+      const args = [params.functionName];
       if (params.block !== undefined) args.push("--block", String(params.block));
       if (params.maxInterventions !== undefined) args.push("--max-interventions", String(params.maxInterventions));
       onUpdate?.({ content: [{ type: "text", text: `Analyzing target schedule for ${params.functionName}...` }], details: {} });
-      return runProjectCommand(pi, ctx.cwd, "npx", args, signal, 120_000);
+      return runProjectCommand(pi, ctx.cwd, process.execPath, installedScriptArgs("tools/agent/analyzeTargetSchedule.ts", args, ctx.cwd), signal, 120_000);
     },
   });
 }

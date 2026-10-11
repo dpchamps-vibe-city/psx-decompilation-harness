@@ -186,7 +186,8 @@ export function verifyManifest(store: Store, m: Manifest, full = true, registry:
 }
 
 export async function extractAssets(project: string, request: Request = {}, signal?: AbortSignal, progress?: (info: Record<string, unknown>) => void, options: ExtractionOptions = {}): Promise<Record<string, unknown>> {
-  const store = new Store(project), registry = options.registry ?? PARSERS, fingerprints = options.fingerprints ?? parserFingerprints(registry), engine = engineFingerprints(), counts = stats();
+  const installed = await (await import("./project-parsers.js")).projectParsers(project);
+  const store = new Store(project), registry = options.registry ?? installed.registry, fingerprints = options.fingerprints ?? (options.registry ? parserFingerprints(registry) : installed.fingerprints), engine = engineFingerprints(), counts = stats();
   const contract = engine.find(file => file.path.endsWith("/pipeline.ts"))!.hash, memory = new Map<string, unknown>();
   if (fingerprints.length !== registry.parsers.length || registry.parsers.some(p => !fingerprints.some(f => f.id === p.id && f.format === p.format && f.version === p.version && /^[a-f0-9]{64}$/.test(f.hash)))) throw new Error("Invalid parser dependency identities");
   return store.lock("extraction", async () => {
@@ -291,7 +292,7 @@ export async function extractAssets(project: string, request: Request = {}, sign
     m.assets = presentationPlan(m, registry); sortManifest(m);
     verifyManifest(store, m, Boolean(request.fullVerify), registry, counts);
     await options.beforePublish?.(); signal?.throwIfAborted(); validateInputs(store, m);
-    if (canonical(engineFingerprints()) !== canonical(engine) || (!options.fingerprints && canonical(parserFingerprints(registry)) !== canonical(fingerprints))) throw new Error("Extractor/parser implementation changed during extraction");
+    if (canonical(engineFingerprints()) !== canonical(engine) || (!options.fingerprints && canonical(options.registry ? parserFingerprints(registry) : (await (await import("./project-parsers.js")).projectParsers(project)).fingerprints) !== canonical(fingerprints))) throw new Error("Extractor/parser implementation changed during extraction");
     await presentAssets(store, m, signal, options.publicationStep);
     let migration: Record<string, unknown> | undefined;
     if (request.migrateLegacy) { const { migrateLegacy } = await import("./migration.ts"); migration = await migrateLegacy(store, signal); }
@@ -306,8 +307,9 @@ export async function executeResource(operation: Operation, project: string, req
   const store = new Store(project);
   if (operation === "verify") return store.lock("extraction", async () => {
     const m = store.read<Manifest>("manifest.json"), counts = stats();
-    if (canonical(m.engine) !== canonical(engineFingerprints()) || canonical(m.parsers) !== canonical(parserFingerprints())) throw new Error("Extractor/parser implementation drift; rerun extract-assets");
-    verifyManifest(store, m, true, PARSERS, counts); verifyPresentation(store, m);
+    const installed = await (await import("./project-parsers.js")).projectParsers(project);
+    if (canonical(m.engine) !== canonical(engineFingerprints()) || canonical(m.parsers) !== canonical(installed.fingerprints)) throw new Error("Extractor/parser implementation drift; use psx_resource_extract");
+    verifyManifest(store, m, true, installed.registry, counts); verifyPresentation(store, m);
     return { outcome: "validated", manifestHash: hash(canonical(m) + "\n"), statistics: counts };
   });
   // Focused investigation works on original bytes alone. It never creates an

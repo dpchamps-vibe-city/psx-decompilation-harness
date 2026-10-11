@@ -1,3 +1,5 @@
+import { contextForProject, inRuntimeContext } from "../lib/runtimeContext.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * contextExport.ts — Extract function signatures from decompiled C files into the m2c context
  *
@@ -58,7 +60,7 @@ import { writeIfChanged } from "../lib/contentCache.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
 import { PREAMBLE_TYPES } from "./sdkTypes.js";
 
-const ROOT = new URL("../..", import.meta.url).pathname;
+
 
 const SDK_TYPES_HEADER = "include/sdk_types.h";
 const FUNCTIONS_HEADER = "include/functions.h";
@@ -177,7 +179,7 @@ function readExistingHeader(headerPath: string): Map<string, string> {
  * Resolve the type definitions the signatures require, and report which
  * signature pulled in any type that could not be resolved.
  */
-export function resolveContextTypes(
+function resolveContextTypesImpl(
   rootDir: string,
   signatures: Map<string, string>,
   catalog = scopedTypeCatalog(rootDir),
@@ -225,7 +227,7 @@ function renderFunctionsHeader(signatures: Map<string, string>): string {
  * not functions.h does, so a per-file check would pass on exactly the
  * configuration that is broken.
  */
-export function verifyContextParses(
+function verifyContextParsesImpl(
   rootDir: string,
   container: Container = requireContainer(EXE_CONTAINER_ID, rootDir),
 ): { ok: boolean; skipped?: string; diagnostic?: string } {
@@ -279,7 +281,7 @@ export function verifyContextParses(
  * tool project-wide. On failure both files are restored and the error is
  * raised: this must never return having left a context its consumer rejects.
  */
-export function writeContext(
+function writeContextImpl(
   rootDir: string,
   signatures: Map<string, string>,
   container: Container = requireContainer(EXE_CONTAINER_ID, rootDir),
@@ -339,9 +341,9 @@ export function writeContext(
  * Export context for a single function. Returns extracted signatures.
  * This is the entry point used by the orchestrator.
  */
-export function exportContext(
+function exportContextImpl(
   funcName: string,
-  rootDir: string = ROOT,
+  rootDir: string = projectRoot(),
   container?: Container,
 ): ExportResult {
   if (loadLibraryProject(rootDir)) return exportRelocatableContext(funcName, rootDir);
@@ -424,8 +426,8 @@ function collectAllSignatures(
 /**
  * Export context for all decompiled (non-stub) C files in src/.
  */
-export function exportAll(
-  rootDir: string = ROOT,
+function exportAllImpl(
+  rootDir: string = projectRoot(),
   containers?: Container[],
 ): { exported: string[]; skipped: string[] } {
   if (loadLibraryProject(rootDir)) return exportAllRelocatableContexts(rootDir);
@@ -493,6 +495,17 @@ export function parseContextExportArgs(args: string[]): ContextExportArgs {
   };
 }
 
+
+export const resolveContextTypes: typeof resolveContextTypesImpl = (...args) => inRuntimeContext(contextForProject(args[0] ?? projectRoot()), () => resolveContextTypesImpl(...args));
+
+export const verifyContextParses: typeof verifyContextParsesImpl = (...args) => inRuntimeContext(contextForProject(args[0] ?? projectRoot()), () => verifyContextParsesImpl(...args));
+
+export const writeContext: typeof writeContextImpl = (...args) => inRuntimeContext(contextForProject(args[0] ?? projectRoot()), () => writeContextImpl(...args));
+
+export const exportContext: typeof exportContextImpl = (...args) => inRuntimeContext(contextForProject(args[1] ?? projectRoot()), () => exportContextImpl(...args));
+
+export const exportAll: typeof exportAllImpl = (...args) => inRuntimeContext(contextForProject(args[0] ?? projectRoot()), () => exportAllImpl(...args));
+
 if (process.argv[1]?.endsWith("contextExport.ts")) {
   const { dryRun, all, containerId, funcName } = parseContextExportArgs(process.argv.slice(2));
 
@@ -503,18 +516,18 @@ if (process.argv[1]?.endsWith("contextExport.ts")) {
   }
 
   try {
-    if (loadLibraryProject(ROOT)) {
+    if (loadLibraryProject(projectRoot())) {
       if (containerId) throw new Error("Use the member-qualified target key instead of --container");
-      if (all) console.log(JSON.stringify(exportAllRelocatableContexts(ROOT, dryRun)));
+      if (all) console.log(JSON.stringify(exportAllRelocatableContexts(projectRoot(), dryRun)));
       else {
-        const result = exportRelocatableContext(funcName!, ROOT, dryRun);
+        const result = exportRelocatableContext(funcName!, projectRoot(), dryRun);
         if (!dryRun) console.log(CONTEXT_EXPORT_STATUS + JSON.stringify(result));
         if (result.skipped) { console.log(`Skipped: ${result.reason}`); process.exitCode = 1; }
       }
     } else if (all) {
       if (dryRun) {
-        const { signatures } = collectAllSignatures(ROOT, requireContainer(containerId ?? EXE_CONTAINER_ID));
-        const { resolution, defs } = resolveContextTypes(ROOT, signatures);
+        const { signatures } = collectAllSignatures(projectRoot(), requireContainer(containerId ?? EXE_CONTAINER_ID));
+        const { resolution, defs } = resolveContextTypes(projectRoot(), signatures);
         console.log(renderSdkTypesHeader(resolution, defs));
         console.log(renderFunctionsHeader(signatures));
         console.log(
@@ -522,7 +535,7 @@ if (process.argv[1]?.endsWith("contextExport.ts")) {
           `${resolution.unresolved.length} unresolved (dry run, nothing written)`,
         );
       } else {
-        const result = exportAll(ROOT, containerId ? [requireContainer(containerId)] : loadContainers());
+        const result = exportAll(projectRoot(), containerId ? [requireContainer(containerId)] : loadContainers());
         console.log(`Exported ${result.exported.length} function(s), skipped ${result.skipped.length} stub(s)`);
         if (result.exported.length > 0) {
           console.log(`Updated ${SDK_TYPES_HEADER} and each container's function header`);
@@ -530,7 +543,7 @@ if (process.argv[1]?.endsWith("contextExport.ts")) {
       }
     } else {
       const location = requireFunctionLocation(funcName!, containerId);
-      const cFile = join(ROOT, location.container.paths.srcDir, `${funcName}.c`);
+      const cFile = join(projectRoot(), location.container.paths.srcDir, `${funcName}.c`);
       const sigs = extractSignatures(cFile);
 
       for (const sig of sigs) {
@@ -540,7 +553,7 @@ if (process.argv[1]?.endsWith("contextExport.ts")) {
       if (dryRun) {
         console.log(`(dry run, nothing written)`);
       } else {
-        const result = exportContext(funcName!, ROOT, location.container);
+        const result = exportContext(funcName!, projectRoot(), location.container);
         console.log(CONTEXT_EXPORT_STATUS + JSON.stringify(result));
         if (result.skipped && result.reason !== "no function definitions (stub?)") process.exitCode = 1;
         if (!result.skipped) {

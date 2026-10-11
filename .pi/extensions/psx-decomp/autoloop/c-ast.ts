@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import { runCommand } from "../../shared/process.ts";
 import type { CSourceReport } from "../../../../tools/agent/cSourceGuard.ts";
 
@@ -26,7 +27,7 @@ const UNAVAILABLE = (reason: string): SourceFacts => ({
 });
 
 export async function inspectSource(projectRoot: string, path: string): Promise<SourceFacts> {
-  const result = await runCommand("npx", ["tsx", "tools/agent/cSourceGuard.ts", path], {
+  const result = await runCommand(process.execPath, installedScriptArgs("tools/agent/cSourceGuard.ts", [path], projectRoot), {
     cwd: projectRoot,
     timeoutMs: 120_000,
   });

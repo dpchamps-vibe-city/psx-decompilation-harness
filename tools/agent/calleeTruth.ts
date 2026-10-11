@@ -1,4 +1,6 @@
 #!/usr/bin/env npx tsx
+import { configuredSdkHeaders } from "../lib/toolchain.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * calleeTruth.ts — confront the declarations a translation unit makes about
  * its callees with the evidence that can refute them.
@@ -41,22 +43,10 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import {
-  ROOT,
-  assembleTarget,
-  disassembleObject,
-  normalizeFunctionName,
-  preprocessOnly,
-  resolveSource,
-  sourceDirFor,
-  sourcePathFor,
-  type DisassembledInstruction,
-  configuredCppFlags,
-  compileSource,
-} from "./decompToolchain.js";
+import { assembleTarget, disassembleObject, normalizeFunctionName, preprocessOnly, resolveSource, sourceDirFor, sourcePathFor, type DisassembledInstruction, configuredCppFlags, compileSource } from "./decompToolchain.js";
 import { analyzeFrame, analyzeRegisterParameters, analyzeReturnValue, maximumArity, minimumArity, memoryOperand } from "./frameMap.js";
 import { BRANCH_MNEMONICS, defUse } from "./webAnalysis.js";
 import { originalIndex } from "./type-propagation/graph.js";
@@ -339,7 +329,7 @@ export interface Witness {
 
 /** Project-relative inside the repository, absolute outside it. */
 export function displayPath(path: string): string {
-  const inside = relative(ROOT, path);
+  const inside = relative(projectRoot(), path);
   return inside.startsWith("..") ? path : inside;
 }
 
@@ -371,29 +361,29 @@ export function sdkPrototypes(owner?: string): Map<string, Prototype> {
 }
 function buildSdkPrototypes(owner?: string): Map<string, Prototype> {
   const project = loadLibraryProject();
-  const references = project?.headers.reference ?? ["include/psyq"];
-  const headers = [...new Set(references.flatMap(p => headersUnder(join(ROOT, p))))];
+  const references = project?.headers.reference ?? configuredSdkHeaders();
+  const headers = [...new Set(references.flatMap(p => headersUnder(resolve(projectRoot(), p))))];
   const flags = configuredFlags("cpp", owner ? resolveFunctionTarget(owner).flags : project ? libraryContext("") : undefined);
-  const identity = digest(JSON.stringify([flags, preprocessingTools(), snapshot(ROOT, [...references, "include", "tools/agent/calleeTruth.ts", "tools/agent/sdkTypes.ts",
+  const identity = digest(JSON.stringify(["sdk-prototypes-v2", flags, preprocessingTools(), snapshot(projectRoot(), [...references, "include", "tools/agent/calleeTruth.ts", "tools/agent/sdkTypes.ts",
     "tools/agent/preprocessedCache.ts", "tools/agent/residual-source-search/tree-sitter-c.ts", "tools/vendor/tree-sitter-c", "package-lock.json",
     preprocessingTools().tools.cpp], (p) => !/include\/(?:functions\.h|sdk_types\.h|overlays\/)/.test(p))]));
-  const fresh = (observed: Record<string, string>) => JSON.stringify(observed) === JSON.stringify(snapshot(ROOT, Object.keys(observed)));
+  const fresh = (observed: Record<string, string>) => JSON.stringify(observed) === JSON.stringify(snapshot(projectRoot(), Object.keys(observed)));
   if (sdkIndexCache?.identity === identity && fresh(sdkIndexCache.observed)) return structuredClone(sdkIndexCache.index);
-  const cache = join(ROOT, "build/cache/sdk-prototypes.json");
+  const cache = join(projectRoot(), "build/cache/sdk-prototypes.json");
   const hit = readCache<{ index: Array<[string, Prototype]>; observed: Record<string, string> }>(cache, identity);
   if (hit && fresh(hit.observed)) { sdkIndexCache = { identity, index: new Map(hit.index), observed: hit.observed }; return structuredClone(sdkIndexCache.index); }
   const index = new Map<string, Prototype>();
   const dependencies = new Set<string>();
   for (const header of headers) {
-    const where = relative(ROOT, header);
-    const processed = cachedPreprocess(header, ROOT, flags);
+    const where = relative(projectRoot(), header);
+    const processed = cachedPreprocess(header, projectRoot(), flags);
     for (const path of processed.dependencies) dependencies.add(path);
     const scope = scopeFromPreprocessed(processed.text);
     for (const prototype of prototypesIn(scope.source, where, scope.lineOf)) {
       if (!index.has(prototype.name)) index.set(prototype.name, prototype);
     }
   }
-  const observed = snapshot(ROOT, [...dependencies]);
+  const observed = snapshot(projectRoot(), [...dependencies]);
   sdkIndexCache = { identity, index, observed };
   writeCache(cache, identity, { index: [...index], observed });
   return structuredClone(index);
@@ -410,7 +400,7 @@ function definesFunction(text: string, callee: string): boolean {
  * A definition is a stronger witness than any declaration of the same
  * function, because it is the thing the declaration is supposed to describe.
  */
-export function definitionPrototype(callee: string, root = ROOT): Prototype | undefined {
+export function definitionPrototype(callee: string, root = projectRoot()): Prototype | undefined {
   /* Source can change inside an interactive process. Never cache a prototype
      solely by symbol name; preparation must observe the defining source now. */
   return computeDefinitionPrototype(callee, root);
@@ -1114,7 +1104,7 @@ function main(): void {
   const positional = args.filter((a, i) => !a.startsWith("--") && !(srcFlag >= 0 && i === srcFlag + 1));
   if (args.includes("--audit-definitions")) {
     if (positional.length || srcFlag >= 0) throw new Error("--audit-definitions does not accept a function or --src");
-    const scratch = join(ROOT, "build/calleeTruth/census");
+    const scratch = join(projectRoot(), "build/calleeTruth/census");
     mkdirSync(scratch, { recursive: true });
     let lastProgress = 0;
     const report = auditDefinitions(scratch, args.includes("--audit-callers"), (processed, total, partial) => {
@@ -1136,7 +1126,7 @@ function main(): void {
   }
 
   const name = normalizeFunctionName(positional[0]!);
-  const scratch = join(ROOT, "build/calleeTruth", name);
+  const scratch = join(projectRoot(), "build/calleeTruth", name);
   mkdirSync(scratch, { recursive: true });
   try {
     const report = auditCallees(name, resolveSource(name, srcOverride), scratch);

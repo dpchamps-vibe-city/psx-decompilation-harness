@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { projectRoot } from "../../lib/runtimeContext.js";
 import { executeResource } from "./pipeline.ts";
 import { readRequest } from "./request-io.ts";
 import { safePath } from "./storage.ts";
@@ -88,13 +89,13 @@ export async function resourceCli(operation: Operation, args: string[]): Promise
   const stop = (): void => controller.abort(new Error("Extraction cancelled"));
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
   try {
-    const direct = readRequest(process.cwd(), args);
-    const parsed = direct ? { request: direct, help: false, cancel: false } : parseArguments(args, process.cwd());
+    const direct = readRequest(projectRoot(), args);
+    const parsed = direct ? { request: direct, help: false, cancel: false } : parseArguments(args, projectRoot());
     if (parsed.help) { console.log(HELP); return; }
     if (parsed.cancel) throw new Error("CLI cancellation uses SIGINT/SIGTERM");
     const selected = "operation" in parsed ? parsed.operation ?? operation : operation;
     validateRequest(selected, parsed.request);
-    const result = await executeResource(selected, process.cwd(), parsed.request, controller.signal, info => { if (direct) console.log(JSON.stringify({ type: "progress", ...info })); });
+    const result = await executeResource(selected, projectRoot(), parsed.request, controller.signal, info => { if (direct) console.log(JSON.stringify({ type: "progress", ...info })); });
     console.log(direct ? JSON.stringify({ type: "result", result }) : JSON.stringify(result, null, 2));
   } catch (error) { console.error(String(error)); process.exitCode = 1; }
   finally { process.off("SIGINT", stop); process.off("SIGTERM", stop); }

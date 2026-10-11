@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { tileMacroFunction } from "../diagnostics/macroTiler.js";
 import { extractMacroTemplates } from "../diagnostics/macroTemplates.js";
 import { macroIdentityFindings, detectBackendPacket, detectLoopIdiom, detectLoopNesting, detectParamResidence, detectSearchDomain, phonyFindingsFrom, premiseSurvivalFrom, type TargetFacts } from "./triage.js";

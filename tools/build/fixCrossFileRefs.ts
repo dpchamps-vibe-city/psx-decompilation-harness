@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * fixCrossFileRefs.ts
  *
@@ -21,18 +22,18 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { loadPsxExeInfo, requireSectionLayout, ROOT, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, requireSectionLayout, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 const _layout = requireSectionLayout();
-const ASM_DIR = join(ROOT, "build/asm");
+const ASM_DIR = () => (join(projectRoot(), "build/asm"));
 const SYMBOLS_PATH = exeSymbolAddrsPath();
 
-const LOAD_ADDR = _info.loadAddr;
-const HEADER_SIZE = _info.payloadOffset;
-const TEXT_START = _layout.textStart - _info.payloadOffset + _info.loadAddr;
-const TEXT_END = _layout.dataStart - _info.payloadOffset + _info.loadAddr;
+const LOAD_ADDR = () => (_info().loadAddr);
+const HEADER_SIZE = () => (_info().payloadOffset);
+const TEXT_START = () => (_layout.textStart - _info().payloadOffset + _info().loadAddr);
+const TEXT_END = () => (_layout.dataStart - _info().payloadOffset + _info().loadAddr);
 
 // Patterns for labels defined in a file
 // glabel/alabel = global, plain "  label:" or "  .Laddr:" = local
@@ -94,16 +95,16 @@ function scanFile(path: string): {
 }
 
 // Scan all .s files (top-level + nonmatchings subdirectories)
-const topFiles = readdirSync(ASM_DIR)
+const topFiles = () => (readdirSync(ASM_DIR())
   .filter((f) => f.endsWith(".s"))
-  .map((f) => join(ASM_DIR, f));
+  .map((f) => join(ASM_DIR(), f)));
 
-const nonmatchDir = join(ASM_DIR, "nonmatchings");
+const nonmatchDir = () => (join(ASM_DIR(), "nonmatchings"));
 let nmFiles: string[] = [];
 try {
-  const subdirs = readdirSync(nonmatchDir);
+  const subdirs = readdirSync(nonmatchDir());
   for (const sub of subdirs) {
-    const subPath = join(nonmatchDir, sub);
+    const subPath = join(nonmatchDir(), sub);
     try {
       const sFiles = readdirSync(subPath)
         .filter((f) => f.endsWith(".s"))
@@ -113,16 +114,16 @@ try {
   }
 } catch {}
 
-const files = [...topFiles, ...nmFiles];
+const files = () => ([...topFiles(), ...nmFiles]);
 
-console.log(`Scanning ${files.length} assembly files...`);
+console.log(`Scanning ${files().length} assembly files...`);
 
 // Build maps: symbol -> defining file, symbol -> is global
 const definedIn = new Map<string, string>();
 const isGlobal = new Map<string, boolean>();
 const allRefs = new Map<string, Set<string>>(); // symbol -> set of files referencing it
 
-for (const file of files) {
+for (const file of files()) {
   const { globalDefs, localDefs, refs } = scanFile(file);
 
   for (const sym of globalDefs) {
@@ -289,7 +290,7 @@ console.log(`\nUpdated ${SYMBOLS_PATH}`);
 
 // Also add c entries to splat.yaml for new function symbols
 const SPLAT_YAML = exeSplatYamlPath();
-const PAYLOAD_OFFSET = _info.payloadOffset;
+const PAYLOAD_OFFSET = () => (_info().payloadOffset);
 
 let yamlContent = readFileSync(SPLAT_YAML, "utf-8");
 const yamlLines = yamlContent.split("\n");
@@ -306,7 +307,7 @@ for (const line of yamlLines) {
 const yamlInserts: { rom: number; name: string }[] = [];
 for (const entry of newEntries as any[]) {
   const { name, vram } = entry;
-  const rom = vram - LOAD_ADDR + PAYLOAD_OFFSET;
+  const rom = vram - LOAD_ADDR() + PAYLOAD_OFFSET();
   if (!existingRoms.has(rom)) {
     yamlInserts.push({ rom, name });
   }
@@ -332,7 +333,7 @@ if (yamlInserts.length > 0) {
   console.log(`Added ${yamlInserts.length} c entries to splat.yaml`);
 
   // Create source files for new entries
-  const srcDir = join(ROOT, "src");
+  const srcDir = join(projectRoot(), "src");
   for (const ins of yamlInserts) {
     const srcPath = join(srcDir, `${ins.name}.c`);
     if (!existsSync(srcPath)) {

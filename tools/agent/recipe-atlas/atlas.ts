@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The recipe atlas — compiled evidence about what this toolchain emits.
  *
@@ -26,12 +27,7 @@
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  ROOT,
-  compileSource,
-  configuredCc1FlagsForContainer,
-  runTool,
-} from "../decompToolchain.js";
+import { compileSource, configuredCc1FlagsForContainer, runTool } from "../decompToolchain.js";
 import { ensureArtifact, stamped } from "../provenance.js";
 import { decodeFunction, type DecodedInsn } from "../matching-reconstruction/decode.js";
 import { signatureOf, type FamilySignature, type SignatureTier } from "../family-transfer/signature.js";
@@ -232,7 +228,7 @@ function regionsOfRecipe(
 /* ---- building and caching ------------------------------------------------------ */
 
 export function atlasPath(containerKind: "exe" | "overlay"): string {
-  return join(ROOT, "build/recipeAtlas", `${containerKind}.json`);
+  return join(projectRoot(), "build/recipeAtlas", `${containerKind}.json`);
 }
 
 /**
@@ -261,7 +257,7 @@ export function buildAtlas(
       implementation: ["tools/agent/recipe-atlas", "tools/agent/family-transfer/signature.ts"],
     },
     produce: (provenance) => {
-      const scratch = join(ROOT, "build/recipeAtlas", `${containerKind}-work`);
+      const scratch = join(projectRoot(), "build/recipeAtlas", `${containerKind}-work`);
       rmSync(scratch, { recursive: true, force: true });
       const entries: AtlasEntry[] = [];
       const failures: RecipeAtlas["failures"] = [];
@@ -278,7 +274,7 @@ export function buildAtlas(
         entries,
         failures,
       };
-      mkdirSync(join(ROOT, "build/recipeAtlas"), { recursive: true });
+      mkdirSync(join(projectRoot(), "build/recipeAtlas"), { recursive: true });
       writeFileSync(path, JSON.stringify(stamped(atlas as unknown as Record<string, unknown>, provenance), null, 1));
       return atlas;
     },

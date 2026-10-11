@@ -15,9 +15,9 @@ turns; they run through `npm run extract-assets`.
 
 You may read repository files and original inputs. Write only:
 
-- `tools/agent/resource-extraction/parsers/<format>.ts`
+- `tools/resource-parsers/<format>.ts`
 - its corresponding `<format>.test.ts`
-- `tools/agent/resource-extraction/parser-plugins.ts` (imports and registrations)
+- `tools/resource-parsers/parser-plugins.ts` (imports and registrations)
 
 Do not edit the pipeline, registry machinery, game sources, headers, build
 configuration, skills or handwritten notes. There is no shell tool. Fixed-argv

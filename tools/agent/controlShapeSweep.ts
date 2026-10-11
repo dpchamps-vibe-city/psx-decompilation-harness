@@ -1,8 +1,11 @@
 #!/usr/bin/env npx tsx
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Bounded, complete-source control-tail experiments; never edits src/. */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ROOT, normalizeFunctionName, preprocessOnly, resolveSource, runTool } from "./decompToolchain.js";
+import { normalizeFunctionName, preprocessOnly, resolveSource, runTool } from "./decompToolchain.js";
 import { functionSymbol, resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { projectPath, sha256, toolchainHash, writeStableJson } from "./provenance.js";
 import { C_FRONTEND_IDENTITY, children, declaratorName, field, namedChildren, parseC, walk, type Node } from "./residual-source-search/tree-sitter-c.js";
@@ -63,7 +66,7 @@ export interface ControlSweepRow { id: string; form: string; source: string; tra
 export function controlShapeSweep(functionName: string, sourceOverride: string, max = 64) {
   const sourcePath = resolveSource(functionName, sourceOverride), source = readFileSync(sourcePath, "utf8"), sourceHash = sha256(source);
   const shapes = controlShapes(source, functionName, max);
-  const contextDirectory = join(ROOT, "build/controlShapeSweep", functionName, "context", sourceHash.slice(0, 24));
+  const contextDirectory = join(projectRoot(), "build/controlShapeSweep", functionName, "context", sourceHash.slice(0, 24));
   const cpp = readFileSync(preprocessOnly(sourcePath, contextDirectory, "context", resolveFunctionTarget(functionName).flags), "utf8"), contextHash = sha256(cpp);
   const rawTail = tailTokens(source, functionName, { start: shapes.site.start });
   const expandedTail = tailTokens(cpp, functionName, { count: rawTail.count });
@@ -76,9 +79,9 @@ export function controlShapeSweep(functionName: string, sourceOverride: string, 
   }
   const baseline = reversePipeline({ functionName, source: sourcePath, replay: false, outputDirectory: join(contextDirectory, "baseline") });
   const targetHash = sha256(JSON.stringify(baseline.target.machine.insns.map(i => i.word)));
-  const implementation = sha256(["controlShapeSweep.ts", "control-shapes.ts", "jumpTrace.ts", "branch-orientation.ts"].map(f => readFileSync(join(ROOT, "tools/agent", f), "utf8")).join("\n"));
-  const identity = sha256(JSON.stringify({ sourceHash, contextHash, targetHash, implementation, frontend: C_FRONTEND_IDENTITY, toolchain: toolchainHash(), max })).slice(0, 24);
-  const directory = join(ROOT, "build/controlShapeSweep", functionName, identity), candidates = join(directory, "candidates");
+  const implementation = sha256(["controlShapeSweep.ts", "control-shapes.ts", "jumpTrace.ts", "branch-orientation.ts"].map(f => readFileSync(join(HARNESS_ROOT, "tools/agent", f), "utf8")).join("\n"));
+  const identity = sha256(JSON.stringify({ sourceHash, contextHash, targetHash, implementation, frontend: C_FRONTEND_IDENTITY(), toolchain: toolchainHash(), max })).slice(0, 24);
+  const directory = join(projectRoot(), "build/controlShapeSweep", functionName, identity), candidates = join(directory, "candidates");
   mkdirSync(candidates, { recursive: true });
   const block = orientationFrom(baseline)[0]?.block ?? rankBlocks(baseline.report.objective)[0]?.block.block;
   const inheritedGeneratedGlobals = findGeneratedGlobalDefinitions(source).map(d => d.symbol);
@@ -96,20 +99,18 @@ export function controlShapeSweep(functionName: string, sourceOverride: string, 
   if (successful.length) {
     /* The iteration primitive owns scoring and ledger publication. All sources
        are complete and compiled serially by the ordinary production pipeline. */
-    const output = runTool("npx", ["tsx", join(ROOT, "tools/agent/residualObjective.ts"), functionName,
-      ...(successful.length === rows.length ? ["--dir", candidates] : successful.flatMap(row => ["--source", resolve(ROOT, row.source)])),
-      ...(block !== undefined ? ["--block", String(block)] : []), "--json"]);
+    const output = runTool(process.execPath, currentScriptArgs(join(HARNESS_ROOT, "tools/agent/residualObjective.ts"), [functionName, ...(successful.length === rows.length ? ["--dir", candidates] : successful.flatMap(row => ["--source", resolve(projectRoot(), row.source)])), ...(block !== undefined ? ["--block", String(block)] : []), "--json"]));
     writeFileSync(join(directory, "residual.json"), output);
     const scored = JSON.parse(output) as { entries: Array<{ source?: string; objective: ResidualObjective }> };
     for (const row of successful) {
-      const objective = scored.entries.find(e => e.source && resolve(ROOT, e.source) === resolve(ROOT, row.source))?.objective;
+      const objective = scored.entries.find(e => e.source && resolve(projectRoot(), e.source) === resolve(projectRoot(), row.source))?.objective;
       if (objective) row.objective = objective;
       else row.error = "residualObjective returned no row for this source";
     }
   }
   rows.sort((a, b) => a.objective && b.objective ? compareObjectives(a.objective, b.objective, block === undefined ? {} : { block }) || a.id.localeCompare(b.id) : Number(!a.objective) - Number(!b.objective) || a.id.localeCompare(b.id));
   const inputStable = sha256(readFileSync(sourcePath, "utf8")) === sourceHash && sha256(readFileSync(preprocessOnly(sourcePath, contextDirectory, "input-check"), "utf8")) === contextHash;
-  const report = { schemaVersion: 1, functionName, source: projectPath(sourcePath), sourceHash, contextHash, targetHash, implementation, frontend: C_FRONTEND_IDENTITY,
+  const report = { schemaVersion: 1, functionName, source: projectPath(sourcePath), sourceHash, contextHash, targetHash, implementation, frontend: C_FRONTEND_IDENTITY(),
     baseline: baseline.report.objective, directory: projectPath(directory), inputStable, block, site: shapes.site, coverage: { total: shapes.total, evaluated: rows.length, exhaustive: shapes.exhaustive, failed: rows.filter(r => r.error).length },
     exact: inputStable ? rows.filter(r => r.objective?.exact && !r.error).map(r => r.source) : [], variants: rows };
   writeStableJson(join(directory, "report.json"), report);

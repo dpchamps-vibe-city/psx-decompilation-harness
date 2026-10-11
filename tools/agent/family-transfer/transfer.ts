@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * Family transfer — instantiate a donor's C for a target and let the byte
  * oracle decide.
@@ -18,13 +19,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  ROOT,
-  compileSource,
-  detectImplicitDeclarations,
-  loadFlagOverrides,
-  rejectionFromDiagnostics,
-} from "../decompToolchain.js";
+import { compileSource, detectImplicitDeclarations, loadFlagOverrides, rejectionFromDiagnostics } from "../decompToolchain.js";
 import { compareFunction } from "../../lib/functionOracle.js";
 import { analyzeCSource } from "../cSourceGuard.js";
 import { antiUnify, describeSubstitutions, type Substitution } from "./anti-unify.js";
@@ -127,7 +122,7 @@ export function transferFromDonor(
   /* The donor's source must be clean, parseable C that defines the donor —
    * an assembly stub or a file that does not parse teaches nothing and cannot
    * be edited soundly. */
-  const donorSourcePath = join(ROOT, donorWords.container.paths.srcDir, `${donor}.c`);
+  const donorSourcePath = join(projectRoot(), donorWords.container.paths.srcDir, `${donor}.c`);
   let donorSource: string;
   try {
     donorSource = readFileSync(donorSourcePath, "utf-8");
@@ -154,7 +149,7 @@ export function transferFromDonor(
   const enumerated = enumerateCandidates(plan, options.limit ?? 24);
   attempt.truncated = enumerated.truncated;
 
-  const outputDirectory = options.outputDirectory ?? join(ROOT, "build/familyTransfer", target, donor);
+  const outputDirectory = options.outputDirectory ?? join(projectRoot(), "build/familyTransfer", target, donor);
   mkdirSync(outputDirectory, { recursive: true });
 
   for (let index = 0; index < enumerated.candidates.length; index++) {
@@ -236,7 +231,7 @@ export function verifyCandidate(
   label = "probe",
 ): { verdict: "match" | "mismatch" | "undetermined" | "error"; matchedWords?: number; totalWords?: number; error?: string } {
   const { container } = decodeFunctionWords(target);
-  const directory = join(ROOT, "build/familyTransfer", target, "_verify", label);
+  const directory = join(projectRoot(), "build/familyTransfer", target, "_verify", label);
   mkdirSync(directory, { recursive: true });
   const sourcePath = join(directory, `${target}.c`);
   writeFileSync(sourcePath, source);

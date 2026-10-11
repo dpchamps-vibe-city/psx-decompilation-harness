@@ -1,3 +1,4 @@
+import { projectRoot as currentProjectRoot } from "../../../../tools/lib/runtimeContext.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getSessionBaseline } from "../tools/session-baseline.ts";
 import { DEFAULT_CHECKPOINT_AT_TOKENS, loadLoopConfig } from "./config.ts";
@@ -48,7 +49,7 @@ export function parseArgs(args: string): ParsedArgs {
  * `waitForIdle` is the turn, and the two oracles are the only things allowed to
  * call a function finished.
  */
-export function registerAutoloopCommands(pi: ExtensionAPI, projectRoot: string): () => boolean {
+export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
   const sink: LoopSinks = { verdict: createVerdictSink(), handoff: createHandoffSink(), prep: {}, gate: createTurnGate(), checkpoint: {} };
   registerPolicyVerdictTool(pi, sink.verdict);
   registerHandoffTool(pi, sink.handoff);
@@ -90,6 +91,7 @@ export function registerAutoloopCommands(pi: ExtensionAPI, projectRoot: string):
     description:
       "Run the tiered escalation decompilation loop in this session. Usage: /auto_decompilation_loop [function] [--max=N] | status | stop",
     handler: async (args, ctx) => {
+      const projectRoot = currentProjectRoot();
       const parsed = parseArgs(args);
 
       if (parsed.action === "usage") {

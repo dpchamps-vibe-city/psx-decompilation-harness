@@ -1,3 +1,4 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { runProjectCommand, validateFunctionName } from "./shared.ts";
@@ -15,14 +16,14 @@ export function registerCompilerTraceTool(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       validateFunctionName(params.functionName);
       onUpdate?.({ content: [{ type: "text", text: `Tracing ${params.functionName}...` }], details: {} });
-      const args = ["tsx", "tools/agent/compilerTrace.ts", params.functionName];
+      const args = [params.functionName];
       if (params.pseudo !== undefined) args.push("--pseudo", String(params.pseudo));
       if (params.schedulerWindow) args.push("--scheduler-window", params.schedulerWindow);
       return runProjectCommand(
         pi,
         ctx.cwd,
-        "npx",
-        args,
+        process.execPath,
+        installedScriptArgs("tools/agent/compilerTrace.ts", args, ctx.cwd),
         signal,
         30_000,
       );

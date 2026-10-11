@@ -491,7 +491,7 @@ negation `subu $t0,$zero,$a1` and the disassembler prints the same word as
 search on a negative: its `EXACT` verdict is a byte comparison and does not
 care how a disassembler spells a word. And no pre-link comparison is itself the
 verdict — it can false-fail byte-identical code. `psx_finalize_function`, which
-includes `make check`, is the verdict. See
+includes `psx_verify_build`, is the verdict. See
 `notes/research/tooling-false-verdicts.md`.
 
 Start with the cross-pass feedback category: `sched1-reordered`, `sched2-fixed`,

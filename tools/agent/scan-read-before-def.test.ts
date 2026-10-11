@@ -1,8 +1,9 @@
+import { ROOT } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import test from "node:test";
-import { ROOT } from "./decompToolchain.js";
+import { test } from "../testing/runtimeTestContext.js";
+
 import { parseAsm, resolveFunctionAsm } from "./scanReadBeforeDef.js";
 
 /**

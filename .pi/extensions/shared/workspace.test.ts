@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../../tools/testing/runtimeTestContext.js";
 import { filterNewChanges, splitTargets } from "./workspace.ts";
 
 test("filterNewChanges separates pre-existing dirt from new changes", () => {

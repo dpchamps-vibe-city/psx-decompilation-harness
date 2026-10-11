@@ -1,3 +1,7 @@
+import { projectAPI } from "../shared/project-context.js";
+import { registerProjectBuildTools } from "./tools/project-build.js";
+import { discoverProjectRoot, projectRoot } from "../../../tools/lib/runtimeContext.js";
+import { installedScriptArgs } from "../../../tools/lib/installedScripts.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -32,21 +36,8 @@ interface CallGraph {
   functions: CallGraphEntry[];
 }
 
-function findProjectRoot(start: string): string {
-  let current = resolve(start);
-
-  while (true) {
-    if (existsSync(join(current, "AGENTS.md")) && existsSync(join(current, "tools", "agent"))) {
-      return current;
-    }
-
-    const parent = dirname(current);
-    if (parent === current) return resolve(start);
-    current = parent;
-  }
-}
-
 function loadCallGraph(root: string): CallGraph | undefined {
+  if (!root) return undefined;
   const graphPath = join(root, "build", "callGraph.json");
   if (!existsSync(graphPath)) return undefined;
 
@@ -121,7 +112,7 @@ async function ensureCallGraph(
 
   ctx.ui.notify("build/callGraph.json is missing or stale; rebuilding it...", "info");
   try {
-    await runProjectCommand(pi, root, "npx", ["tsx", "tools/agent/callGraph.ts"], options.signal, 120_000);
+    await runProjectCommand(pi, root, process.execPath, installedScriptArgs("tools/agent/callGraph.ts", [], root), options.signal, 120_000);
   } catch (error) {
     ctx.ui.notify(
       `Call graph rebuild failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -171,8 +162,18 @@ function dispatchSkill(
 }
 
 export default function psxDecompExtension(pi: ExtensionAPI) {
-  const root = findProjectRoot(process.cwd());
-  const documentation = interactiveDocumentation(pi, root);
+  pi = projectAPI(pi);
+  let activeRoot: string | undefined;
+  const documents = new Map<string, ReturnType<typeof interactiveDocumentation>>();
+  const documentationFor = (root: string) => {
+    let result = documents.get(root);
+    if (!result) { result = interactiveDocumentation(pi, root); documents.set(root, result); }
+    return result;
+  };
+  pi.on("session_start", (_event, ctx) => {
+    try { activeRoot = discoverProjectRoot(ctx.cwd); captureSessionBaseline(activeRoot); }
+    catch { activeRoot = undefined; }
+  });
   const preparation = interactivePreparationLifecycle(pi);
   const cancelPreparation = async (ctx: Parameters<typeof preparation.run>[0]) => {
     if (!await preparation.cancel()) ctx.ui.notify("No preparation running.", "info");
@@ -185,19 +186,21 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
   registerExplainDiffTool(pi);
   registerExportContextTool(pi);
   registerFinalizeFunctionTool(pi, (name, files, ctx) => {
-    if (!loopActive()) documentation.start(name, agentCompletion(root, files), ctx);
+    const root = discoverProjectRoot(ctx.cwd);
+    if (!loopActive()) documentationFor(root).start(name, agentCompletion(root, files), ctx);
   });
   registerFuzzVariantsTool(pi);
   registerM2cTool(pi);
   registerSearchSourceShapesTool(pi);
   registerSynthesizeSourceShapesTool(pi);
   registerVerifyBuildTool(pi);
+  registerProjectBuildTools(pi);
 
   /* Snapshot pre-existing workspace dirt so the finalize scope gate only
    * fails on files this session actually touched. */
-  captureSessionBaseline(root);
+
   const allFunctionCompletions = (prefix: string) => {
-    const items = completionItems(functionNames(root), prefix);
+    const items = completionItems(functionNames(activeRoot ?? ""), prefix);
     return items.length > 0 ? items : null;
   };
 
@@ -205,12 +208,14 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
     description: "Decompile and byte-match a function; omit the name to pick the next priority target",
     getArgumentCompletions: (prefix) => {
       const items = completionItems(
-        functionNames(root, (entry) => !entry.decompiled && entry.handwritten === false && !entry.dead),
+        functionNames(activeRoot ?? "", (entry) => !entry.decompiled && entry.handwritten === false && !entry.dead),
         prefix,
       );
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
+      const root = projectRoot();
+      activeRoot = root;
       if (args.trim() === "--cancel") { await cancelPreparation(ctx); return; }
       await preparation.run(ctx, async (signal) => {
         const explicit = args.trim().length > 0;
@@ -226,7 +231,7 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
         try {
           const result = await prepareInteractive(root, name, ctx, signal);
           signal.throwIfAborted();
-          if (result.completion) { documentation.start(name, result.completion, ctx); return; }
+          if (result.completion) { documentationFor(root).start(name, result.completion, ctx); return; }
           handoff = result.handoff;
         } catch (error) {
           signal.throwIfAborted();
@@ -242,6 +247,8 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
     description: "Resume and fix an existing clean-C decompilation attempt",
     getArgumentCompletions: allFunctionCompletions,
     handler: async (args, ctx) => {
+      const root = projectRoot();
+      activeRoot = root;
       if (args.trim() === "--cancel") { await cancelPreparation(ctx); return; }
       await preparation.run(ctx, async (signal) => {
         const name = parseFunctionArg(args);
@@ -251,7 +258,7 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
         try {
           const result = await prepareInteractive(root, name, ctx, signal);
           signal.throwIfAborted();
-          if (result.completion) { documentation.start(name, result.completion, ctx); return; }
+          if (result.completion) { documentationFor(root).start(name, result.completion, ctx); return; }
           handoff = result.handoff;
         } catch (error) {
           signal.throwIfAborted();
@@ -266,10 +273,12 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
   pi.registerCommand("refine-decomp", {
     description: "Refine an already-matching function using decompiled neighbor context",
     getArgumentCompletions: (prefix) => {
-      const items = completionItems(functionNames(root, (entry) => entry.decompiled && !entry.dead), prefix);
+      const items = completionItems(functionNames(activeRoot ?? "", (entry) => entry.decompiled && !entry.dead), prefix);
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
+      const root = projectRoot();
+      activeRoot = root;
       const explicit = args.trim().length > 0;
       let name = explicit ? parseFunctionArg(args) : undefined;
 
@@ -298,6 +307,8 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
   pi.registerCommand("project-refine", {
     description: "Run one conservative, verified project-wide refinement batch",
     handler: async (args, ctx) => {
+      const root = projectRoot();
+      activeRoot = root;
       if (args.trim()) {
         ctx.ui.notify("Usage: /project-refine", "warning");
         return;
@@ -306,11 +317,13 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
     },
   });
 
-  loopActive = registerAutoloopCommands(pi, root);
+  loopActive = registerAutoloopCommands(pi);
 
   pi.registerCommand("decomp-status", {
     description: "Show the current call-graph decompilation worklist summary",
     handler: async (_args, ctx) => {
+      const root = projectRoot();
+      activeRoot = root;
       let graph = loadCallGraph(root);
       if ((!graph || callGraphStale(root)) && (await ensureCallGraph(pi, ctx, root, { refresh: true }))) {
         graph = loadCallGraph(root);

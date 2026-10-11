@@ -143,8 +143,7 @@ If a slot will not fill, take the best-supported guess and measure it anyway, or
 go to "When it stalls" for a heavier tool. Do not edit on a feeling and
 reverse-engineer the reason afterwards, and do not stop.
 
-Use only the reference sheet for the owning pass; do not reread one already
-loaded in OBSERVE:
+Consult the reference sheet for the owning pass only now, and only the one:
 `psx_reference population | loop | schedule | allocation | declarations | flags | sdk`.
 
 ### 3. ACT — one edit
@@ -252,12 +251,11 @@ steps that can are first for that reason.
 3. **Read the pass that decides it.** Once a residual has survived several
    spellings, read the rule before generating more of them. The mechanism sheet
    for the pass is the short form. `psx_compiler_source` searches the configured
-   compiler source; for a supported, verified compiler build it is the authority
-   where no sheet covers the decision. One read of the function that makes the
-   choice can name the source change outright, or end a search: a proof that a
-   form is unreachable is worth more than any number of failed experiments, and
-   it is the only evidence that converts "we could not find it" into "it is not
-   there". A default compiler profile alone does not establish that premise.
+   compiler source, and is the authority where no sheet
+   covers the decision. One read of the function that makes the choice can name
+   the source change outright, or end a search: a proof that a form is
+   unreachable is worth more than any number of failed experiments, and it is the
+   only evidence that converts "we could not find it" into "it is not there".
 
 4. **Generate shapes from the target instead of guessing at them.**
    `psx_search_source_shapes` and `psx_synthesize_source_shapes` generate and
@@ -379,7 +377,7 @@ enough to write down, it was good enough to test.
 ## Going deeper
 
 - `psx_reference <topic>` — the mechanism sheets, loaded one at a time
-- `tools/agent/pipeline-reversal/README.md` — what each inverse pass proves and
+- `../../../tools/agent/pipeline-reversal/README.md` — what each inverse pass proves and
   where the chain reports itself unreliable
 - `notes/research/` — one case study per diagnosed phenomenon
 - `notes/retros/` — solved-function post-mortems, including what was tried and

@@ -1,11 +1,12 @@
-import { test } from "node:test";
+import { ROOT, test } from "../testing/runtimeTestContext.js";
+
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareM2c } from "../build/prepareM2c.js";
-import { ROOT, compileSource, disassembleObject, preprocessOnly } from "./decompToolchain.js";
+import { compileSource, disassembleObject, preprocessOnly } from "./decompToolchain.js";
 import { extractSignaturesFromSource } from "./sdkTypes.js";
 import { incomingSlots, prototypesIn, contradictionsAgainst, scopeFromPreprocessed, targetWitness } from "./calleeTruth.js";
 import { projectCalleeParameters } from "./prepareFunction.js";

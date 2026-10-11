@@ -1,8 +1,9 @@
+import { ROOT } from "../../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import test from "node:test";
-import { ROOT } from "../decompToolchain.js";
+import { test } from "../../testing/runtimeTestContext.js";
+
 import { generateVariantBatch, totalProducts } from "./generator.js";
 import { validateSourceShapeSpec } from "./schema.js";
 import { sha256 } from "../variant-lab/artifacts.js";

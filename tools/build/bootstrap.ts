@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * bootstrap.ts — Generate configs from scratch for PSX decompilation
  *
@@ -22,7 +25,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
-import { loadPsxExeInfo, ROOT, type PsxExeInfo, type SectionLayout, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, type PsxExeInfo, type SectionLayout, exeSplatYamlPath, exeSymbolAddrsPath } from "../lib/psxExeInfo.ts";
 import {
   classifyEntries,
   inferSectionBoundaries,
@@ -31,14 +34,14 @@ import {
 
 const SPLAT_YAML = exeSplatYamlPath();
 const SYMBOL_ADDRS = exeSymbolAddrsPath();
-const DISASM_SYMBOL_ADDRS = join(ROOT, "build", "disassembler_symbol_addrs.txt");
-const LAYOUT_PATH = join(ROOT, "build/sectionLayout.json");
-const FUNCTIONS_CSV = join(ROOT, "build/functions.csv");
+const DISASM_SYMBOL_ADDRS = () => (join(projectRoot(), "build", "disassembler_symbol_addrs.txt"));
+const LAYOUT_PATH = () => (join(projectRoot(), "build/sectionLayout.json"));
+const FUNCTIONS_CSV = () => (join(projectRoot(), "build/functions.csv"));
 /* Layout analysis (classifyEntries) must use a disassembly WITHOUT
  * --disasm-unknown: with that flag spimdisasm invents giant phantom
  * "functions" inside data regions (e.g. a 26KB blob spanning libpad's
  * pdresres tail + real data), which breaks section-boundary inference. */
-const LAYOUT_CSV = join(ROOT, "build/without-unknown/functions.csv");
+const LAYOUT_CSV = () => (join(projectRoot(), "build/without-unknown/functions.csv"));
 
 function romHex(rom: number): string {
   return `0x${rom.toString(16).toUpperCase()}`;
@@ -65,8 +68,8 @@ function needsBootstrap(): boolean {
  *  symbol_addrs.txt doesn't exist yet, so this degrades to __start-only. */
 function writeDisasmSymAddrs(info: PsxExeInfo, writeMode: boolean): void {
   const flag = writeMode ? "--write" : "";
-  execSync(`npx tsx tools/build/genDisasmSymbols.ts ${flag}`, {
-    cwd: ROOT,
+  installedExec(process.execPath, currentScriptArgs("tools/build/genDisasmSymbols.ts", [...(flag ? [flag] : [])]), {
+    cwd: projectRoot(),
     stdio: "inherit",
   });
 }
@@ -81,19 +84,19 @@ function writeDisasmSymAddrs(info: PsxExeInfo, writeMode: boolean): void {
  */
 function runDisassembler(_info: PsxExeInfo): void {
   console.log("Running spimdisasm...");
-  execSync("npx tsx tools/build/disassemble.ts --container exe", { cwd: ROOT, stdio: "inherit" });
+  installedExec(process.execPath, currentScriptArgs("tools/build/disassemble.ts", ["--container", "exe"]), { cwd: projectRoot(), stdio: "inherit" });
   console.log("Disassembly complete");
 }
 
 /** Analyze layout and write sectionLayout.json */
 function analyzeAndWriteLayout(info: PsxExeInfo, writeMode: boolean): SectionLayout {
-  if (!existsSync(LAYOUT_CSV)) {
-    throw new Error(`${LAYOUT_CSV} not found. Run disassembler first (npm run disassemble).`);
+  if (!existsSync(LAYOUT_CSV())) {
+    throw new Error(`${LAYOUT_CSV()} not found. Run disassembler first (npm run disassemble).`);
   }
 
   const binary = readFileSync(info.binaryPath);
   const results = classifyEntries(
-    LAYOUT_CSV,
+    LAYOUT_CSV(),
     binary,
     info.loadAddr,
     info.payloadOffset,
@@ -108,14 +111,14 @@ function analyzeAndWriteLayout(info: PsxExeInfo, writeMode: boolean): SectionLay
    * analyzeAccess' %gp_rel access patterns decide instead. Best-effort:
    * any failure leaves the inferred value in place. */
   try {
-    execSync("npx tsx tools/diagnostics/analyzeAccess.ts", {
-      cwd: ROOT,
+    installedExec(process.execPath, currentScriptArgs("tools/diagnostics/analyzeAccess.ts", []), {
+      cwd: projectRoot(),
       stdio: "ignore",
     });
   } catch {
     /* analyzeAccess is best-effort */
   }
-  const accessRegionsPath = join(ROOT, "build/accessRegions.json");
+  const accessRegionsPath = join(projectRoot(), "build/accessRegions.json");
   if (existsSync(accessRegionsPath)) {
     const regions = JSON.parse(readFileSync(accessRegionsPath, "utf-8")) as Array<{
       startAddr: number;
@@ -145,9 +148,9 @@ function analyzeAndWriteLayout(info: PsxExeInfo, writeMode: boolean): SectionLay
   };
 
   if (writeMode) {
-    mkdirSync(join(ROOT, "build"), { recursive: true });
-    writeFileSync(LAYOUT_PATH, JSON.stringify(layout, null, 2) + "\n");
-    console.log(`Wrote ${LAYOUT_PATH}`);
+    mkdirSync(join(projectRoot(), "build"), { recursive: true });
+    writeFileSync(LAYOUT_PATH(), JSON.stringify(layout, null, 2) + "\n");
+    console.log(`Wrote ${LAYOUT_PATH()}`);
   }
 
   console.log(`Section layout: rodata=${romHex(layout.rodataStart)} text=${romHex(layout.textStart)} data=${romHex(layout.dataStart)} sdata=${romHex(layout.sdataStart)} end=${romHex(layout.fileEnd)}`);
@@ -156,7 +159,7 @@ function analyzeAndWriteLayout(info: PsxExeInfo, writeMode: boolean): SectionLay
 
 /** Generate symbol_addrs.txt from functions.csv */
 function generateSymbolAddrs(info: PsxExeInfo, layout: SectionLayout, writeMode: boolean): void {
-  const entries = parseCSV(FUNCTIONS_CSV);
+  const entries = parseCSV(FUNCTIONS_CSV());
 
   // Filter to text range functions
   const textVramStart = layout.textStart - info.payloadOffset + info.loadAddr;
@@ -205,7 +208,7 @@ function generateSplatSubsegments(info: PsxExeInfo, layout: SectionLayout, write
   const header = yamlLines.slice(0, subsegIdx + 1);
 
   // Parse functions.csv for text entries
-  const entries = parseCSV(FUNCTIONS_CSV);
+  const entries = parseCSV(FUNCTIONS_CSV());
   const textVramStart = layout.textStart - info.payloadOffset + info.loadAddr;
   const textVramEnd = layout.dataStart - info.payloadOffset + info.loadAddr;
   const textFunctions = entries
@@ -314,7 +317,7 @@ function main() {
     writeDisasmSymAddrs(info, writeMode);
 
     // Step 2: Run spimdisasm (only if functions.csv doesn't exist)
-    if (!existsSync(FUNCTIONS_CSV)) {
+    if (!existsSync(FUNCTIONS_CSV())) {
       if (writeMode) {
         runDisassembler(info);
       } else {
@@ -323,7 +326,7 @@ function main() {
     }
 
     // Step 3: Analyze layout → sectionLayout.json
-    if (existsSync(FUNCTIONS_CSV)) {
+    if (existsSync(FUNCTIONS_CSV())) {
       const layout = analyzeAndWriteLayout(info, writeMode);
 
       // Step 4: Generate symbol_addrs.txt
@@ -341,16 +344,16 @@ function main() {
     writeDisasmSymAddrs(info, writeMode);
 
     // Always regenerate sectionLayout.json for downstream tools
-    if (existsSync(FUNCTIONS_CSV)) {
+    if (existsSync(FUNCTIONS_CSV())) {
       analyzeAndWriteLayout(info, writeMode);
-    } else if (!existsSync(LAYOUT_PATH)) {
+    } else if (!existsSync(LAYOUT_PATH())) {
       // No functions.csv and no layout — infer from splat.yaml subsegments
       console.log("No functions.csv — inferring layout from splat.yaml subsegments.");
       const layout = inferLayoutFromYaml(info);
       if (writeMode) {
-        mkdirSync(join(ROOT, "build"), { recursive: true });
-        writeFileSync(LAYOUT_PATH, JSON.stringify(layout, null, 2) + "\n");
-        console.log(`Wrote ${LAYOUT_PATH}`);
+        mkdirSync(join(projectRoot(), "build"), { recursive: true });
+        writeFileSync(LAYOUT_PATH(), JSON.stringify(layout, null, 2) + "\n");
+        console.log(`Wrote ${LAYOUT_PATH()}`);
       }
       console.log(`Section layout: rodata=${romHex(layout.rodataStart)} text=${romHex(layout.textStart)} data=${romHex(layout.dataStart)} sdata=${romHex(layout.sdataStart)} end=${romHex(layout.fileEnd)}`);
     } else {

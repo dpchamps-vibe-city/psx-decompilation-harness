@@ -125,21 +125,23 @@ test("headerInfo help needs no target and invalid inputs fail", (t) => {
 });
 
 test("EXE discovery/configuration derives non-BTN names and refuses missing layout", (t) => {
-  // Copy the actual module into an isolated project: no fixture game or ROOT mutation.
+  // Invoke installed modules against an isolated project, never copied code.
   const root = temporaryProject(t);
-  mkdirSync(join(root, "tools/lib"), { recursive: true });
   mkdirSync(join(root, "extracted/subdir"), { recursive: true });
   mkdirSync(join(root, "configs"));
   writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
-  copyFileSync(join(ROOT, "tools/lib/psxExeInfo.ts"), join(root, "tools/lib/psxExeInfo.ts"));
+  writeFileSync(join(root, "toolchain.json"), readFileSync(join(ROOT, "toolchain.json")));
   writeFileSync(join(root, "extracted/subdir/OTHER.EXE"), syntheticExe());
   writeFileSync(join(root, "extracted/decoy.bin"), Buffer.alloc(0x800));
   const runner = join(root, "probe.ts");
-  writeFileSync(runner, `import { loadPsxExeInfo, exeBasename, requireSectionLayout } from "./tools/lib/psxExeInfo.js";
+  writeFileSync(runner, `import { loadPsxExeInfo, exeBasename, requireSectionLayout } from ${JSON.stringify(new URL("./psxExeInfo.ts", import.meta.url).href)};
+import { createRuntimeContext, inRuntimeContext } from ${JSON.stringify(new URL("./runtimeContext.ts", import.meta.url).href)};
+inRuntimeContext(createRuntimeContext(${JSON.stringify(root)}), () => {
 const info = loadPsxExeInfo();
 let layoutError = "";
 try { requireSectionLayout(); } catch (error) { layoutError = error.message; }
-console.log(JSON.stringify({ basename: exeBasename(), loadAddr: info.loadAddr, binaryPath: info.binaryPath, layoutError }));\n`);
+console.log(JSON.stringify({ basename: exeBasename(), loadAddr: info.loadAddr, binaryPath: info.binaryPath, layoutError }));
+});\n`);
   const probe = () => JSON.parse(execFileSync(process.execPath, ["--import", TSX, runner], { cwd: root, encoding: "utf8" }));
   const discovered = probe();
   assert.equal(discovered.basename, "OTHER");

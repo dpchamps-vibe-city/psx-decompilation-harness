@@ -1,3 +1,4 @@
+import { ROOT, test } from "../../testing/runtimeTestContext.js";
 /**
  * The recipe atlas: the compiler as evidence rather than as a yes/no oracle.
  *
@@ -15,8 +16,8 @@
 import { strict as assert } from "node:assert";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { test } from "node:test";
-import { ROOT } from "../decompToolchain.js";
+
+
 import { decodeFunctionWords, signatureFor } from "../family-transfer/signature.js";
 import { buildAtlas, coincidentShapes, loadAtlas, queryAtlasRegions } from "./atlas.js";
 import { allRecipes, recipeFamilies } from "./recipes.js";

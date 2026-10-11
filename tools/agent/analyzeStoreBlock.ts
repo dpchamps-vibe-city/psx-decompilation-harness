@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * analyzeStoreBlock.ts — data archaeology for store-dominated blocks
  *
@@ -30,7 +31,7 @@ import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { resolveAsmSource } from "./decompToolchain.js";
 
-const ROOT = new URL("../..", import.meta.url).pathname;
+
 
 const NUM_REG = [
   "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
@@ -230,7 +231,7 @@ function main() {
     process.exit(1);
   }
   const { stores, lis } = scan(parseTargetAsm(targetPath));
-  console.log(`target: ${targetPath.replace(ROOT, "")}`);
+  console.log(`target: ${targetPath.replace(projectRoot(), "")}`);
   console.log(`stores tracked: ${stores.length} (sp-relative excluded)\n`);
   if (stores.length < 4) { console.log("Fewer than 4 non-stack stores — no store block to analyze."); return; }
 
@@ -333,11 +334,11 @@ function main() {
   }
 
   /* candidate comparison */
-  const candPath = flag("--candidate") ?? join(ROOT, `build/diffFunc/${name}.s`);
+  const candPath = flag("--candidate") ?? join(projectRoot(), `build/diffFunc/${name}.s`);
   if (existsSync(candPath)) {
     const cand = scan(parseGccAsm(candPath));
     const candBirth = firstUseOrder(cand.lis.map((l) => l.val).filter((v) => storedSet.has(v)));
-    console.log(`\n  candidate (${candPath.replace(ROOT, "")}):`);
+    console.log(`\n  candidate (${candPath.replace(projectRoot(), "")}):`);
     console.log(`  candidate li birth order:         ${show(candBirth)}`);
     if (candBirth.join() === targetBirth.join()) {
       console.log("  candidate birth order matches the target.");

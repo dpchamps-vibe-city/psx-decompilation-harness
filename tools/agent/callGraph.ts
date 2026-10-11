@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * callGraph.ts
  *
@@ -39,8 +40,8 @@ import { loadLibraryProject } from "../lib/project.js";
 import { writeLibraryGraph } from "./libraryTarget.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "../..");
-const OUT_FILE = join(ROOT, "build/callGraph.json");
+
+const OUT_FILE = () => (join(projectRoot(), "build/callGraph.json"));
 
 const args = process.argv.slice(2);
 const topIdx = args.indexOf("--top");
@@ -54,13 +55,13 @@ const onlyContainer = containerIdx >= 0 ? args[containerIdx + 1] : undefined;
    the chosen set of containers. */
 if (loadLibraryProject()) {
   if (onlyContainer) throw new Error("Library work queue uses member identities, not image containers");
-  const graph = writeLibraryGraph(ROOT);
+  const graph = writeLibraryGraph(projectRoot());
   console.log(`Library queue: ${graph.functions.length} functions; no game-liveness or SDK-name exclusions. build/callGraph.json`);
   process.exit(0);
 }
-const containers: Container[] = onlyContainer
+const containers: () => Container[] = () => (onlyContainer
   ? [requireContainer(onlyContainer)]
-  : loadContainers();
+  : loadContainers());
 
 interface FuncEntry {
   name: string;
@@ -104,13 +105,13 @@ interface FuncEntry {
   crossContainerCalls: string[];
 }
 
-const macroCensus = detectMacroIdentities({ containers });
+const macroCensus = detectMacroIdentities({ containers: containers() });
 const macroReports = new Map(macroCensus.functions.map(f => [f.name, macroRouteSummary(f)]));
 const funcMap = new Map<string, FuncEntry>();
 const containerOf = new Map<string, Container>();
 
 // Build initial function entries from every container's splat config
-for (const container of containers) {
+for (const container of containers()) {
   for (const span of loadFunctionSpans(container)) {
     containerOf.set(span.name, container);
     funcMap.set(span.name, {
@@ -342,46 +343,46 @@ for (const entry of funcMap.values()) {
 /* Change this one selection to switch every consumer of build/callGraph.json.
    The legacy container-first strategy remains available for comparison. */
 const worklistStrategy = dependencyReadySmallFirstStrategy;
-const entries = rankWorklist([...funcMap.values()], worklistStrategy, {
-  containerRank: new Map(containers.map((container, index) => [container.id, index])),
+const entries = () => (rankWorklist([...funcMap.values()], worklistStrategy, {
+  containerRank: new Map(containers().map((container, index) => [container.id, index])),
   depthByName: depthMap,
   maxDepth,
-});
+}));
 
 // Assign sequential priority
-entries.forEach((e, i) => {
+entries().forEach((e, i) => {
   e.priority = i + 1;
 });
 
 // --- Step 8: Write JSON + print summary ---
 
-const decomposable = entries.filter((e) => e.handwritten !== "asm");
-const tier1 = decomposable.filter((e) => e.tier === 1).length;
-const tier2 = decomposable.filter((e) => e.tier === 2).length;
-const tier3 = decomposable.filter((e) => e.tier === 3).length;
-const decompiledCount = entries.filter((e) => e.decompiled).length;
-const gteCount = entries.filter((e) => (e.macroIdentity?.cop2Count ?? 0) > 0).length;
-const asmCount = entries.filter((e) => e.handwritten === "asm").length;
-const deadCount = entries.filter((e) => e.dead).length;
-const engineApiCount = entries.filter((e) => e.overlayCallSites > 0).length;
-const engineApiStubs = entries.filter((e) => e.overlayCallSites > 0 && !e.decompiled && e.handwritten !== "asm");
+const decomposable = () => (entries().filter((e) => e.handwritten !== "asm"));
+const tier1 = () => (decomposable().filter((e) => e.tier === 1).length);
+const tier2 = () => (decomposable().filter((e) => e.tier === 2).length);
+const tier3 = () => (decomposable().filter((e) => e.tier === 3).length);
+const decompiledCount = () => (entries().filter((e) => e.decompiled).length);
+const gteCount = () => (entries().filter((e) => (e.macroIdentity?.cop2Count ?? 0) > 0).length);
+const asmCount = () => (entries().filter((e) => e.handwritten === "asm").length);
+const deadCount = () => (entries().filter((e) => e.dead).length);
+const engineApiCount = () => (entries().filter((e) => e.overlayCallSites > 0).length);
+const engineApiStubs = () => (entries().filter((e) => e.overlayCallSites > 0 && !e.decompiled && e.handwritten !== "asm"));
 
-const crossContainerEdges = entries.flatMap((e) =>
+const crossContainerEdges = () => (entries().flatMap((e) =>
   e.crossContainerCalls.map((target) => ({
     from: e.container,
     to: funcMap.get(target)?.container ?? "unknown",
     caller: e.name,
     callee: target,
   }))
-);
+));
 const crossPairs = new Map<string, number>();
-for (const edge of crossContainerEdges) {
+for (const edge of crossContainerEdges()) {
   const key = `${edge.from} -> ${edge.to}`;
   crossPairs.set(key, (crossPairs.get(key) ?? 0) + 1);
 }
 
-const perContainer = containers.map((container) => {
-  const own = entries.filter((e) => e.container === container.id);
+const perContainer = () => (containers().map((container) => {
+  const own = entries().filter((e) => e.container === container.id);
   return {
     id: container.id,
     kind: container.kind,
@@ -390,58 +391,58 @@ const perContainer = containers.map((container) => {
     tier1: own.filter((e) => e.tier === 1 && e.handwritten !== "asm").length,
     dead: own.filter((e) => e.dead).length,
   };
-});
+}));
 
-const output = {
+const output = () => ({
   rankingStrategy: worklistStrategy.name,
   macroIdentity: { encodingToolchains: macroCensus.encodingToolchains, coverage: macroCensus.coverage },
-  functions: entries,
-  containers: perContainer,
+  functions: entries(),
+  containers: perContainer(),
   crossContainerEdges: [...crossPairs.entries()].map(([pair, count]) => ({ pair, count })),
   stats: {
-    total: entries.length,
-    tier1,
-    tier2,
-    tier3,
-    decompiled: decompiledCount,
-    gte: gteCount,
-    asm: asmCount,
-    dead: deadCount,
-    engineApi: engineApiCount,
-    engineApiStubs: engineApiStubs.length,
+    total: entries().length,
+    tier1: tier1(),
+    tier2: tier2(),
+    tier3: tier3(),
+    decompiled: decompiledCount(),
+    gte: gteCount(),
+    asm: asmCount(),
+    dead: deadCount(),
+    engineApi: engineApiCount(),
+    engineApiStubs: engineApiStubs().length,
   },
   liveness: {
     basis: liveness.basis,
     overlaysIncluded: liveness.overlaysIncluded,
     exeAddressesReferencedFromOverlays: liveness.fromOverlays.size,
   },
-};
+});
 
-mkdirSync(dirname(OUT_FILE), { recursive: true });
-writeFileSync(OUT_FILE, JSON.stringify(output, null, 2));
+mkdirSync(dirname(OUT_FILE()), { recursive: true });
+writeFileSync(OUT_FILE(), JSON.stringify(output(), null, 2));
 
-console.log(`Call graph: ${entries.length} functions (${worklistStrategy.name})`);
-console.log(`  Tier 1 (pure leaf):    ${String(tier1).padStart(3)} functions`);
-console.log(`  Tier 2 (SDK-only):     ${String(tier2).padStart(3)} functions`);
-console.log(`  Tier 3 (game callers): ${String(tier3).padStart(3)} functions`);
-console.log(`  Already decompiled:    ${String(decompiledCount).padStart(3)} functions`);
-console.log(`  COP2 targets (tiler-routed): ${String(gteCount).padStart(3)} functions`);
-if (asmCount > 0) {
-  console.log(`  Pure asm (excluded):   ${String(asmCount).padStart(3)} functions`);
+console.log(`Call graph: ${entries().length} functions (${worklistStrategy.name})`);
+console.log(`  Tier 1 (pure leaf):    ${String(tier1()).padStart(3)} functions`);
+console.log(`  Tier 2 (SDK-only):     ${String(tier2()).padStart(3)} functions`);
+console.log(`  Tier 3 (game callers): ${String(tier3()).padStart(3)} functions`);
+console.log(`  Already decompiled:    ${String(decompiledCount()).padStart(3)} functions`);
+console.log(`  COP2 targets (tiler-routed): ${String(gteCount()).padStart(3)} functions`);
+if (asmCount() > 0) {
+  console.log(`  Pure asm (excluded):   ${String(asmCount()).padStart(3)} functions`);
 }
-if (deadCount > 0) {
-  console.log(`  Dead code (excluded):  ${String(deadCount).padStart(3)} functions`);
+if (deadCount() > 0) {
+  console.log(`  Dead code (excluded):  ${String(deadCount()).padStart(3)} functions`);
 }
 console.log(`Liveness: ${liveness.basis}`);
-if (engineApiCount > 0) {
-  console.log(`  Engine API (overlay-called): ${engineApiCount} functions, ${engineApiStubs.length} still stubs`);
+if (engineApiCount() > 0) {
+  console.log(`  Engine API (overlay-called): ${engineApiCount()} functions, ${engineApiStubs().length} still stubs`);
 }
-console.log(`Wrote ${OUT_FILE}`);
+console.log(`Wrote ${OUT_FILE()}`);
 
-if (perContainer.length > 1) {
+if (perContainer().length > 1) {
   console.log();
   console.log(`${"CONTAINER".padEnd(10)} ${"FUNCS".padStart(6)} ${"MATCHED".padStart(8)} ${"TIER1".padStart(6)} ${"DEAD".padStart(5)}`);
-  for (const c of perContainer) {
+  for (const c of perContainer()) {
     console.log(
       `${c.id.padEnd(10)} ${String(c.total).padStart(6)} ${String(c.decompiled).padStart(8)} ${String(c.tier1).padStart(6)} ${String(c.dead).padStart(5)}`
     );
@@ -463,19 +464,19 @@ if (topN > 0) {
     `${"#".padStart(4)}  ${"Tier".padEnd(4)}  ${"Instrs".padStart(6)}  ${"Callers".padStart(7)}  ${"Ovl".padStart(5)}  Name`
   );
   console.log("-".repeat(60));
-  const top = entries.filter((e) => !e.decompiled && e.handwritten !== "asm" && !e.dead).slice(0, topN);
+  const top = entries().filter((e) => !e.decompiled && e.handwritten !== "asm" && !e.dead).slice(0, topN);
   for (const e of top) {
     console.log(
       `${String(e.priority).padStart(4)}  T${e.tier}    ${String(e.instructionCount).padStart(6)}  ${String(e.callerCount).padStart(7)}  ${String(e.overlayCallSites).padStart(5)}  ${e.name}`
     );
   }
 
-  if (engineApiStubs.length > 0) {
+  if (engineApiStubs().length > 0) {
     console.log();
     console.log("Engine API stubs, by overlay call sites — the overlay dependency frontier:");
     console.log(`${"#".padStart(4)}  ${"Sites".padStart(6)}  ${"Members".padStart(7)}  Name`);
     console.log("-".repeat(48));
-    for (const e of [...engineApiStubs].sort((a, b) => b.overlayCallSites - a.overlayCallSites).slice(0, topN)) {
+    for (const e of [...engineApiStubs()].sort((a, b) => b.overlayCallSites - a.overlayCallSites).slice(0, topN)) {
       console.log(
         `${String(e.priority).padStart(4)}  ${String(e.overlayCallSites).padStart(6)}  ${String(e.overlayMembers.length).padStart(7)}  ${e.name}`
       );

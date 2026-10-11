@@ -1,13 +1,13 @@
+import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
 import { createTreeFromWorktree, changedFilesBetweenTrees, treePatch } from "../../shared/workspace.ts";
 import { loadCallGraph } from "../../shared/call-graph.ts";
 import { runGate } from "../../shared/gates.ts";
 import { runCommand } from "../../shared/process.ts";
 import type { AutodecompConfig, GateResult } from "../../shared/types.ts";
 import { Timings } from "../../../../tools/lib/contentCache.js";
-import { CONTEXT_EXPORT_STATUS, type ExportResult } from "../../../../tools/agent/contextExport.js";
+import type { ExportResult } from "../../../../tools/agent/contextExport.js";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
 import { libraryMembers, libraryTargetKey } from "../../../../tools/lib/libraryTargets.js";
-import { libraryBuildIdentity } from "../../../../tools/agent/libraryTarget.js";
 import { compilerInputs, consumeReceipt, contextIsCompilerIndependent, publishReceipt, verificationOutputs } from "./verification-receipt.ts";
 
 /** One authoritative route. Machine work can be reused only across unchanged
@@ -17,12 +17,16 @@ export async function finalizeWorkspace(options: {
   changedFiles: string[]; patch: string; signal?: AbortSignal;
 }): Promise<GateResult> {
   options.signal?.throwIfAborted();
+  const { CONTEXT_EXPORT_STATUS } = await import("../../../../tools/agent/contextExport.js");
+  options.signal?.throwIfAborted();
   const timings = new Timings();
   const gates: GateResult[] = [];
   let contextPublication: GateResult["contextPublication"];
   const done = (gate: GateResult): GateResult => ({ ...gate, ...(contextPublication ? { contextPublication } : {}), finalizationGates: gates,
     timings: { phases: timings.phases, totalMs: timings.totalMs } });
   if (loadLibraryProject(options.projectRoot)) {
+    const { libraryBuildIdentity } = await import("../../../../tools/agent/libraryTarget.js");
+    options.signal?.throwIfAborted();
     const members = libraryMembers(options.projectRoot);
     const sources = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.source])));
     const containers = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.id])));
@@ -33,7 +37,7 @@ export async function finalizeWorkspace(options: {
     gates.push(gate);
     if (gate.pass && before !== identity()) { gate.pass = false; gate.failures.push("Library inputs changed during finalization; rerun the member gate"); }
     if (!gate.pass) return done(gate);
-    const publication = await timings.measure("context-export", () => runCommand("npx", ["tsx", "tools/agent/contextExport.ts", options.functionName], {
+    const publication = await timings.measure("context-export", () => runCommand(process.execPath, installedScriptArgs("tools/agent/contextExport.ts", [options.functionName], options.projectRoot), {
       cwd: options.projectRoot, signal: options.signal, timeoutMs: 120_000,
     }));
     const status = publication.stdout.split("\n").find(line => line.startsWith(CONTEXT_EXPORT_STATUS));
@@ -74,7 +78,7 @@ export async function finalizeWorkspace(options: {
   const before = await timings.measure("before-publication-tree", () => createTreeFromWorktree(options.projectRoot, options.projectRoot, options.config.integration.allowedRoots, options.signal));
   const beforeInputs = timings.measureSync("before-publication-inputs", () => compilerInputs(options.projectRoot, true));
   const beforeOutputs = timings.measureSync("before-publication-outputs", () => verificationOutputs(options.projectRoot, options.functionName));
-  const publication = await timings.measure("context-export", () => runCommand("npx", ["tsx", "tools/agent/contextExport.ts", options.functionName], {
+  const publication = await timings.measure("context-export", () => runCommand(process.execPath, installedScriptArgs("tools/agent/contextExport.ts", [options.functionName], options.projectRoot), {
     cwd: options.projectRoot, signal: options.signal, timeoutMs: 120_000,
   }));
   options.signal?.throwIfAborted();

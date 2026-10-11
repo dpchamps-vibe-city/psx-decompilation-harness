@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { lastAssistantText } from "./handoff.ts";
 import { escalationMessage, handoffBlock, handoffMessage } from "./prompts.ts";
 import type { HandoffSummary } from "./types.ts";

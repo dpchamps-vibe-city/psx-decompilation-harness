@@ -1,6 +1,10 @@
 # Generated outputs (anchored: tools/build/ is source code).
 /build/
 /extracted/
+/library-input/
+/include/psyq/
+/.pi/git/
+/.pi/npm/
 /run_output/
 /node_modules/
 /coverage/

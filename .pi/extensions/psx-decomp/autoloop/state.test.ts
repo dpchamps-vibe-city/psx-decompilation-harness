@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { DEFAULT_CONFIG } from "../../shared/config.ts";
 import { emptyState, withLoopExemptions } from "./state.ts";
 import { KEEP_GOING, escalationMessage, nudgeMessage, openingMessage } from "./prompts.ts";

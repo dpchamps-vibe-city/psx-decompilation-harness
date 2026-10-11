@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { scanMembers, type MemberBytes } from "./overlayReferences.ts";
 
 const EXE = { start: 0x80010000, end: 0x8005e800 };

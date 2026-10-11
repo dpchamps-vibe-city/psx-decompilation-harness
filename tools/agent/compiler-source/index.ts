@@ -1,3 +1,4 @@
+import { projectRoot, harnessRoot } from "../../lib/runtimeContext.js";
 /**
  * Index of a vendored compiler source tree (tools/vendor/gcc/<version>).
  *
@@ -26,19 +27,19 @@
 import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, relative, sep } from "node:path";
-import { configuredTool, loadToolchain } from "../../lib/toolchain.js";
+import { configuredTool, loadToolchain, configuredCompilerSource } from "../../lib/toolchain.js";
 import { resolve } from "node:path";
-import { ROOT, configuredGccVersion } from "../decompToolchain.js";
+import { configuredGccVersion } from "../decompToolchain.js";
 import { parseC, namedChildren, field, declaratorName, walk, type Node } from "../residual-source-search/tree-sitter-c.js";
 
 /** Vendored trees live one per version, keyed by the Makefile's GCC_VERSION. */
-export const VENDOR_ROOT = join(ROOT, "tools/vendor/gcc");
-const CACHE_DIR = join(ROOT, "build/compilerSource");
+export const VENDOR_ROOT = () => (join(harnessRoot(), "tools/vendor/gcc"));
+const CACHE_DIR = () => (join(projectRoot(), "build/compilerSource"));
 
 export function vendoredVersions(): string[] {
-  if (!existsSync(VENDOR_ROOT)) return [];
-  return readdirSync(VENDOR_ROOT)
-    .filter((entry) => existsSync(join(VENDOR_ROOT, entry, "pin.json")))
+  if (!existsSync(VENDOR_ROOT())) return [];
+  return readdirSync(VENDOR_ROOT())
+    .filter((entry) => existsSync(join(VENDOR_ROOT(), entry, "pin.json")))
     .sort();
 }
 
@@ -50,8 +51,8 @@ export function vendoredVersions(): string[] {
  */
 export function resolveVersion(requested?: string): string {
   const version = requested ?? configuredGccVersion();
-  const configured = !requested && loadToolchain().compiler.source;
-  if (existsSync(join(configured ? resolve(ROOT, configured) : join(VENDOR_ROOT, version), "pin.json"))) return version;
+  const configured = !requested && configuredCompilerSource();
+  if (existsSync(join(configured || join(VENDOR_ROOT(), version), "pin.json"))) return version;
   const available = vendoredVersions();
   throw new Error(
     `No vendored source for GCC ${version} at tools/vendor/gcc/${version}. ` +
@@ -66,8 +67,8 @@ export function resolveVersion(requested?: string): string {
 
 export function vendorDir(version?: string): string {
   const resolvedVersion = resolveVersion(version);
-  const source = version === undefined ? loadToolchain().compiler.source : undefined;
-  return source ? resolve(ROOT, source) : join(VENDOR_ROOT, resolvedVersion);
+  const source = version === undefined ? configuredCompilerSource() : undefined;
+  return source ?? join(VENDOR_ROOT(), resolvedVersion);
 }
 
 export function sourceDir(version?: string): string {
@@ -563,13 +564,13 @@ export function buildIndex(version?: string): CompilerSourceIndex {
 export function loadIndex(version?: string, refresh = false): CompilerSourceIndex {
   const resolved = resolveVersion(version);
   const pin = loadPin(resolved);
-  const cache = join(CACHE_DIR, `index-${resolved}-${pin.tree.sha256}.json`);
+  const cache = join(CACHE_DIR(), `index-${resolved}-${pin.tree.sha256}.json`);
   if (!refresh && existsSync(cache)) {
     const cached = JSON.parse(readFileSync(cache, "utf8")) as CompilerSourceIndex;
     if (cached.treeSha256 === pin.tree.sha256 && cached.version === resolved) return cached;
   }
   const index = buildIndex(resolved);
-  mkdirSync(CACHE_DIR, { recursive: true });
+  mkdirSync(CACHE_DIR(), { recursive: true });
   writeFileSync(cache, JSON.stringify(index));
   return index;
 }

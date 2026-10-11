@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * Reproducible, mechanism-aware compiler variant laboratory.
  *
@@ -9,16 +10,7 @@
 
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { basename, isAbsolute, join, relative } from "node:path";
-import {
-  ROOT,
-  assembleTarget,
-  configuredToolchainIdentity,
-  disassembleObject,
-  loadFlagOverrides,
-  normalizeFunctionName,
-  resolveSource,
-  type DisassembledInstruction,
-} from "./decompToolchain.js";
+import { assembleTarget, configuredToolchainIdentity, disassembleObject, loadFlagOverrides, normalizeFunctionName, resolveSource, type DisassembledInstruction } from "./decompToolchain.js";
 import { configuredFlags } from "../lib/toolchain.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { analyzeInstructionSets } from "./explainDiff.js";
@@ -128,7 +120,7 @@ function parseArgs(args: string[]): CliOptions {
   let variants = positional;
   if (directory) {
     if (variants.length > 0) usage("do not combine positional variants with --dir");
-    const absolute = isAbsolute(directory) ? directory : join(ROOT, directory);
+    const absolute = isAbsolute(directory) ? directory : join(projectRoot(), directory);
     if (!existsSync(absolute)) usage(`variant directory not found: ${directory}`);
     variants = readdirSync(absolute).filter((file) => file.endsWith(".c")).sort().map((file) => join(absolute, file));
   }
@@ -546,7 +538,7 @@ function main(): void {
     toolchain,
     compilerFlags,
   });
-  const runRoot = join(ROOT, "build/fuzz", options.functionName, runId);
+  const runRoot = join(projectRoot(), "build/fuzz", options.functionName, runId);
   rmSync(runRoot, { recursive: true, force: true });
 
   const targetFull = disassembleObject(assembleTarget(options.functionName, runRoot));

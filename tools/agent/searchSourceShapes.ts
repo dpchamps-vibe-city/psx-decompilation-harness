@@ -1,4 +1,6 @@
 #!/usr/bin/env npx tsx
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 
 import {
   copyFileSync,
@@ -10,17 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, relative } from "node:path";
-import {
-  ROOT,
-  assembleTarget,
-  compileSourceAsync,
-  configuredToolchainIdentity,
-  configuredTool,
-  disassembleObject,
-  loadFlagOverrides,
-  normalizeFunctionName,
-  runToolAsync,
-} from "./decompToolchain.js";
+import { assembleTarget, compileSourceAsync, configuredToolchainIdentity, configuredTool, disassembleObject, loadFlagOverrides, normalizeFunctionName, runToolAsync } from "./decompToolchain.js";
 import { configuredFlags } from "../lib/toolchain.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { buildTraceReportFromArtifacts } from "./compilerTrace.js";
@@ -172,12 +164,12 @@ function preprocessedSemanticHash(path: string): string {
 
 function sourceSearchImplementationHash(): string {
   const files = [
-    join(ROOT, "tools/agent/searchSourceShapes.ts"),
-    join(ROOT, "tools/agent/compilerTrace.ts"),
-    ...readFileNames(join(ROOT, "tools/agent/source-shape-search")),
-    ...readFileNames(join(ROOT, "tools/agent/target-schedule")),
+    join(HARNESS_ROOT, "tools/agent/searchSourceShapes.ts"),
+    join(HARNESS_ROOT, "tools/agent/compilerTrace.ts"),
+    ...readFileNames(join(HARNESS_ROOT, "tools/agent/source-shape-search")),
+    ...readFileNames(join(HARNESS_ROOT, "tools/agent/target-schedule")),
   ];
-  return sha256(files.map((path) => `${relative(ROOT, path)}:${sha256File(path)}`).join("\n"));
+  return sha256(files.map((path) => `${relative(projectRoot(), path)}:${sha256File(path)}`).join("\n"));
 }
 
 function readFileNames(directory: string): string[] {
@@ -204,7 +196,7 @@ async function main(): Promise<void> {
   const analysisHash = analysis ? sha256(stableJson(analysis)) : "none";
   const implementationHash = sourceSearchImplementationHash();
   const runId = sha256(stableJson({ schemaVersion: 1, function: options.functionName, specHash, analysisHash, toolchainHash, implementationHash })).slice(0, 16);
-  const runRoot = join(ROOT, "build/sourceShapeSearch", options.functionName, runId);
+  const runRoot = join(projectRoot(), "build/sourceShapeSearch", options.functionName, runId);
   const checkpointPath = join(runRoot, "checkpoint.json");
   if (!options.resume) rmSync(runRoot, { recursive: true, force: true });
   mkdirSync(runRoot, { recursive: true });
@@ -240,7 +232,7 @@ async function main(): Promise<void> {
 
   const targetObject = assembleTarget(options.functionName, runRoot);
   const target = normalizeDisassembly(disassembleObject(targetObject));
-  const cacheRoot = join(ROOT, "build/sourceShapeSearch/cache");
+  const cacheRoot = join(projectRoot(), "build/sourceShapeSearch/cache");
   const targetOwner = resolveFunctionTarget(options.functionName);
   const compilerFlags = [...configuredFlags("cc1", targetOwner.flags), ...(loadFlagOverrides().get(targetOwner.owner.kind === "library" ? targetOwner.owner.id : options.functionName) || [])];
   const abort = new AbortController();
@@ -286,7 +278,7 @@ async function main(): Promise<void> {
     const directory = join(runRoot, "variants", variant.id);
     const output = join(directory, "source.i");
     try {
-      await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", targetOwner.flags), variant.sourcePath, "-o", output], ROOT, abort.signal);
+      await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", targetOwner.flags), variant.sourcePath, "-o", output], projectRoot(), abort.signal);
       preprocessed.set(variant.id, { variant, hash: preprocessedSemanticHash(output) });
     } catch (error) {
       const result = emptyResult(variant, projectPath(directory), target.length);

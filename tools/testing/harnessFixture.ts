@@ -4,6 +4,7 @@
 import { cpSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRuntimeContext, inRuntimeContext } from "../lib/runtimeContext.js";
 import { HARNESS_ROOT } from "../lib/toolchain.js";
 import { findMatchingLow, parseRelocations, parseSymbolTable, relocatedField } from "../lib/functionOracle.js";
 import { FIXTURE_BASE, FIXTURE_GP, projectFixture, type FixtureFunction } from "./projectFixture.js";
@@ -12,13 +13,22 @@ export function harnessFixture(t: { after: (cleanup: () => void) => void }) {
   const fixture = projectFixture(t, { assemblies: false });
   const { root, put } = fixture;
   put("package.json", '{"type":"module"}\n');
-  for (const dir of ["tools/agent", "tools/lib", "tools/build", "tools/diagnostics", ".pi/extensions", "include", "prompts/reference"])
-    cpSync(join(HARNESS_ROOT, dir), join(root, dir), { recursive: true, filter: p => !p.endsWith(".test.ts") && !p.endsWith(".pyc") });
-  for (const name of ["tools/vendor", "node_modules"]) {
-    mkdirSync(join(root, name, ".."), { recursive: true });
-    symlinkSync(join(HARNESS_ROOT, name), join(root, name));
-  }
-  const load = async <T>(path: string): Promise<T> => await import(pathToFileURL(join(root, path)).href) as T;
+  cpSync(join(HARNESS_ROOT, "include"), join(root, "include"), { recursive: true, filter: path => !path.includes("/psyq") });
+  const context = createRuntimeContext(root);
+  // The fixture owns target files, not a second copy of the implementation.
+  const bound = new WeakMap<Function, Function>();
+  const load = async <T>(path: string): Promise<T> => {
+    const module = await inRuntimeContext(context, () => import(pathToFileURL(join(HARNESS_ROOT, path)).href));
+    return new Proxy(module, { get(target, key) {
+      const value = Reflect.get(target, key);
+      if (typeof value !== "function") return value;
+      if (!bound.has(value)) bound.set(value, new Proxy(value, {
+        apply(fn, self, args) { return inRuntimeContext(context, () => Reflect.apply(fn, self, args)); },
+        construct(fn, args, owner) { return inRuntimeContext(context, () => Reflect.construct(fn, args, owner)); },
+      }));
+      return bound.get(value);
+    } }) as T;
+  };
   /** REL addends stay in the words; relocate from known synthetic addresses,
    * never by borrowing an original game's linker map. Single-function TUs. */
   const compile = async (name: string, text: string, base = FIXTURE_BASE, symbols: Record<string, number> = {}) => {

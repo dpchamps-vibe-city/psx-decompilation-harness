@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * patchLinkerBss.ts — Add library .bss entries to the generated linker script
  *
@@ -16,12 +19,12 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { requireSectionLayout, exeBasename, ROOT } from "../lib/psxExeInfo.ts";
+import { requireSectionLayout, exeBasename } from "../lib/psxExeInfo.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const _layout = requireSectionLayout();
-const LD_SCRIPT = join(ROOT, "build", `${exeBasename()}.ld`);
-const CACHE_PATH = join(ROOT, "build/libSections.json");
+const LD_SCRIPT = () => (join(projectRoot(), "build", `${exeBasename()}.ld`));
+const CACHE_PATH = () => (join(projectRoot(), "build/libSections.json"));
 
 interface LibSections {
   oPath: string;
@@ -40,21 +43,21 @@ function main() {
 
   // Read cached section info, or run resolveLibSections if not available
   let libSections: LibSections[];
-  if (existsSync(CACHE_PATH)) {
+  if (existsSync(CACHE_PATH())) {
     console.log("Reading cached section info from build/libSections.json");
-    libSections = JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
+    libSections = JSON.parse(readFileSync(CACHE_PATH(), "utf-8"));
   } else {
     console.log("Running resolveLibSections.ts (no cache found)...");
-    const output = execSync("npx tsx tools/build/resolveLibSections.ts", {
+    const output = installedExec(process.execPath, currentScriptArgs("tools/build/resolveLibSections.ts", []), {
       encoding: "utf-8",
-      cwd: ROOT,
+      cwd: projectRoot(),
       maxBuffer: 10 * 1024 * 1024,
     });
     libSections = JSON.parse(output);
   }
 
   // Read linker script
-  const ldContent = readFileSync(LD_SCRIPT, "utf-8");
+  const ldContent = readFileSync(LD_SCRIPT(), "utf-8");
 
   // Collect BSS entries sorted by VRAM
   const bssEntries = libSections
@@ -67,7 +70,10 @@ function main() {
     .sort((a, b) => a.vram - b.vram);
 
   console.log(`Found ${bssEntries.length} library BSS entries`);
-  if (bssEntries.length === 0) return;
+  if (bssEntries.length === 0) {
+    if (writeMode) writeFileSync(join(projectRoot(), "build/lib_bss_syms.txt"), "");
+    return;
+  }
   const lines = ldContent.split("\n");
 
   // Find BSS markers
@@ -101,11 +107,11 @@ function main() {
   // then override global BSS symbols with exact addresses extracted from the original.
 
   // Run extractBssSymAddrs.ts to get exact global BSS addresses from the original binary
-  const bssSymsPath = join(ROOT, "build/lib_bss_syms.txt");
+  const bssSymsPath = join(projectRoot(), "build/lib_bss_syms.txt");
   console.log("Extracting BSS symbol addresses from original binary...");
-  const bssSymsOutput = execSync("npx tsx tools/build/extractBssSymAddrs.ts", {
+  const bssSymsOutput = installedExec(process.execPath, currentScriptArgs("tools/build/extractBssSymAddrs.ts", []), {
     encoding: "utf-8",
-    cwd: ROOT,
+    cwd: projectRoot(),
     maxBuffer: 10 * 1024 * 1024,
   });
   writeFileSync(bssSymsPath, bssSymsOutput);
@@ -242,12 +248,12 @@ function main() {
   }
 
   if (!writeMode) {
-    console.log(`\nDry run. Run with --write to update ${LD_SCRIPT}`);
+    console.log(`\nDry run. Run with --write to update ${LD_SCRIPT()}`);
     return;
   }
 
-  writeFileSync(LD_SCRIPT, newLines.join("\n"));
-  console.log(`Updated ${LD_SCRIPT}`);
+  writeFileSync(LD_SCRIPT(), newLines.join("\n"));
+  console.log(`Updated ${LD_SCRIPT()}`);
 }
 
 main();

@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * resolveLibSections.ts — Resolve ROM offsets for non-text sections of matched library .o files
  *
@@ -16,15 +19,15 @@ import { execFileSync, execSync } from "child_process";
 import { configuredTool } from "../lib/toolchain.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { loadPsxExeInfo, requireSectionLayout, ROOT } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, requireSectionLayout } from "../lib/psxExeInfo.ts";
 import { verifiedMatches } from "../lib/sdkDetection.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 const _layout = requireSectionLayout();
-const BINARY_PATH = _info.binaryPath;
-const LOAD_ADDR = _info.loadAddr;
-const PAYLOAD_OFFSET = _info.payloadOffset;
+const BINARY_PATH = () => (_info().binaryPath);
+const LOAD_ADDR = () => (_info().loadAddr);
+const PAYLOAD_OFFSET = () => (_info().payloadOffset);
 
 interface LibMatch {
   vramStart: number;
@@ -72,7 +75,7 @@ interface SymEntry {
 }
 
 function vramToRom(vram: number): number {
-  return vram - LOAD_ADDR + PAYLOAD_OFFSET;
+  return vram - LOAD_ADDR() + PAYLOAD_OFFSET();
 }
 
 /** Parse `readelf -S` output to get section index→name+size map */
@@ -286,14 +289,14 @@ function main() {
 
   // Run detectLibFunctions.ts
   console.error("Running detectLibFunctions.ts...");
-  const output = execSync("npx tsx tools/build/detectLibFunctions.ts", {
+  const output = installedExec(process.execPath, currentScriptArgs("tools/build/detectLibFunctions.ts", []), {
     encoding: "utf-8",
-    cwd: ROOT,
+    cwd: projectRoot(),
     maxBuffer: 10 * 1024 * 1024,
   });
   const matches = verifiedMatches<LibMatch>(output);
 
-  const binary = readFileSync(BINARY_PATH);
+  const binary = readFileSync(BINARY_PATH());
 
   // Data region in binary for fuzzy matching
   const dataRegionStart = _layout.dataStart;

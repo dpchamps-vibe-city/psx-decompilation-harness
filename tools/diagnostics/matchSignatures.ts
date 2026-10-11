@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * matchSignatures.ts — Match PSY-Q library signatures against the binary
  *
@@ -18,16 +19,16 @@ import { configuredSdk } from "../lib/toolchain.js";
 import { digest } from "../lib/contentCache.js";
 import * as fs from "fs";
 import * as path from "path";
-import { ROOT as ROOT_DIR, loadPsxExeInfo, requireSectionLayout } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, requireSectionLayout } from "../lib/psxExeInfo.ts";
 
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 const _layout = requireSectionLayout();
-const BINARY_PATH = _info.binaryPath;
+const BINARY_PATH = () => (_info().binaryPath);
 const SIGS_DIR = path.dirname(configuredSdk().signatures);
-const PAYLOAD_OFFSET = _info.payloadOffset;
-const LOAD_ADDR = _info.loadAddr;
-const TEXT_START = _layout.textStart - PAYLOAD_OFFSET + LOAD_ADDR;
-const TEXT_END = _layout.dataStart - PAYLOAD_OFFSET + LOAD_ADDR;
+const PAYLOAD_OFFSET = () => (_info().payloadOffset);
+const LOAD_ADDR = () => (_info().loadAddr);
+const TEXT_START = () => (_layout.textStart - PAYLOAD_OFFSET() + LOAD_ADDR());
+const TEXT_END = () => (_layout.dataStart - PAYLOAD_OFFSET() + LOAD_ADDR());
 
 interface SigLabel {
   name: string;
@@ -92,7 +93,7 @@ function findPattern(
 }
 
 function fileOffsetToVram(offset: number): number {
-  return offset - PAYLOAD_OFFSET + LOAD_ADDR;
+  return offset - PAYLOAD_OFFSET() + LOAD_ADDR();
 }
 
 function scanVersion(
@@ -143,16 +144,16 @@ function main() {
     : null;
   const outputSymbols = args.includes("--symbols");
 
-  if (!fs.existsSync(BINARY_PATH)) {
-    console.error(`Binary not found: ${BINARY_PATH}`);
+  if (!fs.existsSync(BINARY_PATH())) {
+    console.error(`Binary not found: ${BINARY_PATH()}`);
     process.exit(1);
   }
 
-  const binary = fs.readFileSync(BINARY_PATH);
+  const binary = fs.readFileSync(BINARY_PATH());
 
   // Convert VRAM addresses to file offsets for search bounds
-  const searchStart = TEXT_START - LOAD_ADDR + PAYLOAD_OFFSET;
-  const searchEnd = TEXT_END - LOAD_ADDR + PAYLOAD_OFFSET;
+  const searchStart = TEXT_START() - LOAD_ADDR() + PAYLOAD_OFFSET();
+  const searchEnd = TEXT_END() - LOAD_ADDR() + PAYLOAD_OFFSET();
 
   // Get versions to scan
   const allVersions = fs
@@ -228,7 +229,7 @@ function main() {
       },
       perVersion: ranked.map(([version, matches]) => ({ version, matches: matches.length })),
     };
-    const outPath = path.join(ROOT_DIR, "build/sdkVersion.json");
+    const outPath = path.join(projectRoot(), "build/sdkVersion.json");
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     fs.writeFileSync(outPath, `${JSON.stringify(report, null, 2)}\n`);
     console.log(`Wrote ${outPath}`);

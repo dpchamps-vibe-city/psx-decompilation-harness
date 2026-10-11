@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { IdiomIndex, excludedReason, regionsOf, type Corpus } from "./corpus.js";
 import { compatibility, type ToolchainFingerprint } from "./fingerprint.js";
 import type { MirInsn, MirProgram } from "../pipeline-reversal/types.js";

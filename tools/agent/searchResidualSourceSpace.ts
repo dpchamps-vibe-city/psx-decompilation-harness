@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 
 /**
  * Automatic exhaustive residual source-space search.
@@ -18,7 +19,7 @@
 
 import { isAbsolute, relative, resolve } from "node:path";
 import { existsSync } from "node:fs";
-import { ROOT, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
+import { normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { runResidualSourceSearch } from "./residual-source-search/run.js";
 import { renderResidualSummary } from "./residual-source-search/render-text.js";
 
@@ -63,8 +64,8 @@ function parseCli(args: string[]): CliOptions {
 
 function resolveRequestedSource(functionName: string, requested?: string): string {
   if (!requested) return resolveSource(functionName);
-  const absolute = isAbsolute(requested) ? resolve(requested) : resolve(ROOT, requested);
-  const related = relative(ROOT, absolute).replace(/\\/g, "/");
+  const absolute = isAbsolute(requested) ? resolve(requested) : resolve(projectRoot(), requested);
+  const related = relative(projectRoot(), absolute).replace(/\\/g, "/");
   if (related.startsWith("../")) usage("--source must stay within the project tree");
   if (!existsSync(absolute)) usage(`--source not found: ${requested}`);
   if (!absolute.endsWith(".c")) usage("--source must be a complete .c translation unit");

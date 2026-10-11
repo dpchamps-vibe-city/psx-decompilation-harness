@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * Target-derived memory access index (plan §6 C2).
  *
@@ -12,7 +13,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import {
   containerTargetPath,
   containersCovering,
@@ -170,7 +171,7 @@ function mineContainer(container: Container, index: SymbolIndex): AccessIndex {
  * all invalidate it, as does this tool's own code.
  */
 export function ensureAccessIndex(container: Container): EnsuredArtifact<AccessIndex> {
-  const artifactPath = join(ROOT, "build/matchingReconstruction/access-index", `${container.id}.json`);
+  const artifactPath = join(projectRoot(), "build/matchingReconstruction/access-index", `${container.id}.json`);
   return ensureArtifact<AccessIndex>({
     artifactPath,
     label: `access index for ${container.id}`,

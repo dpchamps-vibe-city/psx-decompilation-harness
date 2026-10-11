@@ -1,3 +1,4 @@
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * Derive per-TU global ownership from the original bytes.
  *
@@ -41,7 +42,7 @@ import {
   resolveAddress,
 } from "../lib/symbolIndex.js";
 
-export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
 
 /* The symbol/extent readers moved to tools/lib once the per-function oracle
  * needed them too; re-exported so existing importers keep working. */
@@ -132,7 +133,7 @@ export type SourceKind = "c" | "include-asm" | "absent";
  * small-data threshold is. Only compiled C depends on the declaration.
  */
 export function classifySource(name: string): { kind: SourceKind; path: string | null } {
-  const path = join(ROOT, "src", `${name}.c`);
+  const path = join(projectRoot(), "src", `${name}.c`);
   if (!existsSync(path)) return { kind: "absent", path: null };
   const text = readFileSync(path, "utf-8");
   const stub = new RegExp(`INCLUDE_ASM\\([^)]*\\b${name}\\b`).test(text);
@@ -183,7 +184,7 @@ export function deriveOwnership(filter?: string): OwnershipRecord[] {
       unresolved,
       fromObject: source.kind === "absent"
         ? null
-        : [...(objectGprelSymbols(join(ROOT, "build/src", `${span.name}.c.o`)) ?? [])].sort(),
+        : [...(objectGprelSymbols(join(projectRoot(), "build/src", `${span.name}.c.o`)) ?? [])].sort(),
     });
   }
   return records;

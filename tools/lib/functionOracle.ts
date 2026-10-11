@@ -1,3 +1,4 @@
+import { projectRoot } from "./runtimeContext.js";
 /**
  * functionOracle.ts — is this object's code the right bytes for this function?
  *
@@ -31,7 +32,7 @@ import { execFileSync } from "child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { ROOT } from "./psxExeInfo.js";
+
 import {
   EXE_CONTAINER_ID,
   containerPath,
@@ -61,7 +62,7 @@ const DISASM_ARCH = "mips:3000";
 
 function tool(command: string, args: string[]): string {
   return execFileSync(command === "objdump" || command === "objcopy" ? configuredTool(command) : command, args, {
-    cwd: ROOT,
+    cwd: projectRoot(),
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024,
   });

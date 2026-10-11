@@ -1,3 +1,6 @@
+import { execFileSync as installedExec } from "node:child_process";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * addDepObjects.ts — Link dependency .o files into the build
  *
@@ -20,19 +23,19 @@ import { execFileSync, execSync } from "child_process";
 import { configuredTool } from "../lib/toolchain.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { loadPsxExeInfo, requireSectionLayout, ROOT, exeSplatYamlPath } from "../lib/psxExeInfo.ts";
+import { loadPsxExeInfo, requireSectionLayout, exeSplatYamlPath } from "../lib/psxExeInfo.ts";
 import { isReturnPadding, readTextObject } from "../lib/psyqMembers.js";
 import { boundaryPremise } from "../lib/sdkProvenance.js";
 import { loadSubsegments } from "../lib/symbolIndex.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _info = loadPsxExeInfo();
+const _info = () => (loadPsxExeInfo());
 const _layout = requireSectionLayout();
 const SPLAT_YAML = exeSplatYamlPath();
-const CACHE_PATH = join(ROOT, "build/libSections.json");
-const DEP_SYMS_PATH = join(ROOT, "build/dep_syms.txt");
-const LOAD_ADDR = _info.loadAddr;
-const PAYLOAD_OFFSET = _info.payloadOffset;
+const CACHE_PATH = () => (join(projectRoot(), "build/libSections.json"));
+const DEP_SYMS_PATH = () => (join(projectRoot(), "build/dep_syms.txt"));
+const LOAD_ADDR = () => (_info().loadAddr);
+const PAYLOAD_OFFSET = () => (_info().payloadOffset);
 const DATA_REGION_START = _layout.dataStart;
 
 interface ResolvedSymbol {
@@ -63,11 +66,11 @@ interface LibSections {
 }
 
 function vramToRom(vram: number): number {
-  return vram - LOAD_ADDR + PAYLOAD_OFFSET;
+  return vram - LOAD_ADDR() + PAYLOAD_OFFSET();
 }
 
 function romToVram(rom: number): number {
-  return rom - PAYLOAD_OFFSET + LOAD_ADDR;
+  return rom - PAYLOAD_OFFSET() + LOAD_ADDR();
 }
 
 function romHex(rom: number): string {
@@ -88,7 +91,7 @@ function getSectionSizes(oPath: string): { textSize: number; bssSize: number } {
   let bssSize = 0;
   try {
     const output = execFileSync(configuredTool("readelf"), ["-S", oPath],
-      { encoding: "utf-8", cwd: ROOT }
+      { encoding: "utf-8", cwd: projectRoot() }
     );
     for (const line of output.split("\n")) {
       const m = line.match(
@@ -111,7 +114,7 @@ function getSymbolOffsets(
   try {
     const output = execFileSync(configuredTool("nm"), [oPath], {
       encoding: "utf-8",
-      cwd: ROOT,
+      cwd: projectRoot(),
     });
     for (const line of output.split("\n")) {
       const m = line.match(/^([0-9a-f]+)\s+([TDBRCSW])\s+(\S+)/i);
@@ -132,7 +135,7 @@ function extractTextBytes(oPath: string): Buffer | null {
   const tmpPath = "/tmp/addDepObjects_text.bin";
   try {
     execFileSync(configuredTool("objcopy"), ["-O", "binary", "-j", ".text", oPath, tmpPath],
-      { cwd: ROOT }
+      { cwd: projectRoot() }
     );
     return readFileSync(tmpPath);
   } catch {
@@ -158,7 +161,7 @@ function parseOSegmentRanges(
     /^\s+- \[(0x[0-9A-Fa-f]+),\s*o,\s*(\.\.\/(?:lib|build\/sdk\/lib)\/[^\],]+)/i;
 
   // Load libSections.json for actual text sizes
-  const libSectionsPath = join(ROOT, "build/libSections.json");
+  const libSectionsPath = join(projectRoot(), "build/libSections.json");
   let textSizeMap = new Map<string, number>();
   if (existsSync(libSectionsPath)) {
     const libSections = JSON.parse(readFileSync(libSectionsPath, "utf-8"));
@@ -197,9 +200,9 @@ function main() {
 
   // Step 1: Run findMissingLibDeps.ts to get dependency info
   console.log("Running findMissingLibDeps.ts...");
-  const depsOutput = execSync("npx tsx tools/build/findMissingLibDeps.ts", {
+  const depsOutput = installedExec(process.execPath, currentScriptArgs("tools/build/findMissingLibDeps.ts", []), {
     encoding: "utf-8",
-    cwd: ROOT,
+    cwd: projectRoot(),
     maxBuffer: 10 * 1024 * 1024,
   });
   const resolvedSymbols: ResolvedSymbol[] = JSON.parse(depsOutput);
@@ -224,7 +227,7 @@ function main() {
   console.log(`\nDependency .o files: ${deps.length}`);
 
   // Read binary for verification
-  const binary = readFileSync(_info.binaryPath);
+  const binary = readFileSync(_info().binaryPath);
 
   // Read current YAML, strip previous addDepObjects entries (idempotent)
   let yamlContent = readFileSync(SPLAT_YAML, "utf-8");
@@ -324,7 +327,7 @@ function main() {
       // Relocation-derived callers ARE independent evidence, unlike exe.txt.
       // Even they cannot license a return-only object splitting a game region's
       // missing epilogue. Leave the region intact and surface the contradiction.
-      const object = readTextObject(readFileSync(join(ROOT, dep.oPath)));
+      const object = readTextObject(readFileSync(join(projectRoot(), dep.oPath)));
       if (isReturnPadding(object)) {
         const previous = gameRegions.find(s => s.rom < romStart && s.rom + s.size >= romStart);
         if (previous && boundaryPremise(binary.subarray(previous.rom, romStart), previous.vram, object).missingTerminal) {
@@ -337,7 +340,7 @@ function main() {
       let skipOffsets = new Set<number>();
       try {
         const relOutput = execFileSync(configuredTool("readelf"), ["-r", dep.oPath],
-          { encoding: "utf-8", cwd: ROOT }
+          { encoding: "utf-8", cwd: projectRoot() }
         );
         for (const line of relOutput.split("\n")) {
           const m = line.match(/^([0-9a-f]+)\s+[0-9a-f]+\s+R_MIPS_/i);
@@ -599,8 +602,8 @@ function main() {
 
     // Load libSections for matched .o positions
     let libSections: LibSections[] = [];
-    if (existsSync(CACHE_PATH)) {
-      libSections = JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
+    if (existsSync(CACHE_PATH())) {
+      libSections = JSON.parse(readFileSync(CACHE_PATH(), "utf-8"));
     }
 
     // For each matched .o with text, get global function/data symbols
@@ -639,9 +642,9 @@ function main() {
     );
 
     if (writeMode && defLines.length > 0) {
-      mkdirSync(join(ROOT, "build"), { recursive: true });
-      writeFileSync(DEP_SYMS_PATH, defLines.join("\n") + "\n");
-      console.log(`Wrote ${DEP_SYMS_PATH}`);
+      mkdirSync(join(projectRoot(), "build"), { recursive: true });
+      writeFileSync(DEP_SYMS_PATH(), defLines.join("\n") + "\n");
+      console.log(`Wrote ${DEP_SYMS_PATH()}`);
     } else if (defLines.length > 0) {
       console.log("Symbol definitions (dry run):");
       for (const line of defLines) console.log(`  ${line}`);
@@ -655,8 +658,8 @@ function main() {
     );
 
     let libSections: LibSections[] = [];
-    if (existsSync(CACHE_PATH)) {
-      libSections = JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
+    if (existsSync(CACHE_PATH())) {
+      libSections = JSON.parse(readFileSync(CACHE_PATH(), "utf-8"));
     }
 
     const existingPaths = new Set(libSections.map((s) => s.oPath));
@@ -680,9 +683,9 @@ function main() {
     }
 
     if (writeMode) {
-      mkdirSync(join(ROOT, "build"), { recursive: true });
-      writeFileSync(CACHE_PATH, JSON.stringify(libSections, null, 2));
-      console.log(`Updated ${CACHE_PATH}`);
+      mkdirSync(join(projectRoot(), "build"), { recursive: true });
+      writeFileSync(CACHE_PATH(), JSON.stringify(libSections, null, 2));
+      console.log(`Updated ${CACHE_PATH()}`);
     }
   }
 

@@ -1,3 +1,4 @@
+import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * T0 — Sub-census of the 907 read-only, call-free unmatched functions.
  *
@@ -13,7 +14,7 @@
 
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../decompToolchain.js";
+
 import { loadContainers, containerTargetPath, vramToRom, type Container } from "../../lib/container.js";
 import { loadSymbolIndex, loadFunctionSpans, requireFunctionLocation } from "../../lib/symbolIndex.js";
 import { decodeBytes, executeFunction, canon, UnsupportedTarget, DagArena, type ExecResult, type LoadMeta } from "./exec.js";
@@ -156,7 +157,7 @@ function detectUnrolledSpine(arena: DagArena, root: DagRef): boolean {
 /* ---- main ---------------------------------------------------------------- */
 
 function analyze(): SubcensusResult {
-  const censusPath = join(ROOT, "build/matchingReconstruction/census.json");
+  const censusPath = join(projectRoot(), "build/matchingReconstruction/census.json");
   const census = JSON.parse(readFileSync(censusPath, "utf-8")) as {
     functions: Array<{
       functionName: string;
@@ -449,8 +450,8 @@ for (const probe of shapeProbes.slice(0, 8)) {
 console.log(breakdownLines.join("\n"));
 
 /* Write JSON result. */
-const outputDir = join(ROOT, "build/matchingReconstruction");
-mkdirSync(outputDir, { recursive: true });
+const outputDir = () => (join(projectRoot(), "build/matchingReconstruction"));
+mkdirSync(outputDir(), { recursive: true });
 const jsonResult = {
   ...result,
   maxExpressionDepths: undefined,
@@ -459,5 +460,5 @@ const jsonResult = {
   ),
   probes: result.probes.slice(0, 200), /* cap output size */
 };
-writeFileSync(join(outputDir, "subcensus.json"), JSON.stringify(jsonResult, null, 2));
+writeFileSync(join(outputDir(), "subcensus.json"), JSON.stringify(jsonResult, null, 2));
 console.error(`written: build/matchingReconstruction/subcensus.json`);

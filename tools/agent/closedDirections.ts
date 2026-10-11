@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * closedDirections.ts — what the heavy tools already answered, and what it closed.
  *
@@ -28,7 +29,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { sha256 } from "./provenance.js";
-import { ROOT, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
+import { normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 
 /**
  * 2 adds `conditionalOn`.
@@ -89,7 +90,7 @@ export function sourceSidePremise(row: Pick<ClosedDirection, "tool" | "result">)
 }
 
 function closedPath(functionName: string): string {
-  return join(ROOT, "build/experimentLedger/closed", `${functionName}.jsonl`);
+  return join(projectRoot(), "build/experimentLedger/closed", `${functionName}.jsonl`);
 }
 
 /** Identity of a claim: same tool, same question, same verdict.
@@ -237,7 +238,7 @@ export function recordClosed(input: RecordClosedInput): ClosedDirection | undefi
   let searched: ClosedDirection["searchedPremise"];
   if (input.sweepReport) {
     try {
-      const text = readFileSync(resolve(ROOT, input.sweepReport), "utf8");
+      const text = readFileSync(resolve(projectRoot(), input.sweepReport), "utf8");
       const report = JSON.parse(text);
       if (report.functionName === input.functionName && searchedPremise(report, sourceHash)) {
         searched = { report: input.sweepReport, reportHash: sha256(text), sourceHash: sourceHash!, contextHash: report.contextHash,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { validateSchedulerConstraintInput } from "./derive.js";
 import { solveFiniteDomain } from "./finite-solver.js";
 import { simulateScheduler } from "./model.js";

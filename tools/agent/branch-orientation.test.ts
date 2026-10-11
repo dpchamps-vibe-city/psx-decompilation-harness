@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { liftWords } from "./pipeline-reversal/lift.js";
 import { branchOrientations, attachJumpAttribution } from "./branch-orientation.js";
 import { jumpTraceFromDumps } from "./jumpTrace.js";

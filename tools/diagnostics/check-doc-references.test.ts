@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "../testing/runtimeTestContext.js";
 import { findReferences } from "./checkDocReferences.ts";
 
 const DIRECTORIES = ["configs", "include", "notes", "src", "tools"];

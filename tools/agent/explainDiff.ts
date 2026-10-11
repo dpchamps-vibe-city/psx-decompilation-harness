@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * explainDiff.ts — classify a function diff by compiler-relevant structure.
  *
@@ -11,15 +12,7 @@
 
 import { readFileSync, rmSync } from "fs";
 import { join, relative } from "path";
-import {
-  ROOT,
-  type DisassembledInstruction,
-  assembleTarget,
-  compileSource,
-  disassembleFunctionObject,
-  normalizeFunctionName,
-  resolveSource,
-} from "./decompToolchain.js";
+import { type DisassembledInstruction, assembleTarget, compileSource, disassembleFunctionObject, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import {
   alignByShape,
   bagDelta,
@@ -1026,7 +1019,7 @@ if (isCLI) {
     const funcName = normalizeFunctionName(positional[0]);
     try {
       const source = resolveSource(funcName, requestedSource);
-      const outputDirectory = join(ROOT, "build/explainDiff", funcName);
+      const outputDirectory = join(projectRoot(), "build/explainDiff", funcName);
       rmSync(outputDirectory, { recursive: true, force: true });
       const compiled = compileSource(source, outputDirectory, funcName, {
         assemble: true,
@@ -1042,13 +1035,13 @@ if (isCLI) {
       if (args.includes("--json")) {
         console.log(JSON.stringify({
           function: funcName,
-          source: relative(ROOT, source),
-          artifacts: relative(ROOT, outputDirectory),
+          source: relative(projectRoot(), source),
+          artifacts: relative(projectRoot(), outputDirectory),
           sdkBoundary,
           ...report,
         }, null, 2));
       } else {
-        printHuman(funcName, relative(ROOT, source), report, relative(ROOT, outputDirectory), sdkBoundary);
+        printHuman(funcName, relative(projectRoot(), source), report, relative(projectRoot(), outputDirectory), sdkBoundary);
       }
     } catch (error: any) {
       console.error(`explainDiff: ${error.message}`);

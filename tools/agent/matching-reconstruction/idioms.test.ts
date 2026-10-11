@@ -3,7 +3,7 @@
  */
 
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "../../testing/runtimeTestContext.js";
 import { evaluateConcrete, recognizeDivision } from "./idioms.js";
 import type { SymExpr } from "./types.js";
 

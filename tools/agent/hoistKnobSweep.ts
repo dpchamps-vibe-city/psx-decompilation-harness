@@ -1,8 +1,11 @@
 #!/usr/bin/env npx tsx
+import { HARNESS_ROOT } from "../lib/runtimeContext.js";
+import { currentScriptArgs } from "../lib/installedScripts.js";
+import { projectRoot } from "../lib/runtimeContext.js";
 /** Measure bounded access-route and independently witnessed record-view products. */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ROOT, normalizeFunctionName, resolveSource, runTool, preprocessOnly } from "./decompToolchain.js";
+import { normalizeFunctionName, resolveSource, runTool, preprocessOnly } from "./decompToolchain.js";
 import { sha256, toolchainHash, projectPath, writeStableJson } from "./provenance.js";
 import { scoreTargetLoopEmission, symbolMaps } from "./analyzeTargetLoopEmission.js";
 import { classifyCandidate, checkRequirement, groupIdentity } from "./loop-emission/compare.js";
@@ -46,12 +49,12 @@ export function hoistKnobSweep(functionName: string, sourceOverride?: string, ma
   const windows = hoistWindows(baseline.assessments);
   if (windows.length === 0) throw new Error("no attributable pass-1-decline goal/window; cascade and pass-2-only invariance routes are outside this sweep");
   /* Fresh cpp is mandatory: a header's type/layout is part of this proof. */
-  const contextDirectory = join(ROOT, "build/hoistKnobSweep", functionName, "contexts", sourceHash.slice(0, 24));
+  const contextDirectory = join(projectRoot(), "build/hoistKnobSweep", functionName, "contexts", sourceHash.slice(0, 24));
   const preprocessed = readFileSync(preprocessOnly(sourcePath, contextDirectory, "context"), "utf8"), contextHash = sha256(preprocessed);
   const sites = sitesFor(source, preprocessed, functionName, windows);
-  const implementation = sha256(["hoistKnobSweep.ts", "hoist-knob-sites.ts", "hoist-record-views.ts", "loop-emission/compare.ts", "loop-emission/desirability.ts", "loop-emission/derive.ts", "loop-trace/threshold.ts", "loop-trace/values.ts", "loopTrace.ts"].map(path => readFileSync(join(ROOT, "tools/agent", path), "utf8")).join("\n"));
-  const identity = sha256(JSON.stringify({ sourceHash, contextHash, implementation, frontend: C_FRONTEND_IDENTITY, toolchain: toolchainHash(), target: baseline.requirement, max })).slice(0, 24);
-  const directory = join(ROOT, "build/hoistKnobSweep", functionName, identity), candidates = join(directory, "candidates");
+  const implementation = sha256(["hoistKnobSweep.ts", "hoist-knob-sites.ts", "hoist-record-views.ts", "loop-emission/compare.ts", "loop-emission/desirability.ts", "loop-emission/derive.ts", "loop-trace/threshold.ts", "loop-trace/values.ts", "loopTrace.ts"].map(path => readFileSync(join(HARNESS_ROOT, "tools/agent", path), "utf8")).join("\n"));
+  const identity = sha256(JSON.stringify({ sourceHash, contextHash, implementation, frontend: C_FRONTEND_IDENTITY(), toolchain: toolchainHash(), target: baseline.requirement, max })).slice(0, 24);
+  const directory = join(projectRoot(), "build/hoistKnobSweep", functionName, identity), candidates = join(directory, "candidates");
   mkdirSync(candidates, { recursive: true });
   const representations: Representation[] = [{ id: "raw", source, sourcePath: projectPath(sourcePath), sites, windows }];
   const preparationErrors: string[] = [];
@@ -104,12 +107,11 @@ export function hoistKnobSweep(functionName: string, sourceOverride?: string, ma
   }
   const successful = variants.filter(row => !row.error);
   if (successful.length > 0) {
-    const argv = ["tsx", join(ROOT, "tools/agent/residualObjective.ts"), functionName,
-      ...(successful.length === variants.length ? ["--dir", candidates] : successful.flatMap(row => ["--source", resolve(ROOT, row.source)])), "--json"];
-    const output = runTool("npx", argv); writeFileSync(join(directory, "residual.json"), output);
+    const argv = [functionName, ...(successful.length === variants.length ? ["--dir", candidates] : successful.flatMap(row => ["--source", resolve(projectRoot(), row.source)])), "--json"];
+    const output = runTool(process.execPath, currentScriptArgs(join(HARNESS_ROOT, "tools/agent/residualObjective.ts"), argv)); writeFileSync(join(directory, "residual.json"), output);
     const residual = JSON.parse(output) as { entries: Array<{ source?: string; objective: ResidualObjective }> };
     for (const row of successful) {
-      const objective = residual.entries.find(entry => entry.source && resolve(ROOT, entry.source) === resolve(ROOT, row.source))?.objective;
+      const objective = residual.entries.find(entry => entry.source && resolve(projectRoot(), entry.source) === resolve(projectRoot(), row.source))?.objective;
       if (objective) row.objective = objective; else row.error = "residualObjective returned no row for this source";
     }
   }
@@ -121,7 +123,7 @@ export function hoistKnobSweep(functionName: string, sourceOverride?: string, ma
     ...(rep.normalization ? { normalization: rep.normalization } : {}),
     coverage: { evaluated: variants.filter(row => row.representation === rep.id).length, total: totals[i]!.toString(), exhaustive: BigInt(variants.filter(row => row.representation === rep.id).length) === totals[i] } }));
   const report = {
-    schemaVersion: 1, functionName, source: projectPath(sourcePath), sourceHash, contextHash, implementation, frontend: C_FRONTEND_IDENTITY, toolchainHash: toolchainHash(), inputStable,
+    schemaVersion: 1, functionName, source: projectPath(sourcePath), sourceHash, contextHash, implementation, frontend: C_FRONTEND_IDENTITY(), toolchainHash: toolchainHash(), inputStable,
     directory: projectPath(directory), windows, sites, goals: baseline.goals, representations: families, measurements, preparationErrors,
     coverage: { evaluated: variants.length, total: total.toString(), exhaustive }, goalMeeting,
     exact: inputStable ? variants.filter(row => row.objective?.exact).map(row => row.id) : [], variants,

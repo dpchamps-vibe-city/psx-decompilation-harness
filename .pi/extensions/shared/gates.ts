@@ -159,9 +159,12 @@ export interface ResidualReading {
  * container's binary had silently changed.
  */
 export async function runBuildCheck(projectRoot: string, timeoutMs = 5 * 60_000, signal?: AbortSignal, memberIds: string[] = []) {
-  // Full acceptance checks every configured container/member; pending library
-  // reconstruction is not permission to narrow this boundary.
-  return runCommand(process.execPath, installedScriptArgs("tools/build/pipeline.ts", ["check-all"], projectRoot),
+  // Library finalization checks complete active TUs plus the accepted set. The
+  // untouched backlog stays unverified; explicit check-all still checks it all.
+  const library = loadLibraryProject(projectRoot);
+  const script = library && memberIds.length ? "tools/agent/library.ts" : "tools/build/pipeline.ts";
+  const args = library && memberIds.length ? ["check", ...memberIds.flatMap(id => ["--member", id])] : ["check-all"];
+  return runCommand(process.execPath, installedScriptArgs(script, args, projectRoot),
     { cwd: projectRoot, timeoutMs, signal, maxCaptureBytes: 4 * 1024 * 1024 });
 }
 

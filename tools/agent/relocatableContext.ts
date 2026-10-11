@@ -5,9 +5,9 @@ import { projectRoot } from "../lib/runtimeContext.js";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { configuredFlags, configuredTool } from "../lib/toolchain.js";
-import { libraryMembers, requireLibraryFunction } from "../lib/libraryTargets.js";
-import { resolveFunctionTarget } from "../lib/targetAdapter.js";
-import { measureLibraryFunction, libraryBuildIdentity } from "./libraryTarget.js";
+import { libraryMembers, requireLibraryFunction, withLibraryMetadata } from "../lib/libraryTargets.js";
+import { libraryFunctionTarget, resolveFunctionTarget } from "../lib/targetAdapter.js";
+import { measureLibraryFunction, libraryBuildIdentities } from "./libraryTarget.js";
 import { prepareM2c } from "../build/prepareM2c.js";
 import { runTool } from "./decompToolchain.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
@@ -19,15 +19,20 @@ import { sourceConstructFindings } from "../../.pi/extensions/shared/source-poli
 import type { ExportResult } from "./contextExport.js";
 
 export function exportRelocatableContext(name: string, root = projectRoot(), dryRun = false): ExportResult {
+  return withLibraryMetadata(() => exportRelocatableContextScoped(name, root, dryRun), undefined, root);
+}
+function exportRelocatableContextScoped(name: string, root: string, dryRun: boolean, supplied?: ReturnType<typeof libraryBuildIdentities>): ExportResult {
   root = resolve(root);
+  const batch = supplied ?? libraryBuildIdentities(root);
   const target = resolveFunctionTarget(name, root);
   const skipped = (reason: string): ExportResult => ({ status: "skipped", skipped: true, signatureMatches: false, signatures: [], localPrototypes: [], reason });
   if (!existsSync(join(root, target.source))) return skipped("file not found");
   const before = requireLibraryFunction(target.key, root).member;
-  const identity = libraryBuildIdentity(before, root);
+  const identity = batch.identity(before);
   const measured = measureLibraryFunction(target.key);
   const { member, comparison, artifacts } = measured;
-  if (before.sha256 !== member.sha256 || identity !== libraryBuildIdentity(member, root)) throw new Error("Publication inputs changed during compile; rerun context export");
+  if (before.sha256 !== member.sha256 || identity !== batch.identity(member)) throw new Error("Publication inputs changed during compile; rerun context export");
+  if (!supplied) batch.assertUnchanged();
   const source = readFileSync(artifacts.source, "utf8"), guard = analyzeCSource(source);
   const findings = sourceConstructFindings(source, loadConfig(root), { name: target.owner.id, container: target.owner.id });
   const preprocessed = readFileSync(artifacts.preprocessed, "utf8");
@@ -56,10 +61,13 @@ export function exportRelocatableContext(name: string, root = projectRoot(), dry
     try {
       for (const [path, text] of contents) { mkdirSync(dirname(path), { recursive: true }); writeIfChanged(path, text); }
       const m2c = prepareM2c(root);
+      // Validate the published context, not m2c's ability to decompile an
+      // already matched function (BIOS tail jumps are intentionally macros).
       const output = runTool(configuredTool("python", root), [m2c.script, ...configuredFlags("m2c", target.flags, root), "--no-cache",
-        "-f", target.symbol, "--context", target.context.types, "--context", target.context.functions, target.assembly.translationUnit], root);
+        "--dump-typemap", "--context", target.context.types, "--context", target.context.functions, target.assembly.translationUnit], root);
       if (output.includes("Syntax error when parsing C context")) throw new Error(output);
-      if (identity !== libraryBuildIdentity(member, root)) throw new Error("Publication inputs changed; rerun context export");
+      if (identity !== batch.identity(member)) throw new Error("Publication inputs changed; rerun context export");
+      if (!supplied) batch.assertUnchanged();
     } catch (error) {
       for (const [path, text] of previous) { if (text === null) rmSync(path, { force: true }); else writeIfChanged(path, text); }
       throw error;
@@ -69,12 +77,27 @@ export function exportRelocatableContext(name: string, root = projectRoot(), dry
 }
 
 export function exportAllRelocatableContexts(root = projectRoot(), dryRun = false): { exported: string[]; skipped: string[] } {
-  const exported: string[] = [], skipped: string[] = [];
-  for (const member of libraryMembers(root)) {
-    const fn = member.functions[0];
-    if (!fn || !existsSync(join(root, member.source)) || analyzeCSource(readFileSync(join(root, member.source), "utf8")).includeAsm.length) { skipped.push(member.id); continue; }
-    const result = exportRelocatableContext(`${member.id}::${fn.name}`, root, dryRun);
-    (result.skipped ? skipped : exported).push(member.id);
-  }
-  return { exported, skipped };
+  const members = libraryMembers(root);
+  return withLibraryMetadata(() => {
+    const exported: string[] = [], skipped: string[] = [], batch = libraryBuildIdentities(root);
+    const previous = new Map<string, string | null>();
+    try {
+      for (const member of members) {
+        const fn = member.functions[0];
+        if (!fn || !existsSync(join(root, member.source)) || analyzeCSource(readFileSync(join(root, member.source), "utf8")).includeAsm.length) { skipped.push(member.id); continue; }
+        if (!dryRun) {
+          const target = libraryFunctionTarget(member, fn, root);
+          for (const file of [target.context.types, target.context.functions]) {
+            const path = resolve(root, file); previous.set(path, existsSync(path) ? readFileSync(path, "utf8") : null);
+          }
+        }
+        const result = exportRelocatableContextScoped(`${member.id}::${fn.name}`, root, dryRun, batch);
+        (result.skipped ? skipped : exported).push(member.id);
+      }
+      batch.assertUnchanged(); return { exported, skipped };
+    } catch (error) {
+      for (const [path, text] of previous) { if (text === null) rmSync(path, { force: true }); else writeIfChanged(path, text); }
+      throw error;
+    }
+  }, members, root);
 }

@@ -40,7 +40,9 @@ export async function createTreeFromWorktree(
   try {
     const env = { GIT_INDEX_FILE: index, GIT_DIR: await gitDir(projectRoot, signal), GIT_WORK_TREE: resolve(worktree) };
     await git(projectRoot, ["read-tree", "HEAD"], worktree, env, 120_000, signal);
-    await git(projectRoot, ["add", "-A", "--", ...roots], worktree, env, 120_000, signal);
+    const tracked = (await git(projectRoot, ["ls-files", "--", ...roots], worktree, env, 120_000, signal)).split("\n");
+    const presentRoots = roots.filter(root => existsSync(join(worktree, root)) || tracked.some(file => file === root || file.startsWith(root + "/")));
+    if (presentRoots.length) await git(projectRoot, ["add", "-A", "--", ...presentRoots], worktree, env, 120_000, signal);
     return await git(projectRoot, ["write-tree"], worktree, env, 120_000, signal);
   } finally {
     rmSync(temp, { recursive: true, force: true });

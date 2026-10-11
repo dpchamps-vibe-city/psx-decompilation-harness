@@ -35,9 +35,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { loadLibraryProject } from "../../lib/project.js";
-import { requireLibraryFunction } from "../../lib/libraryTargets.js";
+import { libraryMembers, libraryTargetKey, requireLibraryFunction, withLibraryMetadata } from "../../lib/libraryTargets.js";
 import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
-import { isLibraryMemberVerified } from "../libraryTarget.js";
+import { verifiedLibraryMembers } from "../libraryTarget.js";
 import { loadContainers, containerTargetPath } from "../../lib/container.js";
 import { requireFunctionLocation, withSymbolMetadata } from "../../lib/symbolIndex.js";
 import { digest, snapshot, readCache, writeCache } from "../../lib/contentCache.js";
@@ -288,10 +288,18 @@ export interface BuildOptions {
 export function corpusCandidates(): Array<{ functionName: string; sourcePath: string }> {
   const graph = loadCallGraph(projectRoot());
   const out: Array<{ functionName: string; sourcePath: string }> = [];
-  const containers = loadLibraryProject() ? [] : loadContainers();
+  const library = loadLibraryProject();
+  const containers = library ? [] : loadContainers();
+  const members = library ? libraryMembers() : [];
+  const owners = new Map(members.flatMap(member => member.functions.map(fn => [libraryTargetKey(member, fn.name), member] as const)));
+  const verified = library ? verifiedLibraryMembers(members) : new Map<string, boolean>();
   for (const entry of graph.functions) {
     if (entry.dead || entry.handwritten === "asm") continue;
-    if (loadLibraryProject() && !isLibraryMemberVerified(requireLibraryFunction(entry.name).member, projectRoot())) continue;
+    if (library) {
+      const member = owners.get(entry.name);
+      if (!member) throw new Error(`Unknown library function: ${entry.name}; regenerate the call graph`);
+      if (!verified.get(member.id)) continue;
+    }
     const relative = entry.source ?? `src/${entry.name}.c`;
     let path = join(projectRoot(), relative);
     if (!existsSync(path)) {
@@ -330,7 +338,7 @@ export function loadCorpus(
   lift: (functionName: string) => MirProgram | undefined,
   options: BuildOptions = {},
 ): Corpus {
-  return withSymbolMetadata(() => {
+  return withLibraryMetadata(() => withSymbolMetadata(() => {
     const tier = options.tier ?? 0;
     const skip = new Set(options.exclude ?? []);
     const implementation = digest(JSON.stringify(snapshot(projectRoot(), ["tools/agent/idiom-corpus", "tools/agent/idiomSearch.ts",
@@ -371,13 +379,16 @@ export function loadCorpus(
     });
     console.error(`  idiom corpus tier ${tier}: ${hits} original-region cache hits, ${misses} misses (absent, corrupt or changed original/lifting inputs)`);
     return corpus;
-  });
+  }));
 }
 
 export function buildCorpus(
   lift: (functionName: string) => MirProgram | undefined,
   options: BuildOptions = {},
 ): Corpus {
+  return withLibraryMetadata(() => buildCorpusScoped(lift, options));
+}
+function buildCorpusScoped(lift: (functionName: string) => MirProgram | undefined, options: BuildOptions): Corpus {
   const tier = options.tier ?? 0;
   const skip = new Set(options.exclude ?? []);
   const candidates = corpusCandidates().filter((candidate) => !skip.has(candidate.functionName));

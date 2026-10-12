@@ -22,7 +22,8 @@
  * Add --json to any query for the machine-readable form.
  */
 
-import { loadIndex, loadPin, verifyTree, vendoredVersions, resolveVersion, type Definition } from "./compiler-source/index.js";
+import { loadIndex, loadPin, verifyTree, verifyCompilerBinding, vendorDir, vendoredVersions, resolveVersion, type Definition } from "./compiler-source/index.js";
+import { configuredGccVersion } from "./decompToolchain.js";
 import {
   definitionText, findDefinitions, findDumpPass, findPatterns, grep,
   patternText, references, enclosingDefinition,
@@ -51,7 +52,7 @@ function scopeNote(): string {
   const resolved = resolveVersion(version);
   const pin = loadPin(resolved);
   return `scope: GCC ${resolved} (${pin.tree.files} files, complete for cc1). ` +
-    `Excluded: ${pin.excluded.length} sets — see tools/vendor/gcc/${resolved}/pin.json.`;
+    `Excluded: ${pin.excluded.length} sets — source pin: ${vendorDir(version)}/pin.json.`;
 }
 
 function healthNote(): string {
@@ -89,14 +90,19 @@ try {
 }
 
 function run(): void {
+  const producer = configuredGccVersion();
+  if (version && version !== producer) console.error(
+    `CROSS-VERSION REFERENCE ONLY: GCC ${version} is not the configured GCC ${producer}. ` +
+    "Do not use this source as proof of the producing compiler's passes, allocation or address expansion.");
 switch (command) {
   case "verify": {
     const result = verifyTree(version);
-    if (json) { emit(result); break; }
+    const binaryBinding = result.ok ? verifyCompilerBinding(version) : { status: "unverified" };
+    if (json) { emit({ ...result, source: vendorDir(version), binaryBinding }); if (!result.ok) process.exitCode = 1; break; }
     console.log(`GCC ${result.version}: ${result.files} files, tree sha256 ${result.actual}`);
     console.log(`vendored versions: ${vendoredVersions().join(", ") || "none"}`);
     console.log(result.ok
-      ? "VERIFIED: matches pin.json; this is the source cc1 was built from."
+      ? `VERIFIED: matches source-tree pin; compiler-binary binding: ${binaryBinding.status}.`
       : `DRIFT: pin.json expects ${result.expected} over ${result.expectedFiles} files. Queries will refuse.`);
     if (!result.ok) process.exitCode = 1;
     break;

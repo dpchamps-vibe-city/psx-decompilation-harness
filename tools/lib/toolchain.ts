@@ -106,7 +106,15 @@ export function configuredTool(name: ToolName, root = projectRoot()): string {
 }
 export function configuredCompilerSource(root = projectRoot()): string | undefined {
   const value = loadToolchain(root).compiler.source;
-  return value === undefined ? undefined : resolveOwnedPath(value, contextForProject(root));
+  if (value === undefined) return undefined;
+  const source = resolveOwnedPath(value, contextForProject(root));
+  if (!existsSync(source) && typeof value === "object" && value.origin === "runtime" &&
+      value.path === "dependencies/compiler/gcc-2.95.2-psx/compiler-source") {
+    /* The supported compiler build exports its own source. Existing binaries
+     * lacking an export stay untouched and require explicit source provision. */
+    configuredTool("cc1", root);
+  }
+  return source;
 }
 export interface FlagContext { id?: string | undefined; kind: "exe" | "overlay" | "library"; profile?: string }
 export function configuredFlags(name: FlagName, container?: FlagContext, root = projectRoot()): string[] {

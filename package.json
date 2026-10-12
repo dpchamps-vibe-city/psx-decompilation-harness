@@ -41,6 +41,8 @@
     "clean": "node --import tsx tools/lib/scriptHost.ts tools/build/pipeline.ts clean",
     "wipe": "node --import tsx tools/lib/scriptHost.ts tools/build/pipeline.ts wipe",
     "setup": "node --import tsx tools/lib/scriptHost.ts tools/build/pipeline.ts setup",
+    "compiler-source": "node --import tsx tools/lib/scriptHost.ts tools/agent/compilerSource.ts",
+    "prepare-compiler-source": "node --import tsx tools/lib/scriptHost.ts tools/build/prepareCompilerSource.ts",
     "bootstrap": "tsx tools/build/scaffoldProject.ts",
     "profile": "node --import tsx tools/lib/scriptHost.ts tools/build/genProjectProfile.ts",
     "identify": "node --import tsx tools/lib/scriptHost.ts tools/diagnostics/identifyToolchain.ts",

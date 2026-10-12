@@ -27,8 +27,7 @@ import { projectRoot, harnessRoot } from "../../lib/runtimeContext.js";
 import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, relative, sep } from "node:path";
-import { configuredTool, loadToolchain, configuredCompilerSource } from "../../lib/toolchain.js";
-import { resolve } from "node:path";
+import { configuredTool, executablePath, configuredCompilerSource } from "../../lib/toolchain.js";
 import { configuredGccVersion } from "../decompToolchain.js";
 import { parseC, namedChildren, field, declaratorName, walk, type Node } from "../residual-source-search/tree-sitter-c.js";
 
@@ -51,23 +50,27 @@ export function vendoredVersions(): string[] {
  */
 export function resolveVersion(requested?: string): string {
   const version = requested ?? configuredGccVersion();
-  const configured = !requested && configuredCompilerSource();
-  if (existsSync(join(configured || join(VENDOR_ROOT(), version), "pin.json"))) return version;
+  const configured = version === configuredGccVersion() ? configuredCompilerSource() : undefined;
+  const directory = configured ?? join(VENDOR_ROOT(), version);
+  if (existsSync(join(directory, "pin.json"))) return version;
   const available = vendoredVersions();
   throw new Error(
-    `No vendored source for GCC ${version} at tools/vendor/gcc/${version}. ` +
+    `No pinned source for GCC ${version} at ${directory}. ` +
     (available.length
       ? `Vendored: ${available.join(", ")}. `
       : "Nothing is vendored yet. ") +
     (requested
-      ? "Pass a vendored version, or vendor this one (see any pin.json for the recipe)."
-      : `toolchain.json compiler.version is ${version}; provision its pinned source or select a supported version.`),
+      ? "An explicit other version is reference-only, not evidence for this project's compiler."
+      : `Provide this compiler's patched source through toolchain.json compiler.source. ` +
+        "Do not switch compiler versions to work around missing source; production compilation remains available."),
   );
 }
 
 export function vendorDir(version?: string): string {
   const resolvedVersion = resolveVersion(version);
-  const source = version === undefined ? configuredCompilerSource() : undefined;
+  /* Internal callers pass the resolved version back in. That is still the
+   * project's compiler, not an instruction to discard its configured source. */
+  const source = resolvedVersion === configuredGccVersion() ? configuredCompilerSource() : undefined;
   return source ?? join(VENDOR_ROOT(), resolvedVersion);
 }
 
@@ -77,12 +80,27 @@ export function sourceDir(version?: string): string {
 
 export interface Pin {
   name: string;
-  correspondsTo: { binary: string; recipe: string; target: string };
+  gccVersion?: string;
+  correspondsTo: { binary: string; binarySha256?: string; recipe: string; target: string };
+  build?: { recipeSha256: string; contextSha256: string };
   upstream: { url: string; sha256: string };
   tree: { root: string; sha256: string; algorithm: string; files: number };
   included: string[];
   excluded: string[];
   exclusionRisk: string;
+}
+
+export function verifyCompilerBinding(version?: string): { status: "verified" | "reference-only" | "unrecorded"; expected?: string; actual?: string } {
+  const resolved = resolveVersion(version);
+  if (resolved !== configuredGccVersion()) return { status: "reference-only" };
+  const expected = loadPin(resolved).correspondsTo.binarySha256;
+  if (!expected) return { status: "unrecorded" };
+  if (!/^[a-f0-9]{64}$/.test(expected)) throw new Error("Invalid compiler binary SHA-256 in source pin");
+  const binary = executablePath(configuredTool("cc1"));
+  if (!binary) throw new Error("Configured compiler binary is unavailable; source/binary binding cannot be established.");
+  const actual = createHash("sha256").update(readFileSync(binary)).digest("hex");
+  if (actual !== expected) throw new Error(`Compiler-source binding mismatch: configured cc1 hashes ${actual}, source pin records ${expected}. Re-provision matching source; do not substitute another GCC version.`);
+  return { status: "verified", expected, actual };
 }
 
 export type DefinitionKind =
@@ -155,7 +173,11 @@ export interface CompilerSourceIndex {
 /* ------------------------------------------------------------------ */
 
 export function loadPin(version?: string): Pin {
-  return JSON.parse(readFileSync(join(vendorDir(version), "pin.json"), "utf8")) as Pin;
+  const pin = JSON.parse(readFileSync(join(vendorDir(version), "pin.json"), "utf8")) as Pin;
+  const resolved = resolveVersion(version);
+  if (pin.gccVersion && pin.gccVersion !== resolved)
+    throw new Error(`Configured GCC ${resolved} source pin identifies GCC ${pin.gccVersion}; refusing cross-version authority.`);
+  return pin;
 }
 
 /** Every regular file under src/, as paths relative to src/, C-sorted. */
@@ -564,6 +586,11 @@ export function buildIndex(version?: string): CompilerSourceIndex {
 export function loadIndex(version?: string, refresh = false): CompilerSourceIndex {
   const resolved = resolveVersion(version);
   const pin = loadPin(resolved);
+  /* A cache is not licence to skip source identity: pin.json may be unchanged
+   * while the files it describes have drifted since the index was written. */
+  const verified = verifyTree(resolved);
+  if (!verified.ok) throw new Error(`GCC ${resolved} source drift: ${verified.actual} != ${verified.expected}; refusing cached answers.`);
+  verifyCompilerBinding(resolved);
   const cache = join(CACHE_DIR(), `index-${resolved}-${pin.tree.sha256}.json`);
   if (!refresh && existsSync(cache)) {
     const cached = JSON.parse(readFileSync(cache, "utf8")) as CompilerSourceIndex;

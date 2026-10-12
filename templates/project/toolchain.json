@@ -4,8 +4,8 @@
     "family": "gcc",
     "version": "2.95.2",
     "source": {
-      "origin": "harness",
-      "path": "tools/vendor/gcc/2.95.2"
+      "origin": "runtime",
+      "path": "dependencies/compiler/gcc-2.95.2-psx/compiler-source"
     },
     "capabilities": [
       "gcc-rtl-dumps",

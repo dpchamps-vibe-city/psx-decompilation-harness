@@ -2,6 +2,12 @@ import { strict as assert } from "node:assert";
 import { test } from "../../testing/runtimeTestContext.js";
 import { loadIndex, scanMachineDescription, collectDumpPasses, verifyTree, resolveVersion, vendoredVersions } from "./index.js";
 import { configuredGccVersion } from "../decompToolchain.js";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createRuntimeContext, inRuntimeContext } from "../../lib/runtimeContext.js";
+import { digest } from "../../lib/contentCache.js";
+import { loadToolchain } from "../../lib/toolchain.js";
 import { definitionText, findDefinitions, findDumpPass, findPatterns, referencesIn } from "./query.js";
 
 /* The vendored tree is the source cc1 was built from. If it drifts, every
@@ -125,11 +131,44 @@ test("dump collection reads open/close pairs rather than a fixed nesting", () =>
   assert.deepEqual(passes[0]!.writtenAfter.map((call) => call.name), ["thing_main"]);
 });
 
+test("project-owned compiler source survives resolved-version calls and rejects cached drift", t => {
+  const root = mkdtempSync(join(tmpdir(), "gcc-project-source-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const config = structuredClone(loadToolchain());
+  config.compiler.version = "2.7.2";
+  config.compiler.source = { origin: "project", path: "compiler-input" };
+  config.tools.cc1 = { origin: "project", path: "cc1" };
+  writeFileSync(join(root, "toolchain.json"), JSON.stringify(config));
+  writeFileSync(join(root, "cc1"), "synthetic compiler identity, never a target compiler");
+  const source = "int project_only_marker(void) { return 7; }\n";
+  mkdirSync(join(root, "compiler-input/src/gcc"), { recursive: true });
+  writeFileSync(join(root, "compiler-input/src/gcc/marker.c"), source);
+  writeFileSync(join(root, "compiler-input/pin.json"), JSON.stringify({
+    name: "synthetic gcc-2.7.2", gccVersion: "2.7.2",
+    correspondsTo: { binary: "cc1", binarySha256: digest("synthetic compiler identity, never a target compiler"), recipe: "fixture", target: "synthetic" },
+    tree: { root: "src", sha256: digest(`${digest(source)}  gcc/marker.c\n`), files: 1 },
+    included: ["fixture"], excluded: ["all production sources"],
+  }));
+  inRuntimeContext(createRuntimeContext(root), () => {
+    assert.equal(verifyTree().ok, true);
+    assert.equal(verifyTree("2.7.2").ok, true);
+    const index = loadIndex();
+    const definition = findDefinitions(index, "project_only_marker")[0]!;
+    assert.ok(definitionText(index, definition).includes("return 7"));
+    assert.equal(loadIndex("2.7.2").treeSha256, index.treeSha256);
+    writeFileSync(join(root, "compiler-input/src/gcc/marker.c"), "int changed(void) { return 8; }");
+    assert.throws(() => loadIndex(), /source drift/);
+    writeFileSync(join(root, "compiler-input/src/gcc/marker.c"), source);
+    writeFileSync(join(root, "cc1"), "different compiler");
+    assert.throws(() => loadIndex(), /Compiler-source binding mismatch/);
+  });
+});
+
 test("the vendored tree is resolved from project config, not a hardcoded version", () => {
   const configured = configuredGccVersion();
   assert.equal(resolveVersion(), configured);
   assert.ok(vendoredVersions().includes(configured),
     `GCC ${configured} is configured but not vendored under tools/vendor/gcc/`);
-  assert.throws(() => resolveVersion("0.0.0"), /No vendored source for GCC 0\.0\.0/);
+  assert.throws(() => resolveVersion("0.0.0"), /No pinned source for GCC 0\.0\.0/);
   assert.equal(loadIndex().version, configured);
 });

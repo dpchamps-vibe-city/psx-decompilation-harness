@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, w
 import { dirname, join } from "node:path";
 import { contextForProject } from "../lib/runtimeContext.js";
 import { fileDigest, filesUnder, digest } from "../lib/contentCache.js";
+import { sourceExportRecipe, writeCompilerSourcePin } from "../lib/compilerBuildSource.js";
 export function prepareSupportedCompiler(root: string): string {
   const context = contextForProject(root), recipe = join(context.harnessRoot, "tools/vendor/old-gcc/gcc-2.95.2-psx.Dockerfile");
   const destination = join(context.runtimeRoot, "dependencies/compiler/gcc-2.95.2-psx"), compiler = join(destination, "cc1");
@@ -14,11 +15,17 @@ export function prepareSupportedCompiler(root: string): string {
   const recipeHash = digest(JSON.stringify(inputs.map(path => [path.slice(dirname(recipe).length), fileDigest(path)])));
   mkdirSync(dirname(destination), { recursive: true });
   const temporary = mkdtempSync(join(dirname(destination), "compiler-build-"));
+  const captureRecipe = sourceExportRecipe(readFileSync(recipe, "utf8"), "2.95.2");
+  const dockerfile = join(temporary, "source-export.Dockerfile");
+  writeFileSync(dockerfile, captureRecipe);
   try {
-    execFileSync("docker", ["build", "--file", recipe, "--output", `type=local,dest=${temporary}`, dirname(recipe)], { cwd: root, stdio: "inherit" });
+    execFileSync("docker", ["build", "--file", dockerfile, "--output", `type=local,dest=${temporary}`, dirname(recipe)], { cwd: root, stdio: "inherit" });
     if (!existsSync(join(temporary, "cc1"))) throw new Error("Supported recipe produced no cc1");
     const probe = execFileSync(join(temporary, "cc1"), ["-version"], { input: "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-    writeFileSync(join(temporary, "compiler-provenance.json"), JSON.stringify({ schemaVersion: 1, version: "2.95.2-psx", recipeHash, compilerHash: fileDigest(join(temporary, "cc1")), probe }) + "\n");
+    writeCompilerSourcePin({ bundle: join(temporary, "compiler-source"), compiler: join(temporary, "cc1"),
+      binaryReference: compiler, recipe, version: "2.95.2", root, captureRecipe });
+    writeFileSync(join(temporary, "compiler-provenance.json"), JSON.stringify({ schemaVersion: 1, version: "2.95.2-psx", recipeHash, compilerHash: fileDigest(join(temporary, "cc1")),
+      source: "compiler-source", sourceTreeSha256: JSON.parse(readFileSync(join(temporary, "compiler-source/pin.json"), "utf8")).tree.sha256, probe }) + "\n");
     if (existsSync(destination)) throw new Error(`Incomplete compiler cache is preserved: ${destination}`);
     renameSync(temporary, destination);
     return compiler;

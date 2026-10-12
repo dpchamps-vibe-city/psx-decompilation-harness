@@ -10,8 +10,41 @@ export function librarySourceScaffold(member: LibraryMember, headers: string[], 
     parts.map(part => `INCLUDE_ASM("${folder}", ${part.symbol});\n`).join("");
 }
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A named export may also be the destination of a section-relative reference.
+ * Keep the export, but use a local alias only at sites whose original relocation
+ * references the section. Otherwise GAS changes that reference to the export. */
+function preserveSectionReferences(member: LibraryMember, assembly: string): string {
+  const exports = member.object.symbols.filter(s => s.binding !== 0 && member.object.sections.has(s.section));
+  const aliases = new Map<string, string>();
+  let section = "";
+  assembly = assembly.split("\n").map(line => {
+    const directive = /^\.section\s+([^\s,]+)/.exec(line);
+    if (directive) section = directive[1]!;
+    const comment = /^\s*\/\*\s*([\da-fA-F]+)\s+[\da-fA-F]+\s+[\da-fA-F]+\s*\*\//.exec(line);
+    const storage = member.object.sections.get(section);
+    if (!comment || !storage) return line;
+    const offset = parseInt(comment[1]!, 16) - storage.offset;
+    const references = member.object.relocations.filter(r => r.section === section && r.offset === offset);
+    if (references.length !== 1) return line;
+    for (const symbol of exports) {
+      if (references[0]!.reference !== `${symbol.section}@0`) continue;
+      const operand = new RegExp(`(?<![\\w.$])${escape(symbol.name)}(?![\\w.$])`, "g");
+      const alias = `.L__library_section_ref_${symbol.name}`;
+      const rewritten = line.replace(operand, alias);
+      if (rewritten !== line) { aliases.set(symbol.name, alias); line = rewritten; }
+    }
+    return line;
+  }).join("\n");
+  for (const [name, alias] of aliases) {
+    const definition = new RegExp(`^(\\s*(?:glabel|dlabel|jlabel|alabel|ehlabel)\\s+${escape(name)}(?:,|\\s|$)[^\\n]*)$`, "m");
+    if (!definition.test(assembly)) throw new Error(`No storage label for section-relative alias ${member.id}::${name}`);
+    assembly = assembly.replace(definition, `${alias}:\n$1`);
+  }
+  return assembly;
+}
 export function libraryAssemblyParts(member: LibraryMember, assembly: string): LibraryAssemblyPart[] {
   if (member.functions.some(fn => fn.name === "__library_member_data")) throw new Error("Reserved scaffold symbol __library_member_data conflicts with an original function");
+  assembly = preserveSectionReferences(member, assembly);
   const parts: LibraryAssemblyPart[] = [], data: string[] = [];
   const sections = [...assembly.matchAll(/^\.section\s+([^\s,]+).*$/gm)];
   const directives = '.include "macro.inc"\n.set noat\n.set noreorder\n';

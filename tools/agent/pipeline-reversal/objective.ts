@@ -334,6 +334,6 @@ export function summarizeObjective(objective: ResidualObjective): string {
   if (objective.population > 0) terms.push(`pop ${objective.population}`);
   if (objective.schedule > 0) terms.push(`sched ${objective.schedule}`);
   if (objective.allocation > 0) terms.push(`alloc ${objective.allocation}`);
-  const body = terms.length > 0 ? terms.join(" ") : "no residual, bytes still differ";
+  const body = terms.length > 0 ? terms.join(" ") : objective.degraded ? "unclassified byte differences" : "no modeled residual, bytes still differ";
   return `${body}${undetermined}`;
 }

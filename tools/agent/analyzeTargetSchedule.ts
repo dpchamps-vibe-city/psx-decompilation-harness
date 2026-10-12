@@ -3,6 +3,7 @@ import { projectRoot } from "../lib/runtimeContext.js";
 
 import { join } from "node:path";
 import { buildTraceReport } from "./compilerTrace.js";
+import { requireCompilerCapability } from "../lib/toolchain.js";
 import { assembleTarget, disassembleObject, normalizeFunctionName } from "./decompToolchain.js";
 import { normalizeDisassembly } from "./variant-lab/compile.js";
 import { analyzeTargetScheduleFromArtifacts } from "./target-schedule/analyze.js";
@@ -51,6 +52,7 @@ function parseCli(args: string[]): AnalyzeTargetScheduleOptions {
 }
 
 export function analyzeTargetSchedule(options: AnalyzeTargetScheduleOptions): TargetScheduleAnalysis {
+  requireCompilerCapability("gcc-rtl-dumps");
   const outputDirectory = join(projectRoot(), "build/targetSchedule", options.functionName);
   /* Keep target-schedule traces isolated from interactive compilerTrace runs. */
   const trace = buildTraceReport(

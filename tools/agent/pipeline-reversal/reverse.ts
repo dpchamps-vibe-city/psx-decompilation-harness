@@ -16,7 +16,7 @@ import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
 import { configuredFlags, configuredFileFlags } from "../../lib/toolchain.js";
 import { filesUnder } from "../../lib/contentCache.js";
 import { requireLibraryFunction } from "../../lib/libraryTargets.js";
-import { CPP_FLAGS, compileSource, containerForSymbol, configuredAsFlagsForContainer, configuredCc1FlagsForContainer, configuredMaspsxFlags, containerKindForSymbol, loadFlagOverrides, normalizeFunctionName, resolveSource, sourceDependencyFiles } from "../decompToolchain.js";
+import { CPP_FLAGS, compileSource, captureAssemblerExpansion, containerForSymbol, configuredAsFlagsForContainer, configuredCc1FlagsForContainer, configuredMaspsxFlags, containerKindForSymbol, loadFlagOverrides, normalizeFunctionName, resolveSource, sourceDependencyFiles } from "../decompToolchain.js";
 import {
   type EnsuredArtifact,
   type ProvenanceInputs,
@@ -130,7 +130,7 @@ function ensureCandidateObject(
   functionName: string,
   outputDirectory: string,
   options: ReverseOptions,
-): EnsuredArtifact<{ object: string; source: string }> {
+): EnsuredArtifact<{ object: string; source: string; assembly?: string }> {
   if (options.objectPath) {
     return ensureArtifact({
       artifactPath: join(outputDirectory, "candidate-object.json"),
@@ -158,6 +158,7 @@ function ensureCandidateObject(
     inputs: candidateObjectInputs(functionName, source),
     produce: (provenance) => {
       const artifacts = compileSource(source, candidateDirectory, functionName, { assemble: true });
+      const assembly = artifacts.translationUnitAssembly ?? artifacts.assembly;
       writeStableJson(
         join(outputDirectory, "candidate-object.json"),
         stamped(
@@ -165,14 +166,15 @@ function ensureCandidateObject(
             object: projectPath(artifacts.object!),
             source: projectPath(source),
             objectSha256: sha256File(artifacts.object!),
+            assembly: projectPath(assembly), assemblySha256: sha256File(assembly),
           },
           provenance,
         ),
       );
-      return { object: artifacts.object!, source: projectPath(source) };
+      return { object: artifacts.object!, source: projectPath(source), assembly };
     },
     read: (stored) => {
-      const value = stored as { object?: string; source?: string; objectSha256?: string };
+      const value = stored as { object?: string; source?: string; objectSha256?: string; assembly?: string; assemblySha256?: string };
       /* A stamp whose object has since been removed or altered is not a hit;
        * throwing here makes `ensureArtifact` fall through and recompile. */
       if (!value.object) throw new Error("stored candidate object has no path");
@@ -182,7 +184,10 @@ function ensureCandidateObject(
       if (sha256File(absolute) !== value.objectSha256) {
         throw new Error("stored candidate object's bytes do not match its record");
       }
-      return { object: absolute, source: value.source ?? projectPath(source) };
+      const assembly = value.assembly && (isAbsolute(value.assembly) ? value.assembly : join(projectRoot(), value.assembly));
+      if (assembly && (!existsSync(assembly) || sha256File(assembly) !== value.assemblySha256))
+        throw new Error("stored compiler assembly is missing or changed");
+      return { object: absolute, source: value.source ?? projectPath(source), ...(assembly ? { assembly } : {}) };
     },
   });
 }
@@ -284,7 +289,7 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
   const oldestDisagreeing = [...comparisons].reverse().find((entry) => !entry.agrees);
   const firstDivergence = oldestDisagreeing;
   const residualOwner = !oldestDisagreeing
-    ? "none — the candidate already reproduces the target"
+    ? (oracle.verdict === "match" ? "none — the candidate already reproduces the target" : "not established — modeled streams agree, but byte identity is not established")
     : oldestDisagreeing.stage === "lreg"
       ? "expand / cse / gcse / loop / combine — the two programs do not contain the same instructions, so the source semantics differ"
       : oldestDisagreeing.stage === "greg"
@@ -293,7 +298,7 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
           ? "sched1 or sched2 — the same instructions in a different order"
           : oldestDisagreeing.stage === "dbr"
             ? "dbr_schedule — the same pre-dbr stream, different delay-slot choices"
-            : "the assembler — identical instruction streams that encode differently";
+            : "not established — modeled streams agree but raw words differ; normalization alone does not identify an assembler cause";
 
   const replay: ReplayCheck[] = [];
   if (options.replay !== false) {
@@ -313,12 +318,18 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
     }
   }
 
+  const provisional = !replay.some(check => check.stage === "mach" && check.status === "verified");
+  const interpretationDetail = provisional
+    ? "The pre-delay-slot round trip is missing, skipped or diverged. Pass ownership and source directions are provisional reconstructions; confirm against available native dumps."
+    : "The candidate pre-delay-slot order was replayed against native RTL; target pass history and source directions remain reconstructed.";
+
   /* The chain's own ambiguities are the same construction applied to both
    * sides, so they cancel in the comparison. They are reported, but they are
    * not search space: acting on them would not change a single byte. */
   const ambiguities: FiberSite[] = [...targetDbr.sites, ...targetAssembler.sites];
   const sites = deriveBranchPoints(comparison, targetDbr.program, candidateDbr.program, targetAlloc.webs, []);
   const decisions = reduceToDecisions(sites, comparison, targetDbr.program, candidateDbr.program, targetAlloc.webs);
+  if (provisional) for (const decision of decisions) decision.confidence = "inferred";
   /* Which blocks hold a word the oracle could not decide. Taken from the
      candidate side, because the undetermined word is the candidate's — the
      target's own bytes are never in doubt. The pre-dbr program keeps each
@@ -335,6 +346,15 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
   if (oracle.verification && oracle.verification.verdict !== "match")
     objective.reason = `${objective.reason ? `${objective.reason}; ` : ""}Owning TU: ${oracle.verification.verdict}; ${oracle.verification.differences.join("; ")}`;
 
+  let assemblerExpansion: ReversalReport["assemblerExpansion"];
+  if (!exact && firstDivergence?.stage === "machine" && candidateProvenance.value.assembly) {
+    try {
+      assemblerExpansion = captureAssemblerExpansion(candidateProvenance.value.assembly, objectPath, functionName);
+    } catch (error) {
+      /* Optional evidence must not change the production oracle's verdict. */
+      oracle.notes.push(`Production assembler expansion unavailable: ${String(error)}`);
+    }
+  }
   const report: ReversalReport = {
     schemaVersion: PIPELINE_REVERSAL_SCHEMA_VERSION,
     functionName,
@@ -342,9 +362,12 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
     ...(oracle.verification ? { verification: oracle.verification } : {}),
     matchedWords: oracle.same,
     totalWords: oracle.same + oracle.differing.length + oracle.undetermined.length,
+    analysis: { confidence: provisional ? "provisional" : "reconstructed", detail: interpretationDetail },
+    rawDifferences: { coordinate: target.coordinate, rows: oracle.rows.filter(row => row.kind !== "same") },
     comparisons,
     ...(firstDivergence ? { firstDivergence: { stage: firstDivergence.stage, detail: firstDivergence.relation } } : {}),
     residualOwner,
+    ...(assemblerExpansion ? { assemblerExpansion } : {}),
     replay,
     sites,
     ambiguities,
@@ -352,6 +375,7 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
     objective,
     searchSpaceSize: searchSpaceSize(ambiguities),
     caveats: [
+      interpretationDetail,
       ...(oracle.undetermined.length > 0
         ? [`${oracle.undetermined.length} word(s) are UNDETERMINED: a relocation's symbol has no known address, so neither a match nor a difference can be claimed for them`]
         : []),

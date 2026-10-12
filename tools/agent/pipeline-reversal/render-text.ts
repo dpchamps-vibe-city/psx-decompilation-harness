@@ -53,7 +53,9 @@ export function renderReversal(report: ReversalReport): string {
   }
   lines.push("");
 
-  lines.push("WAYPOINT LADDER (oldest stage last; the residual belongs to the pass after the last agreeing stage)");
+  const provisional = report.analysis?.confidence === "provisional";
+  lines.push(report.objective.degraded ? "NORMALIZED DIAGNOSTIC WAYPOINTS (control-flow comparison degraded)" :
+    `WAYPOINT LADDER${provisional ? " (provisional pass interpretation)" : " (reconstructed pass interpretation)"}`);
   for (const comparison of report.comparisons) {
     const mark = comparison.agrees ? "=" : "≠";
     lines.push(`  ${mark} ${comparison.stage.padEnd(8)} ${comparison.relation}`);
@@ -61,21 +63,41 @@ export function renderReversal(report: ReversalReport): string {
     for (const difference of comparison.differences.slice(0, 6)) lines.push(`      ${difference}`);
   }
   lines.push("");
-  lines.push(`RESIDUAL OWNER: ${report.residualOwner}`);
+  lines.push(`${provisional ? "PROVISIONAL " : "RECONSTRUCTED "}RESIDUAL OWNER: ${report.residualOwner}`);
+  if (report.analysis) lines.push(`  ${report.analysis.detail}`);
   if (report.firstDivergence) {
     lines.push(`  oldest disagreeing waypoint: ${report.firstDivergence.stage} (${report.firstDivergence.detail})`);
     /* Name the sheet as well as the pass. The doctrine is split by owning pass
      * precisely so a caller loads one sheet instead of the whole guide, and it
      * only works if the tool that knows the pass says which sheet that is. */
     const sheet = resolveSheet(report.firstDivergence.stage);
-    if (sheet) lines.push(`  mechanism sheet: psx_reference ${sheet}`);
+    if (sheet && !report.objective.degraded) lines.push(`  mechanism sheet: psx_reference ${sheet}`);
   }
 
+  if (!report.exact && report.firstDivergence?.stage === "machine") {
+    lines.push("", "CANDIDATE PRODUCTION EVIDENCE: compiler output and its configured expansion.");
+    lines.push("  This receipt establishes how this candidate was built; it does not establish the original compiler input or residual owner.");
+    if (report.assemblerExpansion) {
+      const expansion = report.assemblerExpansion;
+      lines.push(`  production recipe and hashes: ${expansion.receipt}`);
+      lines.push(`  compiler output: ${expansion.compilerAssembly}`, ...expansion.compilerExcerpt.map(line => `    ${line}`));
+      lines.push(`  production MASPSX expansion: ${expansion.expandedAssembly}`, ...expansion.expandedExcerpt.map(line => `    ${line}`));
+    }
+  }
+  if (report.rawDifferences?.rows.length) {
+    lines.push("", "RAW ORACLE DIFFERENCES:");
+    for (const row of report.rawDifferences.rows.slice(0, 24)) {
+      const word = row.target ?? row.candidate!;
+      const location = word.coordinate ? `${word.coordinate.section}+0x${word.coordinate.offset.toString(16)}` : `0x${word.vram.toString(16)}`;
+      lines.push(`  ${row.kind} ${location}: ${word.raw.toString(16).padStart(8, "0")} ${word.text}`);
+    }
+    if (report.rawDifferences.rows.length > 24) lines.push("  Further raw differences are retained in report.json.");
+  }
   if (report.replay.length > 0) {
     lines.push("");
-    lines.push("ROUND TRIP (each backward step replayed against the compiler's own dumps)");
+    lines.push("REPLAY CHECKS AND DUMP OBSERVATIONS");
     for (const check of report.replay) {
-      const mark = check.status === "verified" ? "ok" : check.status === "diverged" ? "FAIL" : "n/a";
+      const mark = check.status === "verified" ? "ok" : check.status === "diverged" ? "FAIL" : check.status === "observed" ? "observed" : "n/a";
       lines.push(`  [${mark}] ${check.stage} ${check.subject}: ${check.detail}`);
     }
   }
@@ -94,9 +116,10 @@ export function renderReversal(report: ReversalReport): string {
 
   lines.push("");
   if (report.decisions.length === 0) {
-    lines.push("DECISIONS: none — nothing has to change.");
+    lines.push(report.exact ? "DECISIONS: none — bytes are exact." :
+      "DECISIONS: none located by this model — bytes still differ; this is not completion.");
   } else {
-    lines.push(`DECISIONS: ${report.decisions.length} independent choice(s) account for the whole residual`);
+    lines.push(`DECISIONS: ${report.decisions.length} modeled independent choice(s)${provisional ? " — provisional source hypotheses" : ""}`);
 
     /* The round trip is the licence for everything below it. When the backward
      * chain cannot be replayed against the compiler's own dumps, the mach
@@ -130,7 +153,8 @@ export function renderReversal(report: ReversalReport): string {
 
   lines.push("");
   if (report.sites.length === 0) {
-    lines.push("LOCATED DIFFERENCES: none — the chain inverted every stage without a residual.");
+    lines.push(report.exact ? "LOCATED DIFFERENCES: none — bytes are exact." :
+      "LOCATED DIFFERENCES: none located by this model — see raw oracle differences; ownership is not established.");
   } else {
     lines.push(`LOCATED DIFFERENCES: ${report.sites.length} site(s)`);
     for (const site of report.sites) {

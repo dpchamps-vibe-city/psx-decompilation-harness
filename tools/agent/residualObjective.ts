@@ -48,6 +48,8 @@ interface Entry {
   /** Set when this row is an INCLUDE_ASM stub: there is nothing to score. */
   stub?: boolean;
   objective: ResidualObjective;
+  assemblerExpansion?: import("./decompToolchain.js").AssemblerExpansion;
+  residualOwner?: string;
   matchedWords: number;
   totalWords: number;
   /**
@@ -155,6 +157,8 @@ function score(functionName: string, label: string, source?: string): Entry {
   const entry: Entry = {
     label,
     objective: artifacts.report.objective,
+    assemblerExpansion: artifacts.report.assemblerExpansion,
+    residualOwner: artifacts.report.residualOwner,
     matchedWords: artifacts.report.matchedWords,
     totalWords: artifacts.report.totalWords,
     objectHash: createHash("sha256")
@@ -325,10 +329,16 @@ function render(functionName: string, entries: Entry[], block: number | undefine
          at every waypoint, so the difference is something no waypoint can see —
          a commutative operand order, a same-shape symbol, an immediate. Name
          the words. */
-      lines.push("NEXT: the reversal finds no residual and the bytes still differ.");
-      lines.push("      Every waypoint agrees, so the difference is invisible to all of them:");
-      lines.push("      a commutative operand order, a transposed same-shape global, or an");
-      lines.push("      immediate. Read the words themselves — `psx_diff_func` names them.");
+      lines.push("NEXT: the normalized model does not explain the remaining byte differences.");
+      lines.push(`      owner: ${best.residualOwner ?? "not established"}`);
+      lines.push("      Read the raw words and observed compiler trace. A zero modeled term is not a proof of assembler ownership.");
+      lines.push("      The production expansion below is evidence about this candidate only, not the original compiler's input.");
+      if (best.assemblerExpansion) {
+        lines.push(`      production recipe: ${best.assemblerExpansion.receipt}`);
+        lines.push(`      expanded GAS input: ${best.assemblerExpansion.expandedAssembly}`);
+        for (const text of best.assemblerExpansion.expandedExcerpt) lines.push(`        ${text}`);
+      }
+      lines.push("      Register, immediate, symbol and operand differences require the raw words.");
       for (const line of differingWords(functionName, best)) lines.push(`      ${line}`);
     } else {
       lines.push("NEXT: no open block — the residual is outside the per-block reading; read the full reversal report.");

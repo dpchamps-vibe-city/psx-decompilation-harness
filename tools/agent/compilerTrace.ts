@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 import { projectRoot } from "../lib/runtimeContext.js";
 /**
- * compilerTrace.ts — expose GCC 2.95 RTL/allocation/scheduling decisions.
+ * compilerTrace.ts — expose native GCC RTL and reconstructed pass diagnostics.
  *
  * Usage:
  *   npx tsx tools/agent/compilerTrace.ts func_8001B4E4
@@ -24,7 +24,10 @@ import {
 } from "fs";
 import { basename, isAbsolute, join, relative } from "path";
 import { assembleCompilerOutput, assembleTarget, compileSource, disassembleObject, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
-import { requireCompilerCapability } from "../lib/toolchain.js";
+import { configuredCompilerAnalysis, supportsCompilerCapability, requireCompilerCapability } from "../lib/toolchain.js";
+import { compilerAnalysisSummary } from "../lib/compilerAnalysis.js";
+import { selectRtlFunction } from "../lib/compilerArtifacts.js";
+import { functionSymbol } from "../lib/targetAdapter.js";
 import { detectAllocationFeedback } from "./compiler-trace/hard-register-hazards.js";
 import { analyzeAllocation, applyAllocation } from "./compiler-trace/local-allocation.js";
 import { buildPseudoProvenance } from "./compiler-trace/pseudo-provenance.js";
@@ -49,7 +52,7 @@ import type {
 
 export type { CompilerTraceReport } from "./compiler-trace/types.js";
 
-const STAGE_ORDER = [
+const LEGACY_STAGE_ORDER = [
   "rtl", "jump", "cse", "gcse", "loop", "cse2", "addressof", "flow",
   "combine", "regmove", "sched", "lreg", "greg", "flow2", "bp", "sched2",
   "jump2", "dbr", "mach",
@@ -76,11 +79,13 @@ function stageSuffix(file: string): string {
 }
 
 function dumpFiles(directory: string, prefix: string): string[] {
+  const configuredOrder = configuredCompilerAnalysis().profile?.stageOrder;
+  const order = configuredOrder?.length ? configuredOrder : LEGACY_STAGE_ORDER;
   return readdirSync(directory)
     .filter((file) => file.startsWith(`${prefix}.i.`))
     .sort((left, right) => {
-      const leftIndex = STAGE_ORDER.indexOf(stageSuffix(left));
-      const rightIndex = STAGE_ORDER.indexOf(stageSuffix(right));
+      const leftIndex = order.indexOf(stageSuffix(left));
+      const rightIndex = order.indexOf(stageSuffix(right));
       return (leftIndex < 0 ? 999 : leftIndex) - (rightIndex < 0 ? 999 : rightIndex);
     });
 }
@@ -89,10 +94,11 @@ function summarizeStages(
   directory: string,
   files: string[],
   metadata: Map<string, RtlStageMetadata>,
+  contents: Map<string, string>,
 ): StageSummary[] {
   return files.map((file) => {
     const path = join(directory, file);
-    const content = readFileSync(path, "utf-8");
+    const content = contents.get(stageSuffix(file)) ?? "";
     const occurrences = pseudoOccurrences(content);
     const stageMetadata = metadata.get(stageSuffix(file));
     return {
@@ -119,20 +125,31 @@ function parseAllStages(
   contents: Map<string, string>;
   instructions: Map<string, RtlInstruction[]>;
   metadata: Map<string, RtlStageMetadata>;
+  caveats: string[];
 } {
   const contents = new Map<string, string>();
   const instructions = new Map<string, RtlInstruction[]>();
   const metadata = new Map<string, RtlStageMetadata>();
+  const caveats: string[] = [];
   for (const file of files) {
     const stage = stageSuffix(file);
-    const content = readFileSync(join(directory, file), "utf-8");
-    contents.set(stage, content);
-    const stageInstructions = parseRtlInstructions(content, stage);
-    const notes = parseRtlNotes(content, stage);
-    instructions.set(stage, stageInstructions);
-    metadata.set(stage, reconstructRtlMetadata(content, stage, stageInstructions, notes));
+    try {
+      const content = selectRtlFunction(readFileSync(join(directory, file), "utf-8"), functionSymbol(prefix));
+      const stageInstructions = parseRtlInstructions(content, stage);
+      if (!stageInstructions.length) {
+        caveats.push(`.${stage}: no function RTL instructions could be parsed; dependent analyses are unavailable.`);
+        continue;
+      }
+      const notes = parseRtlNotes(content, stage);
+      const stageMetadata = reconstructRtlMetadata(content, stage, stageInstructions, notes);
+      contents.set(stage, content);
+      instructions.set(stage, stageInstructions);
+      metadata.set(stage, stageMetadata);
+    } catch (error) {
+      caveats.push(`.${stage} dump unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
-  return { contents, instructions, metadata };
+  return { contents, instructions, metadata, caveats };
 }
 
 function nearestInstructions(
@@ -165,73 +182,91 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
   mkdirSync(outputDirectory, { recursive: true });
   const files = dumpFiles(options.dumpDirectory, funcName);
   if (files.length === 0) throw new Error(`no preserved GCC dump files found in ${relative(projectRoot(), options.dumpDirectory)}`);
-  const availableStages = new Set(files.map(stageSuffix));
-  for (const required of ["sched", "lreg", "greg", "sched2"]) {
-    if (!availableStages.has(required)) throw new Error(`preserved compiler trace is missing .${required}`);
-  }
-  if (!availableStages.has("mach") && !availableStages.has("dbr")) {
-    throw new Error("preserved compiler trace is missing .mach or .dbr final RTL");
-  }
   const parsed = parseAllStages(options.dumpDirectory, funcName, files);
-  const provenanceStages = STAGE_ORDER.slice(0, STAGE_ORDER.indexOf("greg") + 1)
-    .filter((stage) => parsed.instructions.has(stage));
+  const support = configuredCompilerAnalysis();
+  const configuredOrder = support.profile?.stageOrder;
+  const passOrderKnown = !!configuredOrder?.length;
+  const order = passOrderKnown ? configuredOrder! : LEGACY_STAGE_ORDER;
+  const globalStage = order.indexOf("greg");
+  const provenanceStages = (globalStage >= 0 ? order.slice(0, globalStage + 1) : order)
+    .filter(stage => parsed.instructions.has(stage));
   const pseudoMap = buildPseudoProvenance(provenanceStages, parsed.instructions);
-  const caveats: string[] = [];
+  const caveats: string[] = [compilerAnalysisSummary(support), ...parsed.caveats];
+  if (!passOrderKnown) {
+    caveats.push("Pass order uses the common GCC ordering fallback, not an independently verified order for this compiler. Cross-stage transitions are inferred; stage-local SET/use/death UIDs remain observed.");
+    for (const pseudo of pseudoMap.values()) for (const transition of pseudo.transitions) {
+      transition.confidence = "inferred";
+      transition.evidence += " Stage ordering is inferred from the common GCC pipeline.";
+    }
+  }
   let allocationOrder: CompilerTraceReport["allocationOrder"] = [];
   for (const metadata of parsed.metadata.values()) caveats.push(...metadata.caveats);
 
   const localContent = parsed.contents.get("lreg");
   if (localContent) {
-    const allocation = analyzeAllocation(
-      localContent,
-      parsed.contents.get("greg") || "",
-      parsed.instructions.get("lreg") || [],
-    );
-    applyAllocation(pseudoMap, allocation);
-    allocationOrder = allocation.globalOrder;
-    caveats.push(...allocation.caveats);
+    try {
+      const allocation = analyzeAllocation(
+        localContent,
+        parsed.contents.get("greg") || "",
+        parsed.instructions.get("lreg") || [],
+      );
+      applyAllocation(pseudoMap, allocation);
+      allocationOrder = allocation.globalOrder;
+      caveats.push(...allocation.caveats);
+    } catch (error) {
+      caveats.push(`Allocation analysis unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
   } else {
-    caveats.push("No .lreg dump was produced, so allocation quantities and reconstructed lifetimes are unavailable.");
+    caveats.push("No readable .lreg dump, so allocation quantities and reconstructed lifetimes are unavailable.");
   }
+  if (!parsed.contents.has("greg")) caveats.push("No readable .greg dump; global allocation observations are unavailable.");
 
   const schedulers = [];
   const schedContent = parsed.contents.get("sched");
   const schedInstructions = parsed.instructions.get("sched") || [];
   const schedInput = nearestInstructions(parsed.instructions, ["regmove", "combine", "flow"]);
   if (schedContent) {
-    schedulers.push(parseScheduler(
-      "sched",
-      schedContent,
-      schedInstructions,
-      spliceSplitProducts(schedInput, schedInstructions, caveats),
-    ));
-  }
+    try {
+      schedulers.push(parseScheduler(
+        "sched",
+        schedContent,
+        schedInstructions,
+        spliceSplitProducts(schedInput, schedInstructions, caveats),
+      ));
+    } catch (error) {
+      caveats.push(`sched analysis unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else caveats.push("No readable .sched dump; pre-reload scheduler analysis is unavailable.");
   const sched2Content = parsed.contents.get("sched2");
   const sched2Instructions = parsed.instructions.get("sched2") || [];
   const sched2Input = nearestInstructions(parsed.instructions, ["bp", "flow2", "greg"]);
   if (sched2Content) {
-    schedulers.push(parseScheduler(
-      "sched2",
-      sched2Content,
-      sched2Instructions,
-      spliceSplitProducts(sched2Input, sched2Instructions, caveats),
-    ));
-  }
+    try {
+      schedulers.push(parseScheduler(
+        "sched2",
+        sched2Content,
+        sched2Instructions,
+        spliceSplitProducts(sched2Input, sched2Instructions, caveats),
+      ));
+    } catch (error) {
+      caveats.push(`sched2 analysis unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else caveats.push("No readable .sched2 dump; post-reload scheduler analysis is unavailable.");
   for (const scheduler of schedulers) caveats.push(...scheduler.caveats);
 
   const pseudos = [...pseudoMap.values()].sort((left, right) => left.pseudo - right.pseudo);
   const sched1 = schedulers.find((scheduler) => scheduler.stage === "sched");
   const sched2 = schedulers.find((scheduler) => scheduler.stage === "sched2");
-  const feedback = detectAllocationFeedback(
-    sched1,
-    sched2,
-    schedInput,
-    schedInstructions,
-    sched2Instructions,
-    pseudos,
-  );
+  let feedback: CompilerTraceReport["feedback"] = [];
+  try {
+    feedback = detectAllocationFeedback(
+      sched1, sched2, schedInput, schedInstructions, sched2Instructions, pseudos,
+    );
+  } catch (error) {
+    caveats.push(`Allocation feedback analysis unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
-  let recurrenceHints = [];
+  let recurrenceHints: CompilerTraceReport["recurrenceHints"] = [];
   try {
     const candidateObject = join(outputDirectory, `${funcName}.c.o`);
     assembleCompilerOutput(options.assemblyPath, candidateObject);
@@ -258,13 +293,15 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
   const reportPath = join(outputDirectory, options.reportFileName || "report.json");
   const report: CompilerTraceReport = {
     schemaVersion: 2,
+    analysis: { provider: support.provider, passOrderKnown, passModelsAvailable: true,
+      passOrderConfidence: passOrderKnown ? "configured" : "inferred" },
     function: funcName,
     source: relative(projectRoot(), source),
     outputDirectory: relative(projectRoot(), outputDirectory),
     assembly: relative(projectRoot(), options.assemblyPath),
     reportArtifact: relative(projectRoot(), reportPath),
     flags: options.flags,
-    stages: summarizeStages(options.dumpDirectory, files, parsed.metadata),
+    stages: summarizeStages(options.dumpDirectory, files, parsed.metadata, parsed.contents),
     stageMetadata: [...parsed.metadata.values()],
     pseudos,
     allocationOrder,
@@ -296,7 +333,7 @@ export function buildTraceReport(
    * they are transparent to instruction parsing. */
   const artifacts = compileSource(source, outputDirectory, funcName, {
     dumps: true,
-    emissionAttribution: true,
+    emissionAttribution: supportsCompilerCapability("gcc-emission-attribution"),
     useOverrides,
   });
   return buildTraceReportFromArtifacts({

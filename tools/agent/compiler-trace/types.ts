@@ -316,6 +316,8 @@ export interface RegisterRecurrenceHint {
 
 export interface CompilerTraceReport {
   schemaVersion: 2;
+  analysis?: { provider: string; passOrderKnown: boolean; passModelsAvailable: boolean;
+    passOrderConfidence?: "configured" | "inferred" };
   function: string;
   source: string;
   outputDirectory: string;

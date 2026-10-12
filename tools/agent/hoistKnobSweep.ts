@@ -5,6 +5,7 @@ import { projectRoot } from "../lib/runtimeContext.js";
 /** Measure bounded access-route and independently witnessed record-view products. */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { normalizeFunctionName, resolveSource, runTool, preprocessOnly } from "./decompToolchain.js";
 import { sha256, toolchainHash, projectPath, writeStableJson } from "./provenance.js";
 import { scoreTargetLoopEmission, symbolMaps } from "./analyzeTargetLoopEmission.js";
@@ -50,7 +51,7 @@ export function hoistKnobSweep(functionName: string, sourceOverride?: string, ma
   if (windows.length === 0) throw new Error("no attributable pass-1-decline goal/window; cascade and pass-2-only invariance routes are outside this sweep");
   /* Fresh cpp is mandatory: a header's type/layout is part of this proof. */
   const contextDirectory = join(projectRoot(), "build/hoistKnobSweep", functionName, "contexts", sourceHash.slice(0, 24));
-  const preprocessed = readFileSync(preprocessOnly(sourcePath, contextDirectory, "context"), "utf8"), contextHash = sha256(preprocessed);
+  const preprocessed = readFileSync(preprocessOnly(sourcePath, contextDirectory, "context", resolveFunctionTarget(functionName).flags), "utf8"), contextHash = sha256(preprocessed);
   const sites = sitesFor(source, preprocessed, functionName, windows);
   const implementation = sha256(["hoistKnobSweep.ts", "hoist-knob-sites.ts", "hoist-record-views.ts", "loop-emission/compare.ts", "loop-emission/desirability.ts", "loop-emission/derive.ts", "loop-trace/threshold.ts", "loop-trace/values.ts", "loopTrace.ts"].map(path => readFileSync(join(HARNESS_ROOT, "tools/agent", path), "utf8")).join("\n"));
   const identity = sha256(JSON.stringify({ sourceHash, contextHash, implementation, frontend: C_FRONTEND_IDENTITY(), toolchain: toolchainHash(), target: baseline.requirement, max })).slice(0, 24);
@@ -70,7 +71,7 @@ export function hoistKnobSweep(functionName: string, sourceOverride?: string, ma
         mkdirSync(join(directory, "prepared"), { recursive: true }); writeFileSync(path, normalization.source);
         try {
           const scored = scoreTargetLoopEmission(functionName, path), preparedWindows = hoistWindows(scored.assessments);
-          const cpp = readFileSync(preprocessOnly(path, join(directory, "prepared"), id), "utf8");
+          const cpp = readFileSync(preprocessOnly(path, join(directory, "prepared"), id, resolveFunctionTarget(functionName).flags), "utf8");
           const preparedSites = sitesFor(normalization.source, cpp, functionName, preparedWindows);
           if (preparedSites.length !== sites.length || !preparedWindows.length) throw new Error("normalized source lost its attributable window/read sites");
           const { source: normalizedSource, ...proof } = normalization;
@@ -116,7 +117,7 @@ export function hoistKnobSweep(functionName: string, sourceOverride?: string, ma
     }
   }
   const inputStable = sha256(readFileSync(sourcePath, "utf8")) === sourceHash
-    && sha256(readFileSync(preprocessOnly(sourcePath, contextDirectory, "input-check"), "utf8")) === contextHash;
+    && sha256(readFileSync(preprocessOnly(sourcePath, contextDirectory, "input-check", resolveFunctionTarget(functionName).flags), "utf8")) === contextHash;
   variants.sort((a, b) => Number(b.premiseMet) - Number(a.premiseMet) || b.goalsMet - a.goalsMet || compareKeys(a.objective?.key, b.objective?.key) || a.id.localeCompare(b.id));
   const goalMeeting = variants.filter(row => row.premiseMet && row.goalsMet === baseline.goals.length && !row.error).length;
   const families = representations.map((rep, i) => ({ id: rep.id, source: rep.sourcePath, sourceHash: sha256(rep.source), sites: rep.sites, windows: rep.windows,

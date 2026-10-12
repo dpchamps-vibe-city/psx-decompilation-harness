@@ -11,7 +11,7 @@ export interface LibraryProject {
   headers: { reference: string[]; owned: string[]; context: string[] };
   selection: { scope: "all-code-members" };
   verification: { mode: "relocatable-object" };
-  output: { sourceDir: string; sourceLayout?: "grouped" | "member-id"; inputRoot?: string };
+  output: { sourceDir: string; sourceLayout?: "grouped" | "member-id" | "tu-directory"; inputRoot?: string };
   /** Named toolchain flag/include profiles; exact member id wins over default. */
   toolchainProfile?: string;
   memberProfiles: Record<string, string>;
@@ -51,7 +51,7 @@ export function loadLibraryProject(root = projectRoot()): LibraryProject | null 
   p.output ??= { sourceDir: "src/libraries" }; object(p.output, ["sourceDir", "sourceLayout", "inputRoot"], "output"); paths([p.output.sourceDir], "output.sourceDir");
   if (!p.output.sourceDir.startsWith("src/") || /[*?\[{]/.test(p.output.sourceDir)) throw new Error(`${PROJECT_FILE}: output.sourceDir must be a directory under src/`);
   p.output.sourceLayout ??= "grouped";
-  if (!["grouped", "member-id"].includes(p.output.sourceLayout)) throw new Error(`${PROJECT_FILE}: unsupported output.sourceLayout`);
+  if (!["grouped", "member-id", "tu-directory"].includes(p.output.sourceLayout)) throw new Error(`${PROJECT_FILE}: unsupported output.sourceLayout`);
   if (p.output.inputRoot !== undefined) {
     paths([p.output.inputRoot], "output.inputRoot");
     if (/[*?\[{]/.test(p.output.inputRoot)) throw new Error(`${PROJECT_FILE}: output.inputRoot must name a directory, not a glob`);

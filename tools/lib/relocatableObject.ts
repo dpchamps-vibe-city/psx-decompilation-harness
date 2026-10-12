@@ -1,6 +1,6 @@
 /** ET_REL program oracle: exact code/data bytes, storage sizes, symbols and
  * symbolic relocations, not identical ELF packaging. No invented addresses or
- * relocation masks; encoded addends and MIPS HI16/LO16 order remain exact.
+ * relocation masks; encoded addends and MIPS HI16/LO16 pairing remain exact.
  * ELF header flags, section alignment/entry sizes, empty sections and assembler
  * ABI bookkeeping are not emitted program content. Unsupported objects never
  * produce MATCH. Debug/file/local-symbol names are not program identity. */
@@ -93,9 +93,28 @@ export function compareRelocatableObjects(original: Buffer, candidate: Buffer): 
         differences.push(`${name}: program storage kind/size differs or section missing`);
       if (s && c && !s.data.equals(c.data)) differences.push(`${name}: initialized bytes (including encoded relocation addends) differ`);
     }
-    // Keep table order within each target section, but not unrelated section-table ordering.
-    const relocs = (o: RelocatableObject) => [...new Set(o.relocations.map(r => r.section))].sort().map(s => o.relocations.filter(r => r.section === s));
-    if (json(relocs(a)) !== json(relocs(b))) differences.push("Symbolic relocations differ (offset, kind, target, or HI16/LO16 order)");
+    // REL HI16s remain pending until their following LO16. Preserve that
+    // complete group, including its internal order, rather than sorting its
+    // individual entries. Closed groups at distinct offsets are independent:
+    // LNK converters emit local groups before imported-symbol groups, whereas
+    // GAS emits both in instruction order. Neither changes the pairing/addend.
+    // Cross-symbol pending groups, orphan HIs and overlapping fixups retain
+    // strict table order; they are not licensed by this normalization.
+    const relocs = (o: RelocatableObject) => [...new Set(o.relocations.map(r => r.section))].sort().map(section => {
+      const rows = o.relocations.filter(r => r.section === section);
+      if (new Set(rows.map(r => r.offset)).size !== rows.length) return { section, ordered: rows };
+      const groups: ObjectRelocation[][] = [], pending: ObjectRelocation[] = [];
+      for (const row of rows) {
+        if (row.type === 5) pending.push(row);
+        else if (row.type === 6) {
+          if (pending.some(hi => hi.reference !== row.reference)) return { section, ordered: rows };
+          groups.push([...pending, row]); pending.length = 0;
+        } else groups.push([row]);
+      }
+      if (pending.length) return { section, ordered: rows };
+      return { section, groups: groups.sort((x, y) => Math.min(...x.map(r => r.offset)) - Math.min(...y.map(r => r.offset))) };
+    });
+    if (json(relocs(a)) !== json(relocs(b))) differences.push("Symbolic relocations differ (offset, kind, target, or HI16/LO16 pairing)");
     const publicSymbols = (o: RelocatableObject) => o.symbols.filter(s => s.binding !== 0 && s.type !== 4).sort((x, y) => json([x.name, x.section, x.value]).localeCompare(json([y.name, y.section, y.value])));
     const aa = publicSymbols(a), bb = publicSymbols(b);
     if (aa.length !== bb.length) differences.push("Export/import/common symbol population differs");

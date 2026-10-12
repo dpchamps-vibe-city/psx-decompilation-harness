@@ -8,6 +8,7 @@ import { Timings } from "../../../../tools/lib/contentCache.js";
 import type { ExportResult } from "../../../../tools/agent/contextExport.js";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
 import { libraryMembers, libraryTargetKey, requireLibraryFunction } from "../../../../tools/lib/libraryTargets.js";
+import { libraryFunctionSource, librarySourceFiles } from "../../../../tools/lib/libraryTranslationUnit.js";
 import { compilerInputs, consumeReceipt, contextIsCompilerIndependent, publishReceipt, verificationOutputs } from "./verification-receipt.ts";
 
 /** One authoritative route. Machine work can be reused only across unchanged
@@ -28,11 +29,11 @@ export async function finalizeWorkspace(options: {
     const { libraryVerificationMembers, libraryWorkspaceIdentity } = await import("../../../../tools/agent/libraryTarget.js");
     options.signal?.throwIfAborted();
     const members = libraryMembers(options.projectRoot);
-    const sources = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.source])));
+    const sources = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), libraryFunctionSource(m, f.name)])));
     const containers = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.id])));
     const target = requireLibraryFunction(options.functionName, options.projectRoot);
     const active = [...new Set([target.member.id,
-      ...members.filter(m => options.changedFiles.includes(m.source)).map(m => m.id)])];
+      ...members.filter(m => librarySourceFiles(m, options.projectRoot).some(s => options.changedFiles.includes(s))).map(m => m.id)])];
     const checkedMembers = libraryVerificationMembers(active, options.projectRoot, members);
     const identity = () => timings.measureSync("library-inputs", () => libraryWorkspaceIdentity(checkedMembers, options.projectRoot));
     const before = identity();

@@ -7,6 +7,8 @@ import { hash, readAr } from "./psyqMembers.js";
 import { libraryInputFiles, loadLibraryProject, type LibraryProject } from "./project.js";
 import { objectFunctions, readRelocatableObject, type RelocatableObject } from "./relocatableObject.js";
 import { libraryMemberSource } from "./librarySourceLayout.js";
+import { libraryFunctionSource, librarySourceFiles } from "./libraryTranslationUnit.js";
+import { existsSync } from "node:fs";
 export interface LibraryMember {
   id: string; input: string; member: string; ordinal: number; sourceOffset: number;
   inputHash: string; sha256: string; source: string; original: string; assembly: string;
@@ -63,6 +65,7 @@ function indexMembers(members: LibraryMember[]): LibraryIndex {
   };
   for (const member of members) {
     index.sources.set(member.source, member);
+    for (const fn of member.functions) index.sources.set(libraryFunctionSource(member, fn.name), member);
     const locals = new Map<string, LibraryFunction[]>(), offsets = new Map<string, LibraryFunction[]>();
     index.locals.set(member.id, locals); index.offsets.set(member.id, offsets);
     const exported = new Set(member.object.symbols.filter(s => s.binding !== 0).map(s => `${s.section}:${s.name}`));
@@ -87,7 +90,14 @@ function libraryIndex(root: string): LibraryIndex {
   const index = indexMembers(libraryMembers(root)); store?.set(key, index); return index;
 }
 export function libraryMemberForSource(source: string, root = projectRoot()): LibraryMember | undefined {
-  return libraryIndex(root).sources.get(source);
+  const index = libraryIndex(root), direct = index.sources.get(source);
+  if (direct) return direct;
+  return index.members.find(member => dirname(member.source) === dirname(source) && existsSync(resolve(root, member.source)) && librarySourceFiles(member, root).includes(source));
+}
+export function libraryMemberById(id: string, root = projectRoot()): LibraryMember {
+  const member = libraryIndex(root).members.find(m => m.id === id);
+  if (!member) throw new Error(`Unknown library member ${id}`);
+  return member;
 }
 export function requireLibraryFunction(name: string, root = projectRoot()): LibraryFunction {
   const matches = libraryIndex(root).functions.get(name) ?? [];

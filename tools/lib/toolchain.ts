@@ -8,6 +8,7 @@ import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { fileDigest } from "./contentCache.js";
 import { fileOverrideFlags } from "./flagOverrides.js";
 import { prepareSupportedCompiler } from "../build/prepareCompiler.js";
+import { resolveCompilerAnalysis, type CompilerAnalysisSelection } from "./compilerAnalysis.js";
 import { contextForProject, projectRoot, resolveOwnedPath, type OwnedPath, type RuntimeContext } from "./runtimeContext.js";
 export { HARNESS_ROOT } from "./runtimeContext.js";
 
@@ -20,7 +21,7 @@ export type ConfiguredPath = string | OwnedPath;
 export interface ToolchainConfig {
   $schema?: string;
   schemaVersion: 1;
-  compiler: { family: string; version: string; source?: ConfiguredPath; capabilities: string[] };
+  compiler: { family: string; version: string; source?: ConfiguredPath; capabilities?: string[]; analysis?: CompilerAnalysisSelection };
   tools: Record<typeof TOOL_NAMES[number], ConfiguredPath> & { psyq2elf?: ConfiguredPath };
   includeDirs: string[];
   flags: Record<FlagName, string[]>;
@@ -57,10 +58,16 @@ export function loadToolchain(root = projectRoot()): ToolchainConfig {
   if (Object.hasOwn(value, "fileFlags")) throw new Error(`${TOOLCHAIN_FILE}: fileFlags is unsupported; use configs/flag_overrides.mk`);
   keys(value, ["$schema", "schemaVersion", "compiler", "tools", "includeDirs", "flags", "profiles", "containerProfiles", "sdk"], "config");
   if (value.schemaVersion !== 1) throw new Error(`${TOOLCHAIN_FILE}: unsupported schemaVersion ${value.schemaVersion}`);
-  object(value.compiler, "compiler"); keys(value.compiler, ["family", "version", "source", "capabilities"], "compiler");
+  object(value.compiler, "compiler"); keys(value.compiler, ["family", "version", "source", "capabilities", "analysis"], "compiler");
   string(value.compiler.family, "compiler.family"); string(value.compiler.version, "compiler.version");
   if (value.compiler.source !== undefined) ownedPath(value.compiler.source, "compiler.source", root);
-  strings(value.compiler.capabilities, "compiler.capabilities");
+  if (value.compiler.capabilities !== undefined) strings(value.compiler.capabilities, "compiler.capabilities");
+  if (value.compiler.analysis !== undefined) {
+    const analysis = object(value.compiler.analysis, "compiler.analysis");
+    keys(analysis, ["provider", "profile"], "compiler.analysis");
+    string(analysis.provider, "compiler.analysis.provider");
+    ownedPath(analysis.profile, "compiler.analysis.profile", root);
+  }
   object(value.tools, "tools"); keys(value.tools, [...TOOL_NAMES, "psyq2elf"], "tools");
   for (const name of TOOL_NAMES) ownedPath(value.tools[name], `tools.${name}`, root);
   if (value.tools.psyq2elf !== undefined) ownedPath(value.tools.psyq2elf, "tools.psyq2elf", root);
@@ -95,12 +102,13 @@ function preparePinnedPath(value: ConfiguredPath, path: string, context: Runtime
   return path;
 }
 /** Bare configured commands use PATH; relative paths have exactly one owner. */
-export function configuredTool(name: ToolName, root = projectRoot()): string {
+export function configuredTool(name: ToolName, root = projectRoot(), options: { prepare?: boolean } = {}): string {
   const value = loadToolchain(root).tools[name];
   if (!value) throw new Error(`${TOOLCHAIN_FILE}: tools.${name} is not configured`);
   if (typeof value === "object") {
     const context = contextForProject(root);
-    return preparePinnedPath(value, resolveOwnedPath(value, context), context);
+    const path = resolveOwnedPath(value, context);
+    return options.prepare === false ? path : preparePinnedPath(value, path, context);
   }
   return value.includes("/") || isAbsolute(value) ? resolve(root, value) : value;
 }
@@ -154,9 +162,20 @@ export function configuredSdkHeader(name: string, root = projectRoot()): string 
   }
   return undefined;
 }
+export function configuredCompilerAnalysis(root = projectRoot()) {
+  const config = loadToolchain(root);
+  return resolveCompilerAnalysis(config, config.compiler.analysis ? executablePath(configuredTool("cc1", root, { prepare: false }), root) : null, root);
+}
+export function supportsCompilerCapability(capability: string, root = projectRoot()): boolean {
+  const support = configuredCompilerAnalysis(root);
+  // Preserve explicitly declared legacy consumers; measured profiles grant each feature separately.
+  if (!support.profile && support.provider === "legacy-declarations" &&
+      ["gcc-pass-models", "gcc-pre-dbr-replay"].includes(capability)) return support.capabilities.includes("gcc-rtl-dumps");
+  return support.capabilities.includes(capability);
+}
 export function requireCompilerCapability(capability: string, root = projectRoot()): void {
-  const compiler = loadToolchain(root).compiler;
-  if (!compiler.capabilities.includes(capability)) throw new Error(`${capability} is not supported by configured ${compiler.family} ${compiler.version}; use ordinary compilation/byte verification or configure a supported analysis toolchain`);
+  const support = configuredCompilerAnalysis(root), compiler = loadToolchain(root).compiler;
+  if (!supportsCompilerCapability(capability, root)) throw new Error(`${capability} is unavailable for configured ${compiler.family} ${compiler.version} (${support.provider}). ${support.reason ?? "The selected provider has not validated this feature."} Production compilation and byte verification remain available; do not substitute another compiler or pass model.`);
 }
 export function executablePath(command: string, root = projectRoot()): string | null {
   const candidates = command.includes("/") ? [resolve(root, command)] : (process.env.PATH ?? "").split(delimiter).map(p => resolve(root, p, command));

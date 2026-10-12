@@ -32,6 +32,9 @@ import { existsSync, readFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { configuredTool } from "../lib/toolchain.js";
+import { loadLibraryProject } from "../lib/project.js";
+import { libraryMembers, requireLibraryFunction } from "../lib/libraryTargets.js";
+import { libraryFunctionSource } from "../lib/libraryTranslationUnit.js";
 import { execFileSync } from "child_process";
 import { loadPsxExeInfo, vramToRom } from "../lib/psxExeInfo.js";
 import {
@@ -298,11 +301,57 @@ function checkText(records: OwnershipRecord[]): { text: string; failures: number
   return { text: lines.join("\n"), failures };
 }
 
+/** Relocatable ownership comes from original definitions, not invented GP addresses.
+ * Labels/aliases are evidence, not a partition of storage into recovered C objects. */
+export function deriveLibraryOwnership(filter?: string, root = projectRoot()) {
+  const selected = filter ? requireLibraryFunction(filter, root) : undefined;
+  return (selected ? [selected.member] : libraryMembers(root)).map(member => ({
+    targetKind: "relocatable-library" as const,
+    member: member.id,
+    source: member.source,
+    original: member.original,
+    originalHash: member.sha256,
+    ...(selected ? { selectedFunction: selected.key, functionSource: libraryFunctionSource(member, selected.fn.name), inferredFunctionExtent: selected.fn.inferredSize } : {}),
+    storageSections: [...member.object.sections].filter(([, section]) => (section.flags & 2) && !(section.flags & 4) && section.size > 0 && ![0x70000006, 0x7000002a].includes(section.type))
+      .map(([name, section]) => ({ section: name, size: section.size, kind: section.type === 8 ? "zero-fill" : "initialized" })),
+    globals: member.object.symbols.filter(symbol => {
+      const section = member.object.sections.get(symbol.section);
+      return !!symbol.name && ![3, 4].includes(symbol.type) && (symbol.section === "COMMON" || !!section && !!(section.flags & 2) && !(section.flags & 4));
+    }).map(symbol => ({
+      symbol: symbol.name, binding: symbol.binding, elfType: symbol.type, section: symbol.section,
+      offset: symbol.section === "COMMON" ? null : symbol.value,
+      size: symbol.size > 0 ? symbol.size : null,
+      extent: symbol.size > 0 ? "symbol-size" : "unknown",
+      ...(symbol.section === "COMMON" ? { alignment: symbol.value } : {}),
+    })),
+    gprelReferences: member.object.relocations.filter(relocation => relocation.type === 7 &&
+      (!selected || relocation.section === selected.fn.section && relocation.offset >= selected.fn.offset && relocation.offset < selected.fn.offset + selected.fn.size))
+      .map(relocation => ({ section: relocation.section, offset: relocation.offset, type: "R_MIPS_GPREL16",
+        reference: relocation.reference, encodedImmediate: member.object.sections.get(relocation.section)!.data.readUInt32LE(relocation.offset) & 0xffff })),
+    notes: ["Original allocated non-executable definitions and COMMON symbols witness TU storage; undefined imports are not owned storage.",
+      "Zero-size symbol extents remain unknown. Section offsets and encoded relocation fields are not linked addresses or recovered C types.",
+      "GP-relative references are reported symbolically and do not by themselves make an imported symbol a TU definition."],
+  }));
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const json = args.includes("--json");
   const check = args.includes("--check");
   const filter = args.find((arg) => !arg.startsWith("--"));
+  if (loadLibraryProject()) {
+    const records = deriveLibraryOwnership(filter);
+    if (json) console.log(JSON.stringify(records, null, 2));
+    else for (const record of records) {
+      console.log(`${record.member}: original TU storage (${record.source})`);
+      for (const section of record.storageSections) console.log(`  ${section.section}: ${section.size} bytes (${section.kind}; section extent, not a recovered C object)`);
+      for (const symbol of record.globals) console.log(`  ${symbol.symbol}: ${symbol.section}${symbol.offset === null ? "" : `+${symbol.offset}`} binding=${symbol.binding}, size=${symbol.size ?? "unknown"}`);
+      for (const relocation of record.gprelReferences) console.log(`  ${relocation.type} ${relocation.section}+${relocation.offset} -> ${relocation.reference}`);
+      for (const note of record.notes) console.log(`  ${note}`);
+    }
+    if (check && !json) console.log("Original-object report only; no candidate witness agreement or byte verification is claimed.");
+    return;
+  }
   const records = deriveOwnership(filter);
 
   if (json) {

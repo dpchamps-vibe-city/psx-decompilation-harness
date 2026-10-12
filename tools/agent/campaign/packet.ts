@@ -2,6 +2,7 @@ import type { CommandRecord } from "../../lib/recordedCommand.js";
 import { BIOS_FUNCTION_MACRO } from "../../lib/biosFunctionMacro.js";
 import type { DeclarationIndex, Declaration } from "../declarationContext.js";
 import type { detectFunctionMacroIdentity } from "../../diagnostics/macroIdentity.js";
+import { compilerAnalysisSummary, type CompilerAnalysisSupport } from "../../lib/compilerAnalysis.js";
 
 /** Common handoff core. A draft's existence is independent of its compilability. */
 export interface PacketSource {
@@ -26,6 +27,7 @@ export interface UnknownFact {
 export interface PreparationPacket {
   schemaVersion: 1;
   preparationState?: "running" | "complete";
+  preparationScope?: "function" | "translation-unit";
   performance?: { phases: import("../../lib/contentCache.js").PhaseTiming[]; totalMs: number; cache: "hit" | "miss"; reason: string };
   diagnosticsIdentity?: string;
   identity: {
@@ -44,6 +46,7 @@ export interface PreparationPacket {
   comparison: { status: "not-available" | "mismatching" | "exact" | "undetermined"; report?: string; residual?: unknown; reason?: string };
   integration: { state: "staged" | "live"; changes: string[]; blockers: string[]; destinationHash: string; stagedHash?: string };
   discovery: { unknowns: UnknownFact[]; report: unknown; priorExperiments: string[]; preflight: CommandRecord[];
+    compilerAnalysis?: CompilerAnalysisSupport;
     macroIdentity?: ReturnType<typeof detectFunctionMacroIdentity>;
     platformMacros?: import("../biosSyscall.js").BiosSyscallEvidence[];
     readBeforeDefinition?: { findings: Array<{ guidance?: string; register: string; vram: string }>; staticChain: import("../../diagnostics/nestedFunctionScan.js").ChainRow | null; censusComplete: boolean | null };
@@ -82,9 +85,15 @@ export function packetOpening(packet: PreparationPacket, packetPath: string): st
      source fragment or a catalogue dump. The machine manifest stays internal. */
   const sections = [
     `Prepared ${packet.identity.functionName} (${packet.identity.container}). Handoff: ${directory}/handoff.md.\nRead the measured source and selected context first; packet.json is an internal freshness record, not a startup reading task.`,
-    `Measured source: ${source?.path ?? "none — generation failed"}. Live destination: ${packet.identity.destination} (${packet.integration.state}).`,
+    `Measured source: ${source?.path ?? "none — generation failed"} (${packet.integration.state === "staged" ? "build draft; not integrated" : "live source"}). Live destination: ${packet.identity.destination}.`,
+    ...(packet.preparationScope === "function" ? [
+      `Assignment: decompile only ${packet.identity.symbol ?? packet.identity.functionName}. The draft must define only this function. Neighboring functions and shared storage are context, not additional assignments.`,
+      "The harness substitutes this fragment into the ordered production TU automatically. Whole-TU verification does not broaden your assignment: preserve neighboring function/data fragments; do not rewrite them to compensate for this function's mismatch. Evidence-backed shared declarations may be updated when needed.",
+    ] : packet.preparationScope === "translation-unit" ? ["Legacy source layout: the measured draft represents the entire owning TU; preserve all neighboring functions and globals."] : []),
     `Generation: ${packet.generation.status}; compilation: ${packet.compilation.status}; comparison: ${packet.comparison.status}; finalization: ${packet.finalization.status}.`,
     links,
+    ...(packet.discovery.compilerAnalysis ? [compilerAnalysisSummary(packet.discovery.compilerAnalysis)] : []),
+    `Prior experiments: ${packet.discovery.priorExperiments.join("; ") || "none recorded"}. Read recorded bounds before repeating an experiment.`,
     ...(packet.verification ? [`Verification scope: ${packet.verification.scope}; oracle: ${packet.verification.mode}.`] : []),
     ...(packet.discovery.macroIdentity || packet.discovery.platformMacros?.length ? [macroOpening(packet)] : []),
     ...(packet.discovery.readBeforeDefinition ? [chainOpening(packet)] : []),
@@ -94,7 +103,9 @@ export function packetOpening(packet: PreparationPacket, packetPath: string): st
     ...packet.discovery.unknowns.filter((u) => u.strength !== "witnessed" && /contract|signature|conflict/.test(u.missing)).slice(0, 4)
       .map((u) => `${u.subject}: ${Buffer.byteLength(u.missing) <= 350 ? u.missing : "see evidence.md"}.`),
     ...(packet.compilation.status === "failed" ? [`Compile errors:\n${packet.compilation.diagnostics.split("\n").filter((line) => /error|undeclared|parse|no member|incomplete|conflict/i.test(line)).slice(0, 6).join("\n") || "See diagnostics.txt."}`] : []),
-    "Use fresh handoff evidence for equivalent startup checks. Preserve an existing attempt; reconstruction/family transfer are available when useful.",
+    packet.identity.targetKind === "relocatable-library"
+      ? "Use fresh handoff evidence for equivalent startup checks. Preserve the measured draft. Automatic library reconstruction currently excludes symbolic storage/calls; family transfer still requires a section-relative adapter."
+      : "Use fresh handoff evidence for equivalent startup checks. Preserve an existing attempt; reconstruction/family transfer are available when useful.",
     packet.integration.state === "staged" ? "Edit the measured draft under build/ first; integrate into the identified destination only after it compiles and passes source/scope checks. The live stub has not been overwritten." : "Continue from the measured live source.",
     ...(source && Buffer.byteLength(source.text) <= 2000 ? [`\n\`\`\`c\n${source.text.trimEnd()}\n\`\`\``] : []),
   ];
@@ -108,6 +119,7 @@ export function packetOpening(packet: PreparationPacket, packetPath: string): st
 export function packetEvidence(packet: PreparationPacket): string {
   return [
     `# Evidence for ${packet.identity.functionName}`,
+    ...(packet.discovery.compilerAnalysis ? [`## Diagnostic support\n${compilerAnalysisSummary(packet.discovery.compilerAnalysis)}\n${packet.discovery.compilerAnalysis.profile?.evidence.notes.join("\n") ?? ""}`] : []),
     `Selected context: ${packet.context.projection}\nOriginal assembly: ${packet.identity.assembly}\nOriginal data: ${packet.identity.data.join(", ") || "none"}`,
     ...(packet.discovery.propagation ? [`Graph: ${packet.discovery.propagation.graph}\nPropagation: ${packet.discovery.propagation.report}\nPartial m2c inputs: ${packet.discovery.propagation.input}\nConvergence and graph completeness are separate: ${packet.discovery.propagation.convergence}, complete=${packet.discovery.propagation.graphComplete}.`] : []),
     `## Static-chain detection/injection\n${chainOpening(packet)}`,

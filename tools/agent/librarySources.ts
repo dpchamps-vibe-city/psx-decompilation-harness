@@ -1,10 +1,12 @@
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { analyzeCSource } from "./cSourceGuard.js";
-import { parseC } from "./residual-source-search/tree-sitter-c.js";
-import type { LibraryProject } from "../lib/project.js";
+import { parseC, declaratorName, field } from "./residual-source-search/tree-sitter-c.js";
+import { biosFunctionProjection } from "../lib/biosFunctionMacro.js";
+import { isDirectoryTu, inspectLibraryPart, libraryFunctionFilename, readLibraryTu, type LibraryTuManifest, type LibraryTuPart } from "../lib/libraryTranslationUnit.js";
+import { libraryInputFiles, type LibraryProject } from "../lib/project.js";
 import type { LibraryMember } from "../lib/libraryTargets.js";
-import { legacyLibrarySource } from "../lib/librarySourceLayout.js";
+import { legacyLibrarySource, libraryMemberSource } from "../lib/librarySourceLayout.js";
 import { hash } from "../lib/psyqMembers.js";
 
 export interface LibrarySourceMove { from: string; to: string; sha256: string; action: "moved" | "deduplicated" }
@@ -13,6 +15,7 @@ export interface LibrarySourceMove { from: string; to: string; sha256: string; a
  * verbatim, including real C and their unchanged member-ID assembly references.
  * Never choose between conflicting copies or silently relocate local headers. */
 export function migrateLibrarySources(members: LibraryMember[], project: LibraryProject, root: string): LibrarySourceMove[] {
+  if (project.output.sourceLayout === "tu-directory") return migrateLibraryTuDirectories(members, project, root);
   const plan: LibrarySourceMove[] = [];
   for (const member of members) {
     const from = legacyLibrarySource(project, member.id, member.member), to = member.source;
@@ -54,4 +57,92 @@ export function migrateLibrarySources(members: LibraryMember[], project: Library
     writeFileSync(join(directory, "source-migration.json"), JSON.stringify({ schemaVersion: 1, moves: plan }, null, 2) + "\n");
   }
   return plan;
+}
+
+/** Conservative AST split. Preserve definition and declaration order verbatim;
+ * conditional regions and location-dependent macros require human review. */
+export function planLibraryTu(member: LibraryMember, source: string): { manifest: LibraryTuManifest; files: Map<string, string> } {
+  const guard = analyzeCSource(source);
+  if (!guard.parses || /\b__(?:FILE|LINE|BASE_FILE|INCLUDE_LEVEL)__\b/.test(source)) throw new Error(`TU split needs source review: ${member.source}`);
+  const projection = biosFunctionProjection(source), tree = parseC(projection.source), files = new Map<string, string>(), parts: LibraryTuPart[] = [];
+  let cursor = 0, shared = 0;
+  const support = (end: number) => {
+    const text = source.slice(cursor, end);
+    if (text.trim()) { const path = `_shared-${shared++}.h`; files.set(path, text); parts.push({ path }); }
+    cursor = end;
+  };
+  try {
+    for (const node of tree.rootNode.namedChildren) {
+      if (node.type === "comment") continue;
+      if (node.type.startsWith("preproc_") && node.type !== "preproc_include") throw new Error(`TU split needs directive review: ${node.text}`);
+      if (node.type === "preproc_include") {
+        const path = field(node, "path");
+        if (!path || !["string_literal", "system_lib_string"].includes(path.type) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(path.text.slice(1, -1)))
+          throw new Error(`TU split needs include-path review: ${node.text}`);
+      }
+      let symbol = node.type === "function_definition" ? declaratorName(field(node, "declarator"))?.text : undefined;
+      if (node.type === "expression_statement") symbol = analyzeCSource(source.slice(node.startIndex, node.endIndex)).includeAsm[0]?.symbol;
+      if (!symbol) continue;
+      if (symbol !== "__library_member_data" && !member.functions.some(fn => fn.name === symbol)) throw new Error(`Unexpected function in TU split: ${symbol}`);
+      support(node.startIndex);
+      const path = symbol === "__library_member_data" ? "_data.c" : libraryFunctionFilename(member, symbol);
+      if (files.has(path)) throw new Error(`Duplicate function in TU split: ${symbol}`);
+      const end = projection.sites.find(s => s.valid && s.start === node.startIndex)?.end ?? node.endIndex;
+      const text = source.slice(node.startIndex, end) + "\n", part = { path, symbol };
+      inspectLibraryPart(text, part); files.set(path, text); parts.push(part); cursor = end;
+    }
+    support(source.length);
+    for (const fn of member.functions) if (!parts.some(p => p.symbol === fn.name)) throw new Error(`Missing function in TU split: ${fn.name}`);
+    for (const part of parts) inspectLibraryPart(files.get(part.path)!, part);
+    // Reserved filenames remain case-fold unique even on case-insensitive hosts.
+    if (new Set(parts.map(p => p.path.toLowerCase())).size !== parts.length) throw new Error("TU fragment path collision");
+    return { manifest: { schemaVersion: 1, member: member.id, parts }, files };
+  } finally { tree.delete(); }
+}
+export function writeLibraryTu(member: LibraryMember, source: string, root: string): void {
+  const plan = planLibraryTu(member, source), directory = dirname(join(root, member.source));
+  if (existsSync(directory)) throw new Error(`TU destination already exists: ${directory}`);
+  mkdirSync(directory, { recursive: true });
+  for (const [path, text] of plan.files) writeFileSync(join(directory, path), text, { flag: "wx" });
+  writeFileSync(join(root, member.source), JSON.stringify(plan.manifest, null, 2) + "\n", { flag: "wx" });
+}
+function migrateLibraryTuDirectories(members: LibraryMember[], project: LibraryProject, root: string): LibrarySourceMove[] {
+  const plans: Array<{ member: LibraryMember; from: string; content: string; plan: ReturnType<typeof planLibraryTu> }> = [];
+  const inputs = new Map(libraryInputFiles(project, root).map(input => [input.path, input]));
+  for (const member of members) {
+    if (!isDirectoryTu(member)) throw new Error(`Not a directory TU: ${member.source}`);
+    const grouped = libraryMemberSource({ ...project, output: { ...project.output, sourceLayout: "grouped" } },
+      inputs.get(member.input)!,
+      { name: member.member, ordinal: member.ordinal }, member.id);
+    const candidates = [...new Set([grouped, legacyLibrarySource(project, member.id, member.member)])].filter(p => existsSync(join(root, p)));
+    if (existsSync(join(root, member.source))) {
+      if (candidates.length) throw new Error(`Conflicting monolithic and directory TU: ${member.source}; no edits made`);
+      readLibraryTu(member, root); continue;
+    }
+    if (!candidates.length) continue;
+    const from = candidates[0]!;
+    if (candidates.length !== 1 || !lstatSync(join(root, from)).isFile()) throw new Error(`TU migration needs source review: ${from}`);
+    const content = readFileSync(join(root, from), "utf8");
+    const tree = parseC(content);
+    try { for (const node of tree.rootNode.descendantsOfType("preproc_include")) {
+      const path = field(node, "path");
+      if (path?.type === "string_literal" && existsSync(join(dirname(join(root, from)), path.text.slice(1, -1))))
+        throw new Error(`TU migration needs local-header review: ${from}: ${node.text}`);
+    } } finally { tree.delete(); }
+    if (existsSync(dirname(join(root, member.source)))) throw new Error(`TU destination already exists: ${member.source}`);
+    plans.push({ member, from, content, plan: planLibraryTu(member, content) });
+  }
+  // Preflight the entire batch, then publish directories before removing old
+  // copies. The report keeps the source hash and exact ordered fragments.
+  for (const p of plans) if (readFileSync(join(root, p.from), "utf8") !== p.content) throw new Error(`Source changed during TU migration: ${p.from}`);
+  const moves = plans.map(p => ({ from: p.from, to: p.member.source, sha256: hash(p.content), action: "moved" as const }));
+  for (const p of plans) {
+    writeLibraryTu(p.member, p.content, root);
+    if (readFileSync(join(root, p.from), "utf8") !== p.content) throw new Error(`Source changed; both TU copies retained: ${p.from}`);
+    unlinkSync(join(root, p.from));
+    if (!readdirSync(dirname(join(root, p.from))).length) rmdirSync(dirname(join(root, p.from)));
+  }
+  if (moves.length) { mkdirSync(join(root, "build/libraries"), { recursive: true });
+    writeFileSync(join(root, "build/libraries/source-migration.json"), JSON.stringify({ schemaVersion: 2, moves }, null, 2) + "\n"); }
+  return moves;
 }

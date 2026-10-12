@@ -9,7 +9,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { digest, fileDigest, filesUnder, readCache, snapshot, writeCache } from "../lib/contentCache.js";
 
-import { sourceFlagContext } from "../lib/targetAdapter.js";
+import { resolveFunctionTarget, sourceFlagContext } from "../lib/targetAdapter.js";
+import { libraryMemberForSource, requireLibraryFunction } from "../lib/libraryTargets.js";
+import { isDirectoryTu, libraryCompileInput, librarySourceFiles } from "../lib/libraryTranslationUnit.js";
 import { configuredCppFrontend, configuredFlags, configuredTool, executablePath, loadToolchain } from "../lib/toolchain.js";
 
 export function dependencyPaths(text: string, root: string): string[] {
@@ -64,8 +66,13 @@ export function preprocessingTools(): { tools: ReturnType<typeof toolConfigurati
     .map((p) => [p, process.env[p] ?? null])) };
 }
 export interface ProcessedBundle { text: string; dependencies: string[]; inputs: Record<string, string>; cache: "hit" | "miss" }
-export function cachedPreprocess(source: string, root = projectRoot(), flags = configuredFlags("cpp", sourceFlagContext(resolve(root, source), root), root)): ProcessedBundle {
+export function cachedPreprocess(source: string, root = projectRoot(), flags?: string[], name?: string): ProcessedBundle {
   source = resolve(root, source);
+  const context = name ? resolveFunctionTarget(name, root).flags : sourceFlagContext(source, root);
+  flags ??= configuredFlags("cpp", context, root);
+  const member = context?.kind === "library" && !source.endsWith(".h") ? (name ? requireLibraryFunction(name, root).member : libraryMemberForSource(source.slice(root.length + 1), root)) : undefined;
+  const composition = member && isDirectoryTu(member) ? snapshot(root, librarySourceFiles(member, root)) : undefined;
+  const input = member && isDirectoryTu(member) ? libraryCompileInput(member, source, join(root, "build/cache/preprocessed/inputs", digest(source)), root, name ? resolveFunctionTarget(name, root).symbol : undefined) : source;
   const { tools, environment } = preprocessingTools();
   const { cpp } = tools;
   const searchKey = digest(JSON.stringify([root, flags, tools, environment]));
@@ -93,7 +100,7 @@ export function cachedPreprocess(source: string, root = projectRoot(), flags = c
     const set = new Set(names); for (const name of set) metadata.getStore()?.names.add(name);
     return search.map((dir): [string, string[]] => [dir, searchMembers(dir).filter((p) => includeCandidate(p, set))]);
   };
-  const identity = { source, sourceHash: fileDigest(source), flags, cpp: searchKey,
+  const identity = { source, sourceHash: fileDigest(source), composition, flags, cpp: searchKey,
     compatibility: COMPONENT_CONTRACTS.preprocess };
   const key = digest(JSON.stringify(identity));
   const path = join(root, "build/cache/preprocessed", `${digest(source)}.json`);
@@ -104,9 +111,10 @@ export function cachedPreprocess(source: string, root = projectRoot(), flags = c
   const temp = mkdtempSync(join(tmpdir(), "psx-cpp-cache-"));
   try {
     const deps = join(temp, "source.d"), output = join(temp, "source.i");
-    const run = () => execFileSync(cpp, [...flags, "-MD", "-MF", deps, "-MT", "source", source, "-o", output], { cwd: root, maxBuffer: 32 * 1024 * 1024 });
+    const run = () => execFileSync(cpp, [...flags, "-MD", "-MF", deps, "-MT", "source", input, "-o", output], { cwd: root, maxBuffer: 32 * 1024 * 1024 });
     run();
-    let dependencies = dependencyPaths(readFileSync(deps, "utf8"), root);
+    const dependenciesOf = () => [...new Set([...dependencyPaths(readFileSync(deps, "utf8"), root), ...(member && isDirectoryTu(member) ? librarySourceFiles(member, root).map(p => resolve(root, p)) : [])])];
+    let dependencies = dependenciesOf();
     /* Discover actual includes, then repeat under their complete before/after
        snapshot. Hashing every *possible* include on each cold file is quadratic
        in the header population; a second cpp pass is cheaper and exact. */
@@ -117,7 +125,7 @@ export function cachedPreprocess(source: string, root = projectRoot(), flags = c
     const searchNames = [...new Set(dependencies.flatMap((p) => [basename(p),
       ...[...readFileSync(p, "utf8").matchAll(/["<]([^"<>\\\r\n]+)[">]/g)].map((m) => basename(m[1]!))]))].sort();
     const membership = membershipOf(searchNames);
-    run(); dependencies = dependencyPaths(readFileSync(deps, "utf8"), root);
+    run(); dependencies = dependenciesOf();
     const after = snapshot(root, dependencies);
     if (JSON.stringify(before) !== JSON.stringify(after) || identity.sourceHash !== fileDigest(source) ||
       JSON.stringify(membership) !== JSON.stringify(membershipOf(searchNames)))

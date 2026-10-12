@@ -264,13 +264,18 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
     },
     {
       stage: "greg",
-      agrees: comparison.populationParity && comparison.orderDifferences === 0 && comparison.allocationDifferences === 0,
-      relation: "value webs and their hard-register assignment",
+      agrees: comparison.populationParity && comparison.orderDifferences === 0 && comparison.allocationDifferences === 0 &&
+        comparison.allocationCoverage?.complete !== false,
+      relation: comparison.allocationCoverage?.complete === false
+        ? "value-web correspondence incomplete (allocation ungraded)" : "value webs and their hard-register assignment",
       targetCount: targetAlloc.webs.length,
       candidateCount: candidateAlloc.webs.length,
-      differences: comparison.allocationDifferences > 0
-        ? [`${comparison.allocationDifferences} web(s) allocated differently`]
-        : [],
+      differences: [
+        ...(comparison.allocationDifferences > 0 ? [`${comparison.allocationDifferences} paired web(s) allocated differently`] : []),
+        ...(comparison.allocationCoverage?.complete === false
+          ? [`Incomplete comparison: ${comparison.allocationCoverage.targetUnpaired.length} target and ` +
+            `${comparison.allocationCoverage.candidateUnpaired.length} candidate value webs unpaired; allocation agreement is not established.`] : []),
+      ],
     },
     {
       stage: "lreg",
@@ -293,7 +298,9 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
     : oldestDisagreeing.stage === "lreg"
       ? "expand / cse / gcse / loop / combine — the two programs do not contain the same instructions, so the source semantics differ"
       : oldestDisagreeing.stage === "greg"
-        ? "local-alloc / global-alloc — the same values, allocated to different hard registers"
+        ? comparison.allocationCoverage?.complete === false
+          ? "not established — incomplete value-web correspondence; consult the raw value definitions and selected native RTL before assigning a compiler pass"
+          : "local-alloc / global-alloc — the same values, allocated to different hard registers"
         : oldestDisagreeing.stage === "mach"
           ? "sched1 or sched2 — the same instructions in a different order"
           : oldestDisagreeing.stage === "dbr"
@@ -327,7 +334,8 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
    * sides, so they cancel in the comparison. They are reported, but they are
    * not search space: acting on them would not change a single byte. */
   const ambiguities: FiberSite[] = [...targetDbr.sites, ...targetAssembler.sites];
-  const sites = deriveBranchPoints(comparison, targetDbr.program, candidateDbr.program, targetAlloc.webs, []);
+  const sites = deriveBranchPoints(comparison, targetDbr.program, candidateDbr.program, targetAlloc.webs, [])
+    .filter(site => comparison.allocationCoverage?.complete !== false || site.stage !== "greg");
   const decisions = reduceToDecisions(sites, comparison, targetDbr.program, candidateDbr.program, targetAlloc.webs);
   if (provisional) for (const decision of decisions) decision.confidence = "inferred";
   /* Which blocks hold a word the oracle could not decide. Taken from the

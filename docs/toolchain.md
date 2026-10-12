@@ -139,6 +139,12 @@ readable while register-dependent interpretations are unavailable.
 Residual-objective JSON retains stub status, raw differences, interpretation
 confidence and ownership. A zero modeled key with differing words is explicitly
 an unexplained byte residual; work is selected from the best measured nonstub.
+Allocation agreement requires complete correspondence of surviving value webs
+(after coalescing); unpaired values are reported explicitly and the partial
+allocation term cannot rank candidates or license allocator-only directions.
+Raw differences and native RTL are the default evidence path, not an automatic
+assembler-expansion dump. Candidate build receipts do not recover original
+compiler input.
 Recipe-atlas/near-miss image flag columns currently refuse library targets
 explicitly, before any EXE lookup or catalogue compilation.
 

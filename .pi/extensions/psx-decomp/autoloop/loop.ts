@@ -1,6 +1,5 @@
-import { prepareAttempt, attemptStaticFinalization, buildInputs, documentCompletion, sameInputs, inputIdentity, type Completion } from "../tools/prepared-attempt.ts";
+import { prepareAttempt, attemptStaticFinalization, buildInputs, documentCompletion, sameInputs, inputIdentity, type Completion, type PreparedAttempt } from "../tools/prepared-attempt.ts";
 import { mkdirSync } from "node:fs";
-import { packetOpening } from "../../../../tools/agent/campaign/packet.ts";
 import { PREP_TOOLS, prepHandoffMessage, prepMessage, prepNudge, prepStatus, setPrepHandoffToolActive, type PrepSink } from "./prep.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runFunctionDiff, runResidualObjective } from "../../shared/gates.ts";
@@ -332,9 +331,13 @@ export const DOCUMENTATION_TOOLS = ["read", "bash", "edit", "write"];
  * a reply.
  */
 async function documentMatch(deps: LoopDeps, state: LoopState, functionName: string, completion: Completion): Promise<LoopState> {
+  /* Automatic acceptance must not spend a model turn on routine notes. Older
+     static completions may still carry pending documentation from prior runs. */
+  if (completion.origin === "static" && completion.documentation === "pending")
+    completion = { ...completion, documentation: "skipped", error: undefined };
   let current: LoopState = { ...state, completions: { ...state.completions, [functionName]: completion } };
-  writeState(deps.config, current); /* durable pending state BEFORE dispatch */
-  if (!deps.config.updateFileGroupings) return current;
+  writeState(deps.config, current); /* durable completion BEFORE optional dispatch */
+  if (!deps.config.updateFileGroupings || completion.documentation !== "pending") return current;
   await clearContext(deps, true);
   setStatus(deps, `◎ ${functionName} · documentation`);
   let documentationModel: string | undefined;
@@ -545,9 +548,8 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
   /* A park is a verdict of matching tiers that ran, never of preparation alone. */
   let tiersRan = 0;
 
-  const prepFirst = deps.config.ladder[0]?.role === "prep";
   const completed = current.completions?.[functionName];
-  if (!prepFirst && completed && sameInputs(completed.inputs, buildInputs(deps.projectRoot))) {
+  if (completed && sameInputs(completed.inputs, buildInputs(deps.projectRoot))) {
     current = await documentMatch(deps, current, functionName, completed);
     if (current.completions?.[functionName]?.verification === "invalidated") return { state: current,
       outcome: { kind: "environment-broken", functionName, detail: "Documentation changed verified build inputs; rerun finalization." } };
@@ -557,27 +559,28 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
     return { state: current, outcome: { kind: "matched", functionName, tier: completed.tier ?? completed.origin,
       changedFiles, documentation: current.completions?.[functionName]?.documentation ?? "pending" } };
   }
-  /* Prepare the packet before dispatch. A prep-led run must enter its declared
-     role first; completion/static shortcuts must not open documentation here. */
+  /* Exact prepared source goes through the ordinary gate before ANY model
+     lookup, including a prep-led ladder. A mismatch still needs its agent. */
   let preparedOpening = "";
+  const finalizePrepared = async (prepared: PreparedAttempt): Promise<{ state: LoopState; outcome: FunctionOutcome } | undefined> => {
+    const result = await attemptStaticFinalization({ root: deps.projectRoot, attempt: prepared,
+      aborted: () => deps.flag.aborted || signal.aborted,
+      finalize: async () => {
+        setStatus(deps, `◎ ${functionName} · automatic finalization`);
+        const gate = await finalize(oracle(current), functionName);
+        return { passed: gate.passed, changedFiles: gate.changedFiles, detail: gateReport(gate.gate) };
+      } });
+    preparedOpening = result.handoff;
+    if (!result.completed) return undefined;
+    current = await documentMatch(deps, current, functionName, result.completed);
+    notify(deps, `${functionName} matched and finalized automatically; no model turn needed`, "info");
+    return { state: current, outcome: { kind: "matched", functionName, tier: "static",
+      changedFiles: result.completed.changedFiles, documentation: result.completed.documentation } };
+  };
   try {
     const prepared = await prepareAttempt(deps.projectRoot, functionName, signal);
-    preparedOpening = packetOpening(prepared.packet, prepared.path);
-    if (!prepFirst) {
-      const result = await attemptStaticFinalization({ root: deps.projectRoot, attempt: prepared, aborted: () => deps.flag.aborted,
-        finalize: async () => {
-          const gate = await finalize(oracle(current), functionName);
-          return { passed: gate.passed, changedFiles: gate.changedFiles, detail: gateReport(gate.gate) };
-        } });
-      preparedOpening = result.handoff;
-      if (result.completed) {
-        current = await documentMatch(deps, current, functionName, result.completed);
-        if (current.completions?.[functionName]?.verification === "invalidated") return { state: current,
-          outcome: { kind: "environment-broken", functionName, detail: "Documentation changed verified build inputs; rerun finalization." } };
-        return { state: current, outcome: { kind: "matched", functionName, tier: "static",
-          changedFiles: (await loopChangedFiles(oracle(current))).changedFiles, documentation: current.completions?.[functionName]?.documentation ?? "pending" } };
-      }
-    }
+    const accepted = await finalizePrepared(prepared);
+    if (accepted) return accepted;
   } catch (error) { preparedOpening = `Preparation could not complete: ${String(error)}. Preserve current source; investigate the named input failure.`; }
   if (deps.flag.aborted) return { state: current, outcome: { kind: "aborted", functionName } };
 
@@ -607,7 +610,8 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
           let ready = false;
           try {
             const prepared = await prepareAttempt(deps.projectRoot, functionName, signal);
-            preparedOpening = packetOpening(prepared.packet, prepared.path);
+            const accepted = await finalizePrepared(prepared);
+            if (accepted) return accepted;
             const status = prepStatus(prepared.packet);
             lastReport = status.report;
             ready = status.ready;

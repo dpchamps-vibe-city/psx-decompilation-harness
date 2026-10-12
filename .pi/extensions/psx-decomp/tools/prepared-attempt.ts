@@ -59,7 +59,8 @@ export interface Completion {
   verifiedIdentity: string;
   inputs: Record<string, string>;
   changedFiles: string[];
-  documentation: "pending" | "passed";
+  /** Static matches retain evidence without dispatching a model for notes. */
+  documentation: "pending" | "passed" | "skipped";
   verification?: "passed" | "invalidated";
   packetPath?: string;
   error?: string;
@@ -93,7 +94,7 @@ export async function attemptStaticFinalization(options: {
   if (result.passed && !options.aborted()) {
     const inputs = buildInputs(root);
     const completion: Completion = { origin: "static", inputs, verifiedIdentity: inputIdentity(inputs), verification: "passed",
-      changedFiles: result.changedFiles, documentation: "pending", packetPath: attempt.path };
+      changedFiles: result.changedFiles, documentation: "skipped", packetPath: attempt.path };
     p.finalization = { status: "passed", verifiedIdentity: completion.verifiedIdentity, changedFiles: result.changedFiles };
     p.integration.state = "live";
     persistAttempt(root, attempt);
@@ -115,7 +116,7 @@ export async function attemptStaticFinalization(options: {
 export async function documentCompletion(root: string, completion: Completion,
   document: () => Promise<true | false | string>): Promise<Completion> {
   if (!sameInputs(completion.inputs, buildInputs(root))) return { ...completion, verification: "invalidated", documentation: "pending", error: "verified build inputs changed; finalization must be rerun" };
-  if (completion.documentation === "passed") return completion;
+  if (completion.documentation === "passed" || completion.documentation === "skipped") return completion;
   let outcome: true | false | string = false;
   try { outcome = await document(); } catch (failure) { outcome = String(failure); }
   /* Even an aborted/failed role may have edited a header before it stopped. */

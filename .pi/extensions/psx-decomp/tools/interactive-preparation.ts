@@ -120,6 +120,11 @@ export function interactiveDocumentation(pi: ExtensionAPI, root: string): {
   return { start(name, completion, ctx) {
     saveInteractiveCompletion(root, name, completion);
     if (completion.documentation === "passed") { ctx.ui.notify(`${name} is already finalized and documented.`, "info"); return; }
+    if (completion.documentation === "skipped" || completion.origin === "static") {
+      saveInteractiveCompletion(root, name, { ...completion, documentation: "skipped", error: undefined });
+      ctx.ui.notify(`${name} matched and finalized automatically; no model turn needed.`, "info");
+      return;
+    }
     if (!ctx.model) { ctx.ui.notify(`${name} finalized; documentation pending (no model available).`, "warning"); return; }
     if (pending) { ctx.ui.notify(`${name}: documentation pending; another documentation turn is active.`, "warning"); return; }
     const marker = `Documentation attempt: ${randomUUID()}`;

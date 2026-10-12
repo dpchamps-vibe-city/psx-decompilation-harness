@@ -57,7 +57,7 @@ export function renderReversal(report: ReversalReport): string {
   lines.push(report.objective.degraded ? "NORMALIZED DIAGNOSTIC WAYPOINTS (control-flow comparison degraded)" :
     `WAYPOINT LADDER${provisional ? " (provisional pass interpretation)" : " (reconstructed pass interpretation)"}`);
   for (const comparison of report.comparisons) {
-    const mark = comparison.agrees ? "=" : "≠";
+    const mark = comparison.stage === "greg" && report.objective.allocationCoverage?.complete === false ? "?" : comparison.agrees ? "=" : "≠";
     lines.push(`  ${mark} ${comparison.stage.padEnd(8)} ${comparison.relation}`);
     lines.push(`      target ${comparison.targetCount}, candidate ${comparison.candidateCount}`);
     for (const difference of comparison.differences.slice(0, 6)) lines.push(`      ${difference}`);
@@ -71,7 +71,8 @@ export function renderReversal(report: ReversalReport): string {
      * precisely so a caller loads one sheet instead of the whole guide, and it
      * only works if the tool that knows the pass says which sheet that is. */
     const sheet = resolveSheet(report.firstDivergence.stage);
-    if (sheet && !report.objective.degraded) lines.push(`  mechanism sheet: psx_reference ${sheet}`);
+    if (sheet && !report.objective.degraded && report.objective.allocationCoverage?.complete !== false)
+      lines.push(`  mechanism sheet: psx_reference ${sheet}`);
   }
 
   if (!report.exact && report.firstDivergence?.stage === "machine") {
@@ -80,8 +81,8 @@ export function renderReversal(report: ReversalReport): string {
     if (report.assemblerExpansion) {
       const expansion = report.assemblerExpansion;
       lines.push(`  production recipe and hashes: ${expansion.receipt}`);
-      lines.push(`  compiler output: ${expansion.compilerAssembly}`, ...expansion.compilerExcerpt.map(line => `    ${line}`));
-      lines.push(`  production MASPSX expansion: ${expansion.expandedAssembly}`, ...expansion.expandedExcerpt.map(line => `    ${line}`));
+      lines.push(`  compiler output artifact: ${expansion.compilerAssembly}`);
+      lines.push(`  expansion artifact: ${expansion.expandedAssembly}`);
     }
   }
   if (report.rawDifferences?.rows.length) {

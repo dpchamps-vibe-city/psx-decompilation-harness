@@ -171,6 +171,7 @@ the word count:
 | `worse` | an earlier term rose | revert, and start the next experiment |
 | `traded` | lost an earlier term, won a later one | keep as a branch, not as the baseline |
 | `identical` | same compiled words | not an experiment; change axis, not spelling |
+| `incomplete` | some value webs have no counterpart; allocation is ungraded | inspect those definitions and the selected native RTL; do not rank the missing term or infer original compiler input from candidate output |
 | `EXACT` | bytes match | go to Finish |
 
 `ALREADY MEASURED` means a previous session ran this experiment. Believe it and

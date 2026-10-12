@@ -17,7 +17,7 @@ import { reconstructHardRegisterLifetimes } from "./allocator-counterfactual/ana
 import { parseCc1Assembly, normalizeDisassembly } from "./variant-lab/compile.js";
 import { analyzeTargetScheduleFromArtifacts } from "./target-schedule/analyze.js";
 import type { CompilerTraceReport } from "./compiler-trace/types.js";
-import { bestMeasuredEntry, residualReportJson, type Entry } from "./residualObjective.js";
+import { bestMeasuredEntry, residualReportJson, renderResidualReport, type Entry } from "./residualObjective.js";
 import type { ResidualObjective } from "./pipeline-reversal/objective.js";
 import { buildTraceReportFromArtifacts } from "./compilerTrace.js";
 import { repairReport } from "./nearMissRepair.js";
@@ -180,7 +180,7 @@ function entry(label: string, population: number, stub = false): Entry {
     blocks: population ? [{ block: 2, population, schedule: 0, allocation: 0, coalescing: 0, suppressed: 0, blind: false, total: population, signature: "fixture" }] : [] };
   return { label, stub, objective, matchedWords: stub ? 0 : 10, totalWords: stub ? 0 : 13,
     objectHash: label, provenance: { value: { object: "candidate.o", source: `${label}.c` }, regenerated: false,
-      provenance: { fingerprint: "fixture" } } as Entry["provenance"] };
+      provenance: { fingerprint: "fixture", files: {} } } as Entry["provenance"] };
 }
 
 test("JSON preserves raw evidence and interpretation; work belongs to the best measured nonstub", () => {
@@ -203,6 +203,20 @@ test("JSON preserves raw evidence and interpretation; work belongs to the best m
   assert.equal(zero.matchedWords, 10); assert.equal(zero.totalWords, 13);
   assert.ok(Object.hasOwn(zero, "assemblerExpansion"));
   assert.equal(residualReportJson("f", [baseline]).best, null);
+});
+
+test("incomplete value comparison is explicit and candidate assembler excerpts are not the default next action", () => {
+  const candidate = entry("draft", 0);
+  candidate.objective.allocationCoverage = { complete: false, targetUnpaired: [2, 3], candidateUnpaired: [] };
+  candidate.residualOwner = "not established — incomplete value-web correspondence";
+  candidate.assemblerExpansion = { receipt: "production-receipt.json", expandedExcerpt: ["EXPAND_AT_SENTINEL"] } as Entry["assemblerExpansion"];
+  const entries = [entry("live", 0, true), candidate];
+  assert.equal(residualReportJson("f", entries).entries[1]!.interpretation.status, "incomplete-value-comparison");
+  const text = renderResidualReport("f", entries);
+  assert.match(text, /incomplete/);
+  assert.match(text, /Allocation is ungraded, not zero/);
+  assert.match(text, /src set to this measured candidate/);
+  assert.doesNotMatch(text, /EXPAND_AT_SENTINEL/);
 });
 
 test("stub diagnostics name the real object marker for both bare and owner-qualified function keys", () => {

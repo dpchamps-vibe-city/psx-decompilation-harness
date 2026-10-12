@@ -21,8 +21,9 @@
  *    the sched1 order, so a variant that removes a transposition is making
  *    progress even while the registers are still wrong, and ranking allocation
  *    higher would reward freezing a wrong schedule into a lucky assignment.
- *  - **zero exactly at a match.** Every term is zero if and only if the two
- *    programs agree at every waypoint, and the bytes agree when they do.
+ *  - **bounded interpretation.** Zero terms describe only compared values,
+ *    not byte identity. Missing value correspondences are explicit; their
+ *    allocation term cannot rank a candidate or establish pass ownership.
  *
  * What it deliberately excludes: transpositions the delay-slot inverse could
  * have produced on its own. A search that descends a number its own instrument
@@ -80,13 +81,15 @@ export interface ResidualObjective {
   /**
    * Lexicographic key, worst term first:
    * `[controlFlow, population, schedule, allocation]`.
-   * Lower is better; all zero means the programs agree everywhere.
+   * Lower is better within the compared domain; zero never establishes byte
+   * identity. allocationCoverage.complete=false leaves the last term partial.
    */
   key: [number, number, number, number];
   controlFlow: number;
   population: number;
   schedule: number;
   allocation: number;
+  allocationCoverage?: ProgramComparison["allocationCoverage"];
   blocks: BlockResidual[];
   /**
    * Words the oracle could not decide — a relocation whose symbol has no known
@@ -203,6 +206,11 @@ export function residualObjective(
     degraded: controlFlow > 0,
     blindBlocks: blocks.filter((block) => block.blind).map((block) => block.block),
   };
+  if (comparison.allocationCoverage) objective.allocationCoverage = comparison.allocationCoverage;
+  if (comparison.allocationCoverage?.complete === false) {
+    objective.reason = `Incomplete value-web correspondence: ${comparison.allocationCoverage.targetUnpaired.length} target and ` +
+      `${comparison.allocationCoverage.candidateUnpaired.length} candidate values have no counterpart; allocation is partial, not agreement.`;
+  }
   if (controlFlow > 0) {
     objective.reason = `target has ${target.blocks.length} basic blocks, candidate has ${candidate.blocks.length}; per-block numbers do not name the same code`;
   }
@@ -249,10 +257,12 @@ export function compareObjectives(
   /* A degraded reading is not comparable per block; fall back to the key, which
    * the control-flow term dominates. */
   if (options.block !== undefined && !left.degraded && !right.degraded) {
-    const byBlock = compareKeys(blockKey(left, options.block), blockKey(right, options.block));
+    const limit = left.allocationCoverage?.complete === false || right.allocationCoverage?.complete === false ? 2 : 3;
+    const byBlock = compareKeys(blockKey(left, options.block).slice(0, limit), blockKey(right, options.block).slice(0, limit));
     if (byBlock !== 0) return byBlock;
   }
-  return compareKeys(left.key, right.key);
+  const limit = left.allocationCoverage?.complete === false || right.allocationCoverage?.complete === false ? 3 : 4;
+  return compareKeys(left.key.slice(0, limit), right.key.slice(0, limit));
 }
 
 export function objectiveTotal(objective: ResidualObjective): number {
@@ -285,7 +295,9 @@ export function rankBlocks(objective: ResidualObjective): BlockWorkItem[] {
   /* A blind block is never work: its residual is an artifact of a relocation
      the oracle could not resolve, so no source edit closes it. Naming one as
      NEXT sends the search to rewrite code that already matches. */
-  const open = objective.blocks.filter((block) => block.total > 0 && !block.blind);
+  const gradedTotal = (block: BlockResidual) => block.population + block.schedule +
+    (objective.allocationCoverage?.complete === false ? 0 : block.allocation + block.coalescing);
+  const open = objective.blocks.filter((block) => gradedTotal(block) > 0 && !block.blind);
   const bySignature = new Map<string, number[]>();
   for (const block of open) {
     if (!block.signature) continue;
@@ -293,18 +305,18 @@ export function rankBlocks(objective: ResidualObjective): BlockWorkItem[] {
     list.push(block.block);
     bySignature.set(block.signature, list);
   }
-  const totalOf = new Map(open.map((block) => [block.block, block.total]));
+  const totalOf = new Map(open.map((block) => [block.block, gradedTotal(block)]));
   const payoff = (block: BlockResidual): number => {
     const group = block.signature ? (bySignature.get(block.signature) ?? [block.block]) : [block.block];
     const units = group.reduce((sum, index) => sum + (totalOf.get(index) ?? 0), 0);
-    return units / Math.max(1, block.total);
+    return units / Math.max(1, gradedTotal(block));
   };
   const seen = new Set<number>();
   const items: BlockWorkItem[] = [];
   for (const block of [...open].sort((left, right) =>
     Number(right.population > 0) - Number(left.population > 0) ||
     payoff(right) - payoff(left) ||
-    left.total - right.total ||
+    gradedTotal(left) - gradedTotal(right) ||
     left.block - right.block)) {
     if (seen.has(block.block)) continue;
     const duplicates = (bySignature.get(block.signature) ?? []).filter((index) => index !== block.block);
@@ -333,7 +345,8 @@ export function summarizeObjective(objective: ResidualObjective): string {
   if (objective.controlFlow > 0) terms.push(`cfg ${objective.controlFlow}`);
   if (objective.population > 0) terms.push(`pop ${objective.population}`);
   if (objective.schedule > 0) terms.push(`sched ${objective.schedule}`);
-  if (objective.allocation > 0) terms.push(`alloc ${objective.allocation}`);
+  if (objective.allocationCoverage?.complete === false) terms.push("allocation ungraded (unpaired values)");
+  else if (objective.allocation > 0) terms.push(`alloc ${objective.allocation}`);
   const body = terms.length > 0 ? terms.join(" ") : objective.degraded ? "unclassified byte differences" : "no modeled residual, bytes still differ";
   return `${body}${undetermined}`;
 }

@@ -95,6 +95,9 @@ export interface ProgramComparison {
   /** Transpositions the delay-slot inverse could have produced on its own. */
   fiberArtifacts: number;
   allocationDifferences: number;
+  /** Allocation agreement applies only after every surviving value is paired.
+   * Coalesced representatives, not the raw web counts, define this domain. */
+  allocationCoverage?: { complete: boolean; targetUnpaired: number[]; candidateUnpaired: number[] };
   /** Copies present on one side only because the other side coalesced them. */
   coalescedCopies: CoalescedCopy[];
 }
@@ -385,7 +388,14 @@ export function compareProgramsAtWaypoint(
     blocks,
   );
 
+  const matchedTarget = new Set(webs.map(web => web.targetWeb));
+  const matchedCandidate = new Set(webs.map(web => web.candidateWeb));
+  const targetUnpaired = [...new Set(targetMerge.values())].filter(id => !matchedTarget.has(id));
+  const candidateUnpaired = [...new Set(candidateMerge.values())].filter(id => !matchedCandidate.has(id));
+
   return {
+    allocationCoverage: { complete: targetUnpaired.length === 0 && candidateUnpaired.length === 0,
+      targetUnpaired, candidateUnpaired },
     populationParity: targetOnlyShapes.size === 0 && candidateOnlyShapes.size === 0,
     targetOnlyShapes,
     candidateOnlyShapes,

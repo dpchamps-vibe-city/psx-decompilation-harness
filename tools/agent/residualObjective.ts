@@ -178,7 +178,7 @@ function score(functionName: string, label: string, source?: string): Entry {
   /* Only allocation-dominant, semantically aligned residuals activate this
    * diagnostic. It cannot change the staged key or make unknown identity a
    * web improvement. Fresh dumps are retained with the measured source. */
-  if (allocationDominant(entry.objective)) {
+  if (entry.objective.allocationCoverage?.complete !== false && allocationDominant(entry.objective)) {
     try {
       const fingerprint = fingerprintWebPartition(functionName, source ? { source } : {});
       if (fingerprint.diff) entry.webDiff = fingerprint.diff;
@@ -201,7 +201,8 @@ function score(functionName: string, label: string, source?: string): Entry {
 function tradedTerms(candidate: ResidualObjective, baseline: ResidualObjective): boolean {
   let lost = false;
   let won = false;
-  for (let index = 0; index < candidate.key.length; index++) {
+  const limit = candidate.allocationCoverage?.complete === false || baseline.allocationCoverage?.complete === false ? 3 : candidate.key.length;
+  for (let index = 0; index < limit; index++) {
     if (candidate.key[index] > baseline.key[index]) lost = true;
     else if (candidate.key[index] < baseline.key[index] && lost) won = true;
   }
@@ -213,7 +214,7 @@ function blockColumns(objective: ResidualObjective): Map<number, string> {
   for (const block of objective.blocks) {
     if (block.total === 0) continue;
     const cell = `${block.population}/${block.schedule}/${block.allocation + block.coalescing}`;
-    columns.set(block.block, block.blind ? `${cell}?` : cell);
+    columns.set(block.block, block.blind || objective.allocationCoverage?.complete === false ? `${cell}?` : cell);
   }
   return columns;
 }
@@ -266,6 +267,7 @@ export function residualReportJson(functionName: string, entries: Entry[], block
       interpretation: {
         status: entry.stub ? "stub" : entry.objective.exact ? "byte-exact" :
           entry.objective.undetermined > 0 ? "undetermined" :
+          entry.objective.allocationCoverage?.complete === false ? "incomplete-value-comparison" :
           entry.objective.key.every(term => term === 0) ? "unexplained-byte-residual" : "modeled-residual",
         ...(entry.analysis ?? {}),
       },
@@ -278,7 +280,7 @@ export function residualReportJson(functionName: string, entries: Entry[], block
   };
 }
 
-function render(functionName: string, entries: Entry[], block: number | undefined): string {
+export function renderResidualReport(functionName: string, entries: Entry[], block?: number): string {
   const lines: string[] = [];
   const baseline = entries[0]!;
   lines.push(`residual objective: ${functionName}${block === undefined ? "" : `   (ranked for block ${block})`}`);
@@ -300,9 +302,10 @@ function render(functionName: string, entries: Entry[], block: number | undefine
     const verdict = entry.stub ? "STUB"
       : entry.objective.exact ? "EXACT"
       : entry.objective.undetermined > 0 ? "undetermined"
+      : !baseline.stub && entry.objectHash === baseline.objectHash ? "identical"
+      : entry.objective.allocationCoverage?.complete === false ? "incomplete"
       : entry === baseline ? "baseline"
       : baseline.stub ? "scored"
-      : entry.objectHash === baseline.objectHash ? "identical"
       : order < 0 ? "better"
       : order > 0 ? (tradedTerms(entry.objective, baseline.objective) ? "traded" : "worse")
       : "same";
@@ -314,7 +317,7 @@ function render(functionName: string, entries: Entry[], block: number | undefine
       String(entry.objective.controlFlow),
       String(entry.objective.population),
       String(entry.objective.schedule),
-      String(entry.objective.allocation),
+      entry.objective.allocationCoverage?.complete === false ? `${entry.objective.allocation}?` : String(entry.objective.allocation),
       ...openBlocks.map((index) => columns.get(index) ?? "·"),
     ];
   });
@@ -364,15 +367,16 @@ function render(functionName: string, entries: Entry[], block: number | undefine
          the words. */
       lines.push("NEXT: the normalized model does not explain the remaining byte differences.");
       lines.push(`      owner: ${best.residualOwner ?? "not established"}`);
-      lines.push("      Read the raw words and observed compiler trace. A zero modeled term is not a proof of assembler ownership.");
-      lines.push("      The production expansion below is evidence about this candidate only, not the original compiler's input.");
-      if (best.assemblerExpansion) {
-        lines.push(`      production recipe: ${best.assemblerExpansion.receipt}`);
-        lines.push(`      expanded GAS input: ${best.assemblerExpansion.expandedAssembly}`);
-        for (const text of best.assemblerExpansion.expandedExcerpt) lines.push(`        ${text}`);
+      if (best.objective.allocationCoverage?.complete === false) {
+        const coverage = best.objective.allocationCoverage;
+        lines.push(`      Unpaired values: target [${coverage.targetUnpaired.join(", ")}], candidate [${coverage.candidateUnpaired.join(", ")}].`);
+        lines.push("      Allocation is ungraded, not zero. Read these value definitions and the selected native RTL;");
+        lines.push("      check address materialization/operand provenance before choosing an allocation experiment.");
       }
-      lines.push("      Register, immediate, symbol and operand differences require the raw words.");
+      lines.push("      Raw register, immediate, symbol and operand differences:");
       for (const line of differingWords(functionName, best)) lines.push(`      ${line}`);
+      lines.push("      Use psx_compiler_trace with src set to this measured candidate. The original compiler input is unknown.");
+      if (best.assemblerExpansion) lines.push(`      Optional candidate production receipt (not origin evidence): ${best.assemblerExpansion.receipt}`);
     } else {
       lines.push("NEXT: no open block — the residual is outside the per-block reading; read the full reversal report.");
     }
@@ -481,7 +485,7 @@ if (isCLI) {
       console.log(JSON.stringify(residualReportJson(options.functionName, entries, options.block,
         recorded.split("\n").filter(Boolean)), null, 2));
     } else {
-      console.log(render(options.functionName, entries, options.block));
+      console.log(renderResidualReport(options.functionName, entries, options.block));
       console.log("");
       console.log(recorded);
     }

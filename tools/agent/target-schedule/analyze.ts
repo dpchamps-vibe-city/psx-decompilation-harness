@@ -2,10 +2,13 @@ import { projectRoot } from "../../lib/runtimeContext.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { selectRtlFunction, selectAssemblyFunction } from "../../lib/compilerArtifacts.js";
+import { functionSymbol } from "../../lib/targetAdapter.js";
 import { parseRtlInstructions } from "../compiler-trace/rtl-parser.js";
 import { parseEmissionAttribution } from "../compiler-trace/emission-attribution.js";
 import type { CompilerTraceReport } from "../compiler-trace/types.js";
-import { parseCc1Assembly } from "../variant-lab/compile.js";
+import { normalizeDisassembly } from "../variant-lab/compile.js";
+import { disassembleFunctionObject } from "../decompToolchain.js";
 import type { NormalizedInstruction } from "../variant-lab/types.js";
 import { projectPath } from "../variant-lab/artifacts.js";
 import { deriveAllocationRequirements } from "./allocation-requirements.js";
@@ -84,20 +87,32 @@ export function analyzeTargetScheduleFromArtifacts(
   options: TargetScheduleArtifactInputs,
 ): TargetScheduleAnalysis {
   const trace = options.trace;
-  const machStage = trace.stages.find((stage) => stage.suffix === "mach") ||
-    trace.stages.find((stage) => stage.suffix === "dbr");
-  if (!machStage) throw new Error("compiler trace did not produce .mach or .dbr final RTL");
+  if (trace.function !== options.functionName) throw new Error("Target schedule trace belongs to a different function.");
+  const symbol = functionSymbol(options.functionName);
+  const machStage = trace.stages.find((stage) => stage.suffix === "mach" && stage.instructionCount > 0) ||
+    trace.stages.find((stage) => stage.suffix === "dbr" && stage.instructionCount > 0);
+  if (!machStage) throw new Error(`No selected final C/RTL for ${symbol}; pass --src with a candidate defining this function. Neighbor RTL is not a candidate.`);
   const finalInstructions = parseRtlInstructions(
-    readFileSync(join(projectRoot(), machStage.file), "utf8"),
+    selectRtlFunction(readFileSync(join(projectRoot(), machStage.file), "utf8"), symbol),
     machStage.suffix,
   );
+  if (!finalInstructions.length) throw new Error(`No final RTL instructions for ${symbol}.`);
+  const assemblyPath = join(projectRoot(), trace.assembly);
+  const assemblyText = selectAssemblyFunction(readFileSync(assemblyPath, "utf8"), symbol);
 
   const target = machineRefs(options.target);
-  const candidate = machineRefs(options.candidate || parseCc1Assembly(join(projectRoot(), trace.assembly)));
+  /* cc1 macro lines are not machine instructions. Reuse the object assembled
+   * through the unchanged production route; never compare that macro stream to
+   * the target's words or pretend its -dp attribution covers expanded words. */
+  if (!options.candidate && !trace.candidateObject)
+    throw new Error(`No assembled candidate object for ${symbol}; scheduling requires production machine instructions, not cc1 macro lines.`);
+  const candidate = machineRefs(options.candidate ?? normalizeDisassembly(
+    disassembleFunctionObject(join(projectRoot(), trace.candidateObject!), options.functionName),
+  ));
   /* Traces are compiled with -dp, so the assembly carries the compiler's own
    * RTL-instruction-to-line attribution. Older traces without it fall back to
    * canonical matching. */
-  const attribution = parseEmissionAttribution(readFileSync(join(projectRoot(), trace.assembly), "utf8"));
+  const attribution = parseEmissionAttribution(assemblyText);
   const uidResult = attachFinalUids(candidate, finalInstructions, attribution);
   const alignment = alignMachineInstructions(target, candidate);
   attachCorrespondenceUids(alignment.correspondence, candidate);
@@ -212,6 +227,7 @@ export function analyzeTargetScheduleFromArtifacts(
     requirements,
     preservationRanges: exactRanges(target, candidate),
     caveats: [
+      ...trace.caveats,
       ...uidResult.caveats,
       ...(parityGate.caveat ? [parityGate.caveat] : []),
       "Scheduler comparator provenance models GCC 2.95.2 legacy sched.c: displayed priority, relation to the last scheduled instruction, then block-local LUID.",

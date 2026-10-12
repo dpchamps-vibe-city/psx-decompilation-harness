@@ -4,7 +4,7 @@ import type {
   PseudoTransition,
   RtlInstruction,
 } from "./types.js";
-import { FIRST_PSEUDO_REGISTER } from "./rtl-parser.js";
+import { firstPseudoRegister } from "./rtl-parser.js";
 
 function uniqueSorted(values: number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
@@ -29,20 +29,20 @@ function stagePresence(stage: string, instructions: RtlInstruction[]): Map<numbe
   };
   for (const instruction of instructions) {
     for (const reference of instruction.sets) {
-      if (reference.register < FIRST_PSEUDO_REGISTER) continue;
+      if (reference.register < firstPseudoRegister()) continue;
       const presence = ensure(reference.register);
       presence.setUids.push(instruction.uid);
       if (instruction.expression) presence.expressions.push(expressionSummary(instruction.expression));
       if (instruction.block !== undefined) presence.blocks.push(instruction.block);
     }
     for (const reference of instruction.uses) {
-      if (reference.register < FIRST_PSEUDO_REGISTER) continue;
+      if (reference.register < firstPseudoRegister()) continue;
       const presence = ensure(reference.register);
       presence.useUids.push(instruction.uid);
       if (instruction.block !== undefined) presence.blocks.push(instruction.block);
     }
     for (const reference of instruction.deaths) {
-      if (reference.register < FIRST_PSEUDO_REGISTER) continue;
+      if (reference.register < firstPseudoRegister()) continue;
       const presence = ensure(reference.register);
       presence.deathUids.push(instruction.uid);
       if (instruction.block !== undefined) presence.blocks.push(instruction.block);
@@ -68,7 +68,7 @@ function copySourceFor(
     if (!instruction.sets.some((reference) => reference.register === pseudo)) continue;
     if (instruction.operation !== "reg") continue;
     for (const use of instruction.uses) {
-      if (use.register >= FIRST_PSEUDO_REGISTER && next.has(use.register)) candidates.add(use.register);
+      if (use.register >= firstPseudoRegister() && next.has(use.register)) candidates.add(use.register);
     }
   }
   return [...candidates].sort((a, b) => a - b);

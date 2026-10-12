@@ -32,6 +32,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { requireRecipeAtlasImageSupport, reportUnsupportedRecipeAtlasTarget } from "./recipe-atlas/target-support.js";
 import { requireFunctionLocation } from "../lib/symbolIndex.js";
 import { buildMachineIr, type MachineIrReport } from "./machine-ir/index.js";
 import { decodeFunctionWords } from "./family-transfer/signature.js";
@@ -122,6 +123,7 @@ function localise(report: MachineIrReport, differing: number[]): ImplicatedRegio
 /* ---- the report -------------------------------------------------------------- */
 
 export function repairReport(functionName: string): RepairReport {
+  requireRecipeAtlasImageSupport("psx_near_miss_repair");
   const notes: string[] = [];
   const location = requireFunctionLocation(functionName);
   const report = buildMachineIr(functionName);
@@ -308,6 +310,8 @@ function main(): void {
   for (const note of report.notes) console.log(`  note: ${note}`);
 }
 
-if (process.argv[1]?.endsWith("nearMissRepair.ts")) main();
+if (process.argv[1]?.endsWith("nearMissRepair.ts")) {
+  try { main(); } catch (error) { reportUnsupportedRecipeAtlasTarget(error, process.argv.includes("--json")); }
+}
 
 export { existsSync, join };

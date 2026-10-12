@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { configuredCompilerAnalysis } from "../../lib/toolchain.js";
 import { selectRtlFunction } from "../../lib/compilerArtifacts.js";
 import { functionSymbol } from "../../lib/targetAdapter.js";
-import { classifyRtlEmission, hardRegisterName, parseRtlInstructions } from "../compiler-trace/rtl-parser.js";
+import { firstPseudoRegister, classifyRtlEmission, hardRegisterName, parseRtlInstructions } from "../compiler-trace/rtl-parser.js";
 import type { RtlInstruction } from "../compiler-trace/types.js";
 import type { MirProgram, ReplayCheck } from "./types.js";
 
@@ -162,7 +162,7 @@ export function replayWebCount(webCount: number, input: ReplayInput): ReplayChec
   const pseudos = new Set<number>();
   for (const instruction of rtl) {
     for (const reference of [...instruction.sets, ...instruction.uses]) {
-      if (reference.register >= 80) pseudos.add(reference.register);
+      if (reference.register >= firstPseudoRegister()) pseudos.add(reference.register);
     }
   }
   return {

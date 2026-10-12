@@ -29,16 +29,16 @@ function fixture(t: { after: (f: () => void | Promise<void>) => void }, names = 
   const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>; getArgumentCompletions?: (prefix: string) => Array<{ value: string }> | null }>();
   const tools = new Map<string, Parameters<ExtensionAPI["registerTool"]>[0]>();
   const handlers = new Map<string, Array<(event: any, ctx: any) => Promise<void> | void>>();
-  const messages: string[] = [], notices: string[] = [];
+  const messages: string[] = [], notices: string[] = [], messageOptions: any[] = [];
   const pi = { registerTool: (tool: Parameters<ExtensionAPI["registerTool"]>[0]) => tools.set(tool.name, tool), registerCommand: (name: string, command: any) => commands.set(name, command),
     on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-    sendUserMessage: (text: string) => messages.push(text), getActiveTools: () => [], setActiveTools: () => {} } as unknown as ExtensionAPI;
+    sendUserMessage: (text: string, options: any) => { messages.push(text); messageOptions.push(options); }, getActiveTools: () => [], setActiveTools: () => {} } as unknown as ExtensionAPI;
   extension(pi);
   const ctx = { cwd: root, signal: undefined, model: undefined, waitForIdle: async () => {}, isIdle: () => true,
     ui: { notify: (text: string) => notices.push(text) } } as unknown as ExtensionCommandContext;
   const event = async (name: string, detail: any = {}) => { for (const handler of handlers.get(name) ?? []) await handler(detail, ctx); };
   t.after(async () => { await event("session_shutdown", { reason: "quit" }); await getSessionBaseline(root); rmSync(root, { recursive: true, force: true }); });
-  return { root, ctx, messages, notices, event,
+  return { root, ctx, messages, notices, messageOptions, event,
     command: (name: string, args: string) => commands.get(name)!.handler(args, ctx),
     completions: (name: string, prefix = "") => commands.get(name)!.getArgumentCompletions!(prefix),
     tool: (name: string, params: any, signal = new AbortController().signal) => tools.get(name)!.execute("fixture", params, signal, undefined, ctx),
@@ -81,6 +81,7 @@ test("a cancelled preparation does not poison the next real command; a generatio
   await f.command("decompile", "f");
   assert.equal(f.messages.length, 1); assert.match(f.messages[0]!, /fixture generation failure/);
   assert.match(f.messages[0]!, /Preserve the current source/);
+  assert.equal(f.messageOptions[0].expandPromptTemplates, true);
 });
 
 test("interactive parking persists to the configured state; picker, status and completions agree after reload", async (t) => {

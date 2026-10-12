@@ -7,7 +7,7 @@ import type {
   QuantitySummary,
   RtlInstruction,
 } from "./types.js";
-import { FIRST_PSEUDO_REGISTER, hardRegisterName } from "./rtl-parser.js";
+import { firstPseudoRegister, hardRegisterName } from "./rtl-parser.js";
 
 interface HeaderSummary {
   uses: number;
@@ -117,7 +117,7 @@ function computeLifetimes(content: string, instructions: RtlInstruction[]): Map<
     const firstIndex = blockInstructions[0]?.order ?? 0;
     const lastIndex = blockInstructions[blockInstructions.length - 1]?.order ?? firstIndex;
     for (const register of liveAtStart.get(block) || []) {
-      if (register >= FIRST_PSEUDO_REGISTER) {
+      if (register >= firstPseudoRegister()) {
         active.set(register, { birthIndex: firstIndex, liveIn: true });
       }
     }
@@ -145,7 +145,7 @@ function computeLifetimes(content: string, instructions: RtlInstruction[]): Map<
 
     for (const instruction of blockInstructions) {
       for (const set of instruction.sets) {
-        if (set.register < FIRST_PSEUDO_REGISTER) continue;
+        if (set.register < firstPseudoRegister()) continue;
         if (active.has(set.register)) close(set.register, instruction.uid, instruction.order, false);
         active.set(set.register, {
           birthUid: instruction.uid,
@@ -154,7 +154,7 @@ function computeLifetimes(content: string, instructions: RtlInstruction[]): Map<
         });
       }
       for (const death of instruction.deaths) {
-        if (death.register >= FIRST_PSEUDO_REGISTER) {
+        if (death.register >= firstPseudoRegister()) {
           close(death.register, instruction.uid, instruction.order, false);
         }
       }
@@ -212,16 +212,16 @@ export function analyzeAllocation(
   const records = new Map<number, AllocationRecord>();
 
   for (const pseudo of pseudos) {
-    if (pseudo < FIRST_PSEUDO_REGISTER) continue;
+    if (pseudo < firstPseudoRegister()) continue;
     const hard = globalAssignments.get(pseudo) ?? localAssignments.get(pseudo);
     const conflicts: ConflictSummary[] = [];
     for (const register of conflictMap.get(pseudo) || []) {
       const conflict: ConflictSummary = {
         register,
-        kind: register >= FIRST_PSEUDO_REGISTER ? "pseudo" : "hard-register",
+        kind: register >= firstPseudoRegister() ? "pseudo" : "hard-register",
         confidence: "exact",
       };
-      if (register < FIRST_PSEUDO_REGISTER) conflict.registerName = hardRegisterName(register);
+      if (register < firstPseudoRegister()) conflict.registerName = hardRegisterName(register);
       conflicts.push(conflict);
     }
     const ranges = lifetimes.get(pseudo) || [];

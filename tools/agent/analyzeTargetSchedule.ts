@@ -13,6 +13,7 @@ import type { TargetScheduleAnalysis } from "./target-schedule/types.js";
 
 export interface AnalyzeTargetScheduleOptions {
   functionName: string;
+  requestedSource?: string;
   block?: number;
   maxInterventions: number;
   json?: boolean;
@@ -20,7 +21,7 @@ export interface AnalyzeTargetScheduleOptions {
 
 function usage(message?: string): never {
   if (message) console.error(`analyzeTargetSchedule: ${message}`);
-  console.error("Usage: npx tsx tools/agent/analyzeTargetSchedule.ts <function> [--block <number>] [--max-interventions <1..8>] [--json]");
+  console.error("Usage: npx tsx tools/agent/analyzeTargetSchedule.ts <function> [--src <file>] [--block <number>] [--max-interventions <1..8>] [--json]");
   process.exit(1);
 }
 
@@ -28,11 +29,15 @@ function parseCli(args: string[]): AnalyzeTargetScheduleOptions {
   if (args.length === 0) usage("missing function name");
   let functionName: string | undefined;
   let block: number | undefined;
+  let requestedSource: string | undefined;
   let maxInterventions = 3;
   let json = false;
   for (let index = 0; index < args.length; index++) {
     const argument = args[index]!;
-    if (argument === "--block") {
+    if (argument === "--src") {
+      requestedSource = args[++index];
+      if (!requestedSource || requestedSource.startsWith("--")) usage("--src requires a file");
+    } else if (argument === "--block") {
       const raw = args[++index];
       if (!raw || !/^\d+$/.test(raw)) usage("--block requires a non-negative integer");
       block = Number(raw);
@@ -48,6 +53,7 @@ function parseCli(args: string[]): AnalyzeTargetScheduleOptions {
   if (!functionName) usage("missing function name");
   const result: AnalyzeTargetScheduleOptions = { functionName, maxInterventions, json };
   if (block !== undefined) result.block = block;
+  if (requestedSource !== undefined) result.requestedSource = requestedSource;
   return result;
 }
 
@@ -57,7 +63,7 @@ export function analyzeTargetSchedule(options: AnalyzeTargetScheduleOptions): Ta
   /* Keep target-schedule traces isolated from interactive compilerTrace runs. */
   const trace = buildTraceReport(
     options.functionName,
-    undefined,
+    options.requestedSource,
     true,
     join(outputDirectory, "trace"),
   );

@@ -604,7 +604,7 @@ export class StubSourceError extends Error {
   constructor(readonly functionName: string, readonly objectPath: string) {
     super(
       `${functionName}: this translation unit hands the function to the assembler ` +
-        `(${objectPath} defines ${functionName}.NON_MATCHING). There is no candidate ` +
+        `(${objectPath} defines ${functionName.slice(functionName.includes("::") ? functionName.lastIndexOf("::") + 2 : 0)}.NON_MATCHING). There is no candidate ` +
         "program, so there is no residual to report. Write C for it, or score a source that defines it.",
     );
     this.name = "StubSourceError";

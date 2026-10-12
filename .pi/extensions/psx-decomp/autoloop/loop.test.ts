@@ -5,13 +5,29 @@ import { join } from "node:path";
 import { installedCommandFixture } from "../../../../tools/testing/commandFixture.js";
 import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { DEFAULT_LOOP_CONFIG } from "./config.ts";
-import { DOCUMENTATION_TOOLS, runFunction, runLoop, type LoopDeps } from "./loop.ts";
+import { DOCUMENTATION_TOOLS, runFunction, runLoop, turn, type LoopDeps } from "./loop.ts";
 import { createTurnGate } from "./turn-gate.ts";
 import { buildInputs, inputIdentity, type Completion } from "../tools/prepared-attempt.ts";
 import { ROOT } from "../../../../tools/testing/runtimeTestContext.js";
 import { configuredToolchainIdentity } from "../../../../tools/agent/decompToolchain.ts";
 import { runCommand } from "../../shared/process.ts";
 import { seedProjectFixture } from "../../../../tools/testing/projectFixture.js";
+
+test("every worker turn requests skill expansion, including matching and documentation", async () => {
+  const sent: Array<{ message: string; options: any }> = [];
+  const gate = createTurnGate();
+  const deps = {
+    flag: { aborted: false }, config: DEFAULT_LOOP_CONFIG,
+    sink: { gate },
+    pi: { sendUserMessage: (message: string, options: any) => { sent.push({ message, options }); gate.settled++; } },
+    ctx: { isIdle: () => true, waitForIdle: async () => {}, getContextUsage: () => undefined,
+      sessionManager: { getEntries: () => [] }, ui: { notify: () => {} } },
+  } as unknown as LoopDeps;
+  for (const message of ["/skill:psx-decompile-function Target: f", "/skill:psx-post-decompile-documentation Target: f", "embedded preparation skill"])
+    assert.equal(await turn(deps, message), true);
+  assert.equal(sent.length, 3);
+  assert.ok(sent.every(item => item.options.expandPromptTemplates === true));
+});
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const result = await runCommand("git", args, { cwd, timeoutMs: 30_000 });
@@ -73,9 +89,10 @@ packet.primary.sha256 = createHash('sha256').update(packet.primary.text).digest(
 writeFileSync('build/packet.json', JSON.stringify(packet));
 console.log(JSON.stringify({ path: 'build/packet.json' }));
 ` });
+  await seedRepository(root);
   const inputs = buildInputs(root);
   const state = { parked: {}, approvals: {}, completions: { [pending]: {
-    origin: "static", inputs, verifiedIdentity: inputIdentity(inputs), verification: "passed",
+    origin: "agent", inputs, verifiedIdentity: inputIdentity(inputs), verification: "passed",
     documentation: "pending", changedFiles: [],
   } } };
   const statePath = join(root, "run_output/state.json");
@@ -155,6 +172,7 @@ test("documentation resumes preserve the matching tier and record only the actua
   assert.equal(resumed.outcome.kind, "matched");
   if (resumed.outcome.kind === "matched") assert.equal(resumed.outcome.tier, "original-matching-model");
   assert.equal(resumed.state.completions![name]!.tier, "original-matching-model");
+  assert.equal(resumed.state.completions![name]!.documentation, "passed", resumed.state.completions![name]!.error);
   assert.equal(resumed.state.completions![name]!.documentationModel, "actual-docs-model");
   assert.equal(JSON.parse(readFileSync(join(root, "run_output/state.json"), "utf8")).completions[name].documentationModel, "actual-docs-model");
 
@@ -164,7 +182,9 @@ test("documentation resumes preserve the matching tier and record only the actua
   const staticCompletion = { ...completion, origin: "static" as const, tier: undefined };
   const staticResult = await runFunction(deps, { ...state, completions: { [name]: staticCompletion } }, name);
   assert.equal(staticResult.state.completions![name]!.tier, undefined);
-  assert.equal(staticResult.state.completions![name]!.documentationModel, "actual-docs-model");
+  assert.equal(staticResult.state.completions![name]!.documentationModel, undefined);
+  assert.equal(staticResult.state.completions![name]!.documentation, "skipped");
+  assert.equal(turns, 1, "static acceptance must not dispatch documentation");
 
   succeeded = false;
   const failed = await runFunction(deps, state, name);

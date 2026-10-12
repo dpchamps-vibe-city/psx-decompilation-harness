@@ -30,6 +30,7 @@
 import { decodeFunctionWords } from "./family-transfer/signature.js";
 import { requireFunctionLocation } from "../lib/symbolIndex.js";
 import { buildAtlas, coincidentShapes, loadAtlas, queryAtlas, queryAtlasRegions, type RecipeAtlas } from "./recipe-atlas/atlas.js";
+import { requireRecipeAtlasImageSupport, reportUnsupportedRecipeAtlasTarget } from "./recipe-atlas/target-support.js";
 import { allRecipes, recipeFamilies } from "./recipe-atlas/recipes.js";
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -60,6 +61,7 @@ function main(): void {
     return;
   }
 
+  requireRecipeAtlasImageSupport("psx_recipe_atlas");
   if (args.includes("--build")) {
     const atlas = buildAtlas(kind, {
       onProgress: (done, total, recipeId) => {
@@ -160,4 +162,6 @@ function report(atlas: RecipeAtlas, json: boolean): void {
   for (const failure of atlas.failures) console.log(`  FAILED ${failure.recipeId}: ${failure.error.split("\n")[0]}`);
 }
 
-if (process.argv[1]?.endsWith("recipeAtlas.ts")) main();
+if (process.argv[1]?.endsWith("recipeAtlas.ts")) {
+  try { main(); } catch (error) { reportUnsupportedRecipeAtlasTarget(error, process.argv.includes("--json")); }
+}

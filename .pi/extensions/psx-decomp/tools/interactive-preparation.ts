@@ -130,6 +130,6 @@ export function interactiveDocumentation(pi: ExtensionAPI, root: string): {
     const marker = `Documentation attempt: ${randomUUID()}`;
     pending = { name, completion, marker, started: false, succeeded: false };
     pi.sendUserMessage(groupingsMessage(name) + `\n${marker}. Verified identity: ${completion.verifiedIdentity}. Changed files: ${completion.changedFiles.join(", ")}.`,
-      ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+      ctx.isIdle() ? { expandPromptTemplates: true } : { deliverAs: "followUp", expandPromptTemplates: true });
   } };
 }

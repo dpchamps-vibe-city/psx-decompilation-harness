@@ -1,7 +1,7 @@
 /** Candidate-side dump parser. The observed final partition and the pre-reload
  * pseudo partition are separate layers: comparing pseudo counts directly with
  * machine register counts would report defects on byte-exact functions. */
-import { parseRtlInstructions, FIRST_PSEUDO_REGISTER, hardRegisterName } from "../agent/compiler-trace/rtl-parser.js";
+import { parseRtlInstructions, firstPseudoRegister, hardRegisterName } from "../agent/compiler-trace/rtl-parser.js";
 import { analyzeAllocation } from "../agent/compiler-trace/local-allocation.js";
 import { expressionIdentity, type ValueIdentity, type WebPartition } from "./webPartition.js";
 import { functionSymbol } from "../lib/targetAdapter.js";
@@ -116,7 +116,7 @@ export function extractCandidatePartition(observed: WebPartition, dumps: DumpInp
       // definition or pretend a whole multi-set pseudo has one identity.
       const prior = ds?.filter(d => d.order < before && (ds.length === 1 || (block !== undefined && d.block === block))).at(-1);
       if (prior) return identify(prior.source, new Set(path).add(r), prior.order, prior.block);
-      if (!ds && r < FIRST_PSEUDO_REGISTER && r >= 4 && r <= 7) return { key: `entry:${hardRegisterName(r)}`, kind: "entry", description: `entry $${hardRegisterName(r)}` };
+      if (!ds && r < firstPseudoRegister() && r >= 4 && r <= 7) return { key: `entry:${hardRegisterName(r)}`, kind: "entry", description: `entry $${hardRegisterName(r)}` };
       return null;
     }
     if (op === "symbol_ref") {
@@ -150,7 +150,7 @@ export function extractCandidatePartition(observed: WebPartition, dumps: DumpInp
     const address = identify(mem[1], new Set(), before);
     return address?.key.startsWith("const:") ? { address: Number(address.key.slice(6)), width, signed: signed ?? true } : null;
   };
-  const ids = new Set([...allocation.records.keys(), ...defs.keys()].filter(r => r >= FIRST_PSEUDO_REGISTER));
+  const ids = new Set([...allocation.records.keys(), ...defs.keys()].filter(r => r >= firstPseudoRegister()));
   const pseudoWebs: PseudoWeb[] = [];
   for (const pseudo of [...ids].sort((a,b) => a-b)) {
     const ds = defs.get(pseudo) ?? [], record = allocation.records.get(pseudo);

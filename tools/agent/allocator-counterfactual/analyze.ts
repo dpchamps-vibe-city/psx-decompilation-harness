@@ -5,7 +5,7 @@ import type {
   RtlInstruction,
   TraceConfidence,
 } from "../compiler-trace/types.js";
-import { FIRST_PSEUDO_REGISTER, hardRegisterName } from "../compiler-trace/rtl-parser.js";
+import { firstPseudoRegister, hardRegisterName } from "../compiler-trace/rtl-parser.js";
 import type { TargetScheduleAnalysis } from "../target-schedule/types.js";
 import {
   ALLOCATOR_COUNTERFACTUAL_SCHEMA_VERSION,
@@ -19,7 +19,9 @@ import {
   type RegisterRoleCounterfactual,
 } from "./types.js";
 
-const HARD_REGISTER_NUMBERS = new Map(Array.from({ length: FIRST_PSEUDO_REGISTER }, (_unused, register) => [hardRegisterName(register), register]));
+function hardRegisterNumbers(): Map<string, number> {
+  return new Map(Array.from({ length: firstPseudoRegister() }, (_unused, register) => [hardRegisterName(register), register]));
+}
 
 export interface AllocatorCounterfactualInputs {
   functionName: string;
@@ -101,7 +103,7 @@ export function reconstructHardRegisterLifetimes(
     const last = values[values.length - 1]!.order;
     const active = new Map<number, { birthIndex: number; birthUid?: number; liveIn: boolean }>();
     for (const register of starts.get(block) || []) {
-      if (register < FIRST_PSEUDO_REGISTER) active.set(register, { birthIndex: first, liveIn: true });
+      if (register < firstPseudoRegister()) active.set(register, { birthIndex: first, liveIn: true });
     }
     const close = (register: number, deathIndex: number, deathUid: number | undefined, liveOut: boolean): void => {
       const birth = active.get(register);
@@ -122,10 +124,10 @@ export function reconstructHardRegisterLifetimes(
     };
     for (const instruction of values) {
       for (const death of instruction.deaths) {
-        if (death.register < FIRST_PSEUDO_REGISTER) close(death.register, instruction.order, instruction.uid, false);
+        if (death.register < firstPseudoRegister()) close(death.register, instruction.order, instruction.uid, false);
       }
       for (const set of instruction.sets) {
-        if (set.register >= FIRST_PSEUDO_REGISTER) continue;
+        if (set.register >= firstPseudoRegister()) continue;
         close(set.register, instruction.order, instruction.uid, false);
         active.set(set.register, { birthIndex: instruction.order, birthUid: instruction.uid, liveIn: false });
       }
@@ -175,7 +177,7 @@ function referencesForRole(
         uids.add(candidate.uid);
         const references = operandIsDestination(candidate.mnemonic, operand) ? instruction.sets : instruction.uses;
         for (const reference of references) {
-          if (reference.register < FIRST_PSEUDO_REGISTER) continue;
+          if (reference.register < firstPseudoRegister()) continue;
           if (pseudosByNumber.get(reference.register)?.assignedRegister === role.candidateRegister) result.add(reference.register);
         }
         evidence.push(`Target/candidate operand ${operand} at indexes ${correspondence.targetIndex}/${correspondence.candidateIndex} maps through UID ${candidate.uid} as a ${operandIsDestination(candidate.mnemonic, operand) ? "SET" : "use"}.`);
@@ -194,7 +196,7 @@ function explicitHardBlockers(
   desiredRegister: string,
   hardRanges: HardRegisterLifetime[],
 ): ExplicitHardBlocker[] {
-  const desired = HARD_REGISTER_NUMBERS.get(desiredRegister);
+  const desired = hardRegisterNumbers().get(desiredRegister);
   if (desired === undefined) return [];
   const result: ExplicitHardBlocker[] = [];
   for (const roleRange of pseudo.lifetimes) {
@@ -302,7 +304,7 @@ function priorityInterventions(
       if (liveLength !== undefined) item.maximumLiveLength = liveLength;
     }
     const blockerPseudo = pseudosByNumber.get(blocker.pseudo);
-    if (blockerPseudo?.preferences.includes(HARD_REGISTER_NUMBERS.get(desiredRegister) ?? -1)) {
+    if (blockerPseudo?.preferences.includes(hardRegisterNumbers().get(desiredRegister) ?? -1)) {
       item.evidence.push(`Blocker pseudo ${blocker.pseudo} also has an explicit preference for $${desiredRegister}.`);
     }
     return item;
@@ -332,7 +334,7 @@ function analyzePseudo(
   allocnos: AllocnoPriority[],
   pseudosByNumber: Map<number, PseudoProvenance>,
 ): PseudoCounterfactual {
-  const desiredNumber = HARD_REGISTER_NUMBERS.get(desiredRegister);
+  const desiredNumber = hardRegisterNumbers().get(desiredRegister);
   const directHardConflict = desiredNumber !== undefined && pseudo.conflicts.some((conflict) =>
     conflict.kind === "hard-register" && conflict.register === desiredNumber
   );

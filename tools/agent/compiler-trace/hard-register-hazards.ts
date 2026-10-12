@@ -4,7 +4,7 @@ import type {
   RtlInstruction,
   SchedulerStage,
 } from "./types.js";
-import { FIRST_PSEUDO_REGISTER, hardRegisterName, registerAccess } from "./rtl-parser.js";
+import { firstPseudoRegister, hardRegisterName, registerAccess } from "./rtl-parser.js";
 
 function intersects(left: Set<number>, right: Set<number>): number[] {
   return [...left].filter((value) => right.has(value));
@@ -68,13 +68,13 @@ function hardHazards(predecessor: RtlInstruction, current: RtlInstruction): Arra
   const after = registerAccess(current);
   const result: Array<{ kind: string; register: number }> = [];
   for (const register of intersects(before.sets, after.uses)) {
-    if (register < FIRST_PSEUDO_REGISTER) result.push({ kind: "RAW", register });
+    if (register < firstPseudoRegister()) result.push({ kind: "RAW", register });
   }
   for (const register of intersects(before.uses, after.sets)) {
-    if (register < FIRST_PSEUDO_REGISTER) result.push({ kind: "WAR", register });
+    if (register < firstPseudoRegister()) result.push({ kind: "WAR", register });
   }
   for (const register of intersects(before.sets, after.sets)) {
-    if (register < FIRST_PSEUDO_REGISTER) result.push({ kind: "WAW", register });
+    if (register < firstPseudoRegister()) result.push({ kind: "WAW", register });
   }
   return result;
 }

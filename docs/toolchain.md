@@ -127,6 +127,21 @@ conclusions. Without a configured pass order, tracing uses common GCC ordering
 and labels cross-stage transitions inferred. Missing or unreadable inputs limit
 only their dependent analyses, not the whole diagnostic backend.
 
+Compiler trace, target-schedule and explain-diff accept `--src` (tool parameter
+`src`) for an explicit diagnostic candidate. An assembly-backed live stub is
+not a candidate C program. Named-function RTL and assembly selection occurs
+before analysis; target scheduling reads the selected function's production
+object words, not unexpanded cc1 macro lines. Register numbering is read from
+the configured pinned MIPS compiler source inside the active project context,
+not from a fixed pseudo threshold. Missing register evidence leaves native RTL
+readable while register-dependent interpretations are unavailable.
+
+Residual-objective JSON retains stub status, raw differences, interpretation
+confidence and ownership. A zero modeled key with differing words is explicitly
+an unexplained byte residual; work is selected from the best measured nonstub.
+Recipe-atlas/near-miss image flag columns currently refuse library targets
+explicitly, before any EXE lookup or catalogue compilation.
+
 Pre-delay-slot replay checks the configured snapshot or `.mach` when it exists.
 A missing `.mach` is not repaired by renaming `.jump2`: reversal still reports
 provisional source hypotheses, residuals and raw differences. Observed pseudo

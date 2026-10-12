@@ -40,7 +40,7 @@ import { addressedWebFacts, renderWebDiff, type PartitionDiff } from "../diagnos
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { readRelocatableObject, relocatableOutputIdentity } from "../lib/relocatableObject.js";
 
-interface Entry {
+export interface Entry {
   label: string;
   webDiff?: PartitionDiff;
   webUnavailable?: string;
@@ -50,6 +50,8 @@ interface Entry {
   objective: ResidualObjective;
   assemblerExpansion?: import("./decompToolchain.js").AssemblerExpansion;
   residualOwner?: string;
+  rawDifferences?: import("./pipeline-reversal/types.js").ReversalReport["rawDifferences"];
+  analysis?: import("./pipeline-reversal/types.js").ReversalReport["analysis"];
   matchedWords: number;
   totalWords: number;
   /**
@@ -159,6 +161,8 @@ function score(functionName: string, label: string, source?: string): Entry {
     objective: artifacts.report.objective,
     assemblerExpansion: artifacts.report.assemblerExpansion,
     residualOwner: artifacts.report.residualOwner,
+    rawDifferences: artifacts.report.rawDifferences,
+    analysis: artifacts.report.analysis,
     matchedWords: artifacts.report.matchedWords,
     totalWords: artifacts.report.totalWords,
     objectHash: createHash("sha256")
@@ -244,6 +248,36 @@ function differingWords(functionName: string, entry: Entry): string[] {
   }
 }
 
+export function bestMeasuredEntry(entries: Entry[], block?: number): Entry | undefined {
+  return entries.filter(entry => !entry.stub).sort((left, right) =>
+    compareObjectives(left.objective, right.objective, block === undefined ? {} : { block }))[0];
+}
+
+export function residualReportJson(functionName: string, entries: Entry[], block?: number, ledger: string[] = []) {
+  const best = bestMeasuredEntry(entries, block);
+  return {
+    function: functionName, block, best: best?.label ?? null,
+    entries: entries.map(entry => ({
+      label: entry.label, source: entry.source, stub: Boolean(entry.stub),
+      matchedWords: entry.matchedWords, totalWords: entry.totalWords, objective: entry.objective,
+      residualOwner: entry.residualOwner ?? (entry.stub ? "not applicable — no C candidate" : "not established"),
+      rawDifferences: entry.rawDifferences ?? null,
+      assemblerExpansion: entry.assemblerExpansion ?? null,
+      interpretation: {
+        status: entry.stub ? "stub" : entry.objective.exact ? "byte-exact" :
+          entry.objective.undetermined > 0 ? "undetermined" :
+          entry.objective.key.every(term => term === 0) ? "unexplained-byte-residual" : "modeled-residual",
+        ...(entry.analysis ?? {}),
+      },
+      webDiff: entry.webDiff, webUnavailable: entry.webUnavailable,
+      addressedWebFacts: entries[0]?.webDiff && entry.webDiff ? addressedWebFacts(entries[0].webDiff, entry.webDiff) : [],
+      provenance: { derivedFrom: entry.provenance.value.source, regenerated: entry.provenance.regenerated,
+        fingerprint: entry.provenance.provenance.fingerprint },
+    })),
+    work: best ? rankBlocks(best.objective) : [], ledger,
+  };
+}
+
 function render(functionName: string, entries: Entry[], block: number | undefined): string {
   const lines: string[] = [];
   const baseline = entries[0]!;
@@ -303,9 +337,8 @@ function render(functionName: string, entries: Entry[], block: number | undefine
     lines.push("  undet: words whose relocation could not be resolved — neither match nor difference.");
   }
 
-  const scored = entries.filter((entry) => !entry.stub);
-  const best = [...(scored.length > 0 ? scored : entries)].sort((left, right) =>
-    compareObjectives(left.objective, right.objective, block === undefined ? {} : { block }))[0]!;
+  const best = bestMeasuredEntry(entries, block);
+  if (!best) { lines.push("NEXT: no measured C candidate."); return lines.join("\n"); }
   lines.push("");
   if (best.objective.exact) {
     lines.push(`BEST: ${best.label} — byte exact.`);
@@ -445,27 +478,8 @@ if (isCLI) {
        from it — the majority of them, on any function the loop worked. */
     const recorded = recordAndWarn(options.functionName, entries);
     if (options.json) {
-      console.log(JSON.stringify({
-        function: options.functionName,
-        block: options.block,
-        entries: entries.map((entry) => ({
-          label: entry.label,
-          source: entry.source,
-          matchedWords: entry.matchedWords,
-          totalWords: entry.totalWords,
-          objective: entry.objective,
-          webDiff: entry.webDiff,
-          webUnavailable: entry.webUnavailable,
-          addressedWebFacts: entries[0]?.webDiff && entry.webDiff ? addressedWebFacts(entries[0].webDiff, entry.webDiff) : [],
-          provenance: {
-            derivedFrom: entry.provenance.value.source,
-            regenerated: entry.provenance.regenerated,
-            fingerprint: entry.provenance.provenance.fingerprint,
-          },
-        })),
-        work: rankBlocks(entries[0]!.objective),
-        ledger: recorded.split("\n").filter(Boolean),
-      }, null, 2));
+      console.log(JSON.stringify(residualReportJson(options.functionName, entries, options.block,
+        recorded.split("\n").filter(Boolean)), null, 2));
     } else {
       console.log(render(options.functionName, entries, options.block));
       console.log("");

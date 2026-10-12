@@ -6,7 +6,7 @@ import {
   reconstructRtlMetadata,
   semanticInstructionSignature,
 } from "../compiler-trace/rtl-notes.js";
-import { FIRST_PSEUDO_REGISTER, parseRtlInstructions, parseRtlNotes } from "../compiler-trace/rtl-parser.js";
+import { firstPseudoRegister, parseRtlInstructions, parseRtlNotes } from "../compiler-trace/rtl-parser.js";
 import { parseScheduler } from "../compiler-trace/scheduler-dag.js";
 import { sha256, stableJson } from "./artifacts.js";
 import {
@@ -138,7 +138,7 @@ function pseudosIn(instruction: NormalizedPassInstruction | undefined): number[]
   const result = new Set<number>();
   for (const item of [...instruction.sets, ...instruction.uses, ...instruction.deaths]) {
     const register = Number(item.match(/^[A-Z0-9]+:(\d+)/)?.[1]);
-    if (register >= FIRST_PSEUDO_REGISTER) result.add(register);
+    if (register >= firstPseudoRegister()) result.add(register);
   }
   return [...result].sort((left, right) => left - right);
 }
@@ -156,7 +156,7 @@ function setCounts(snapshot: PassSnapshot): Map<number, number> {
   for (const instruction of snapshot.instructions) {
     for (const item of instruction.sets) {
       const pseudo = Number(item.match(/^[A-Z0-9]+:(\d+)/)?.[1]);
-      if (pseudo >= FIRST_PSEUDO_REGISTER) result.set(pseudo, (result.get(pseudo) || 0) + 1);
+      if (pseudo >= firstPseudoRegister()) result.set(pseudo, (result.get(pseudo) || 0) + 1);
     }
   }
   return result;

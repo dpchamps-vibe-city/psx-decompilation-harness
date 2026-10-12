@@ -161,7 +161,7 @@ export interface ReplayCheck {
   stage: WaypointName;
   /** What was compared. */
   subject: string;
-  status: "verified" | "diverged" | "unavailable";
+  status: "verified" | "diverged" | "unavailable" | "observed";
   detail: string;
 }
 
@@ -214,6 +214,10 @@ export interface ReversalReport {
   verification?: { scope: "translation-unit"; verdict: string; differences: string[] };
   matchedWords: number;
   totalWords: number;
+  /** Confidence in the reconstructed pass interpretation, not byte identity. */
+  analysis?: { confidence: "reconstructed" | "provisional"; detail: string };
+  /** Raw oracle differences remain evidence even when pass ownership is provisional. */
+  rawDifferences?: { coordinate: import("../../lib/targetAdapter.js").FunctionTarget["coordinate"]; rows: import("../../lib/functionOracle.js").DiffRow[] };
   /** Waypoint ladder, newest first, with target/candidate agreement. */
   comparisons: WaypointComparison[];
   /** The oldest waypoint at which target and candidate still agree; the
@@ -221,6 +225,8 @@ export interface ReversalReport {
   firstDivergence?: { stage: WaypointName; detail: string };
   /** The pass that owns the residual, named in compiler terms. */
   residualOwner: string;
+  /** Exact production-MASPSX expansion evidence, never an alternate byte oracle. */
+  assemblerExpansion?: import("../decompToolchain.js").AssemblerExpansion;
   /** Round-trip validation of each backward step against the real dumps. */
   replay: ReplayCheck[];
   /** The enumerated search space that remains — sites that explain the

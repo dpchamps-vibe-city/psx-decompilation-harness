@@ -3,8 +3,9 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 
-// This instrumentation and its Dockerfile support the pinned GCC 2.95.2
-// profile. Compiler inputs belong in vendor/, not project research/scratch.
+// Apply to the configured source only. Exact anchors are checked locally;
+// a different pass implementation needs an instrumentation port, not a
+// substituted compiler. Compiler inputs belong in the pinned source bundle.
 const GCC_SOURCE = () => join(sourceDir(), "gcc");
 const LOCAL_REFERENCE = () => (join(GCC_SOURCE(), "local-alloc.c"));
 const SCHED_REFERENCE = () => (join(GCC_SOURCE(), "sched.c"));
@@ -441,6 +442,20 @@ export function instrumentScheduler(source = readFileSync(SCHED_REFERENCE(), "ut
   return result;
 }
 
-export function diagnosticDockerfile(): string {
-  return `FROM ubuntu:focal as build\nENV DEBIAN_FRONTEND=noninteractive\nRUN apt-get update\nRUN apt-get install -y build-essential gcc gcc-multilib wget\nENV VERSION=2.95.2\nENV GNUPATH=gnu\nWORKDIR /work\nRUN wget https://ftp.gnu.org/\${GNUPATH}/gcc/gcc-\${VERSION}.tar.gz\nRUN tar xzf gcc-\${VERSION}.tar.gz\nWORKDIR /work/gcc-\${VERSION}/\nCOPY tools/vendor/old-gcc/patches /work/patches\nRUN sed -i -- 's/include <varargs.h>/include <stdarg.h>/g' **/*.c\nRUN patch -u -p1 include/obstack.h -i ../patches/obstack-\${VERSION}.h.patch\nRUN patch -u -p1 gcc/config/mips/mips.h -i ../patches/mips.patch\nRUN patch -su -p1 < ../patches/psx-2.91.patch\nCOPY build/compilerOracle/context/local-alloc.c /work/gcc-\${VERSION}/gcc/local-alloc.c\nCOPY build/compilerOracle/context/sched.c /work/gcc-\${VERSION}/gcc/sched.c\nRUN for dir in libiberty gcc; do cd /work/gcc-\${VERSION}/\${dir}; ./configure --target=mips-sony-psx --prefix=/opt/cross --with-endian-little --with-gnu-as --disable-gprof --disable-gdb --disable-werror --host=i386-pc-linux --build=i386-pc-linux; done\nRUN make -C libiberty/ CFLAGS=\"-std=gnu89 -m32 -static\"\nRUN make -C gcc/ --jobs $(nproc) cc1 CFLAGS=\"-std=gnu89 -m32 -static\"\nRUN mkdir /build && cp ./gcc/cc1 /build/\nFROM scratch AS export\nCOPY --from=build /build/cc1 .\n`;
+export function diagnosticDockerfile(recipe: string, version: string, upstreamSha256: string): string {
+  if (!recipe.includes(`ENV VERSION=${version}\n`) || !recipe.includes("WORKDIR /work/gcc-${VERSION}") ||
+      !/^[a-f0-9]{64}$/.test(upstreamSha256))
+    throw new Error("Compiler-oracle recipe does not identify the configured source build; supply its faithful build recipe.");
+  const make = /^RUN make\b/m.exec(recipe);
+  const exportStage = recipe.indexOf("FROM scratch AS export");
+  if (!make || exportStage < make.index)
+    throw new Error("Compiler-oracle needs an instrumentation insertion point in the configured recipe; no alternate compiler recipe will be used.");
+  // Preserve the configured build, patches, flags and export. Only insert the
+  // checked diagnostic source before compilation, using either GNU tree layout.
+  const insertion = `# Diagnostic-only instrumentation of the configured compiler.\n` +
+    `COPY local-alloc.c sched.c /tmp/psx-compiler-oracle/\n` +
+    `RUN set -eu; echo '${upstreamSha256}  /work/gcc-\${VERSION}.tar.gz' | sha256sum --check --status; ` +
+    `root=/work/gcc-\${VERSION}; if [ -d "$root/gcc" ]; then root="$root/gcc"; fi; ` +
+    `cp /tmp/psx-compiler-oracle/local-alloc.c /tmp/psx-compiler-oracle/sched.c "$root/"\n`;
+  return recipe.slice(0, make.index) + insertion + recipe.slice(make.index);
 }

@@ -66,6 +66,8 @@ export function renderText(report: CompilerTraceReport, options: RenderOptions =
   const pseudos = options.pseudo === undefined
     ? report.pseudos
     : report.pseudos.filter((pseudo) => pseudo.pseudo === options.pseudo);
+  if (report.analysis?.passOrderConfidence === "inferred")
+    lines.push("\nPass order: inferred common GCC ordering; cross-stage transitions are provisional.");
   lines.push("\nPseudo provenance and allocation:");
   if (pseudos.length === 0) {
     lines.push(options.pseudo === undefined ? "  (no pseudos found)" : `  (pseudo ${options.pseudo} not found)`);

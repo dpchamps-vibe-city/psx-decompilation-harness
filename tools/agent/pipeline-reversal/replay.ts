@@ -14,6 +14,9 @@
 import { existsSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { configuredCompilerAnalysis } from "../../lib/toolchain.js";
+import { selectRtlFunction } from "../../lib/compilerArtifacts.js";
+import { functionSymbol } from "../../lib/targetAdapter.js";
 import { classifyRtlEmission, hardRegisterName, parseRtlInstructions } from "../compiler-trace/rtl-parser.js";
 import type { RtlInstruction } from "../compiler-trace/types.js";
 import type { MirProgram, ReplayCheck } from "./types.js";
@@ -48,16 +51,22 @@ export interface ReplayInput {
  * instruction while still failing on any reordering.
  */
 export function replayPreDbr(reconstructed: MirProgram, input: ReplayInput): ReplayCheck {
-  const path = join(input.dumpDirectory, `${input.stem}.mach`);
+  const support = configuredCompilerAnalysis();
+  const stage = support.profile?.preDbrStage ?? "mach";
+  const path = join(input.dumpDirectory, `${input.stem}.${stage}`);
   if (!existsSync(path)) {
     return {
       stage: "mach",
       subject: "pre-dbr instruction order",
       status: "unavailable",
-      detail: `no .mach dump at ${path}`,
+      detail: `no .${stage} pre-delay-slot dump at ${path}; this replay check is unavailable, not the other diagnostics`,
     };
   }
-  const parsed = parseRtlInstructions(readFileSync(path, "utf-8"), "mach");
+  const parsed = parseRtlInstructions(selectRtlFunction(readFileSync(path, "utf-8"), functionSymbol(input.stem.replace(/\.i$/, ""))), stage);
+  if (!parsed.length) return {
+    stage: "mach", subject: "pre-dbr instruction order", status: "unavailable",
+    detail: `no function RTL instructions could be parsed from .${stage}`,
+  };
   /* An `asm_operands` pattern emits whatever its template says, which is not
    * derivable from the RTL. One of them makes the whole count meaningless, so
    * the check reports that it cannot run rather than reporting a divergence it
@@ -97,7 +106,7 @@ export function replayPreDbr(reconstructed: MirProgram, input: ReplayInput): Rep
       stage: "mach",
       subject: "pre-dbr instruction order",
       status: "diverged",
-      detail: `${unexplained.length} of ${reconstructed.insns.length} reconstructed instructions have no place in the .mach chain; first: [${first.position}] ${first.insn.text}`,
+      detail: `${unexplained.length} of ${reconstructed.insns.length} reconstructed instructions have no place in the .${stage} chain; first: [${first.position}] ${first.insn.text}`,
     };
   }
   const note = deletedByDbr > 0 ? `, with ${deletedByDbr} RTL instruction(s) that dbr deleted after the dump` : "";
@@ -105,7 +114,7 @@ export function replayPreDbr(reconstructed: MirProgram, input: ReplayInput): Rep
     stage: "mach",
     subject: "pre-dbr instruction order",
     status: "verified",
-    detail: `all ${reconstructed.insns.length} reconstructed instructions appear in the .mach RTL chain in order${note}`,
+    detail: `all ${reconstructed.insns.length} reconstructed instructions appear in the .${stage} RTL chain in order${note}`,
   };
 }
 
@@ -145,7 +154,11 @@ export function replayWebCount(webCount: number, input: ReplayInput): ReplayChec
   if (!existsSync(path)) {
     return { stage: "lreg", subject: "pseudo population", status: "unavailable", detail: `no .lreg dump at ${path}` };
   }
-  const rtl = parseRtlInstructions(readFileSync(path, "utf-8"), "lreg");
+  const rtl = parseRtlInstructions(selectRtlFunction(readFileSync(path, "utf-8"), functionSymbol(input.stem.replace(/\.i$/, ""))), "lreg");
+  if (!rtl.length) return {
+    stage: "lreg", subject: "pseudo population", status: "unavailable",
+    detail: "no function RTL instructions could be parsed from .lreg",
+  };
   const pseudos = new Set<number>();
   for (const instruction of rtl) {
     for (const reference of [...instruction.sets, ...instruction.uses]) {
@@ -155,7 +168,7 @@ export function replayWebCount(webCount: number, input: ReplayInput): ReplayChec
   return {
     stage: "lreg",
     subject: "pseudo population",
-    status: "verified",
-    detail: `${webCount} webs recovered from the machine stream; ${pseudos.size} pseudos live at .lreg`,
+    status: "observed",
+    detail: `${webCount} webs recovered from the machine stream; ${pseudos.size} pseudos observed at .lreg. This count comparison is not an allocation-inverse round-trip verification.`,
   };
 }

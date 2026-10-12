@@ -37,6 +37,9 @@ import { projectRoot } from "../lib/runtimeContext.js";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { compileSource, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
+import { requireCompilerCapability } from "../lib/toolchain.js";
+import { selectRtlFunction } from "../lib/compilerArtifacts.js";
+import { functionSymbol } from "../lib/targetAdapter.js";
 
 /* sched.c's own constants (gcc/sched.c). LOW_PRIORITY_P is the compiler's
  * predicate for "this insn never got the birthing promotion", so classify with
@@ -326,13 +329,14 @@ function render(report: SchedulerTraceReport, blockFilter?: number): string {
 }
 
 function build(functionName: string, source: string, pass: string): SchedulerTraceReport {
+  requireCompilerCapability("gcc-rtl-dumps");
   const outputDir = join("build", "schedulerTrace", functionName);
   const artifacts = compileSource(source, outputDir, functionName, { dumps: true });
   const dumpPath = join(artifacts.outputDir, `${functionName}.i.${pass}`);
   if (!existsSync(dumpPath)) {
     throw new Error(`no ${pass} dump at ${dumpPath} — the pass may be disabled by the configured flags`);
   }
-  const dump = readFileSync(dumpPath, "utf8");
+  const dump = selectRtlFunction(readFileSync(dumpPath, "utf8"), functionSymbol(functionName));
   const blocks = parseBlocks(dump);
   const summaries = parseRtlSummaries(dump);
 

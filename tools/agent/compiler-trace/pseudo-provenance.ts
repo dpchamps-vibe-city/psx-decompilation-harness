@@ -177,6 +177,7 @@ function buildTransitions(
 export function buildPseudoProvenance(
   stageOrder: string[],
   instructionsByStage: Map<string, RtlInstruction[]>,
+  ordered = true,
 ): Map<number, PseudoProvenance> {
   const presenceByStage = new Map<string, Map<number, PseudoStagePresence>>();
   const pseudos = new Set<number>();
@@ -185,7 +186,7 @@ export function buildPseudoProvenance(
     presenceByStage.set(stage, presence);
     for (const pseudo of presence.keys()) pseudos.add(pseudo);
   }
-  const transitions = buildTransitions(stageOrder, instructionsByStage, presenceByStage);
+  const transitions = ordered ? buildTransitions(stageOrder, instructionsByStage, presenceByStage) : new Map<number, PseudoTransition[]>();
   const result = new Map<number, PseudoProvenance>();
 
   for (const pseudo of pseudos) {
@@ -211,8 +212,8 @@ export function buildPseudoProvenance(
       userVariable,
       pointer: false,
       attributes: [],
-      firstStage: stages[0]!.stage,
-      lastStage: stages[stages.length - 1]!.stage,
+      firstStage: ordered ? stages[0]!.stage : "not-established",
+      lastStage: ordered ? stages[stages.length - 1]!.stage : "not-established",
       stages,
       transitions: transitions.get(pseudo) || [],
       lifetimes: [],

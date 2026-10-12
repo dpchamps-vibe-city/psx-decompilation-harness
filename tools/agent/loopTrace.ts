@@ -2,7 +2,7 @@
 import { HARNESS_ROOT } from "../lib/runtimeContext.js";
 import { projectRoot } from "../lib/runtimeContext.js";
 /**
- * loopTrace.ts — observe GCC 2.95's loop optimizer.
+ * loopTrace.ts — observe the configured GCC's loop optimizer.
  *
  * This project can watch every pass that owns a residual except one.
  * `psx_reverse_pipeline` names the pass; `psx_allocator_counterfactual` states
@@ -32,6 +32,7 @@ import { projectRoot } from "../lib/runtimeContext.js";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { compileSource, normalizeFunctionName, preprocessOnly, resolveSource } from "./decompToolchain.js";
+import { requireCompilerCapability, supportsCompilerCapability } from "../lib/toolchain.js";
 import {
   ensureArtifact,
   projectPath,
@@ -147,6 +148,7 @@ export function loopTrace(
    */
   variant?: string,
 ): { result: LoopTraceResult; ensured: EnsuredArtifact<LoopTraceResult> } {
+  requireCompilerCapability("gcc-rtl-dumps");
   const source = resolveSource(functionName, sourceOverride);
   const directory = variant === undefined
     ? traceDirectory(functionName)
@@ -285,12 +287,14 @@ export function lineMapFor(functionName: string, sourceOverride?: string): LineM
  * is reported as absent, never as evidence.
  */
 export function cachedLoopTrace(functionName: string): { trace: LoopTrace; source: string } | undefined {
+  if (!supportsCompilerCapability("gcc-rtl-dumps")) return undefined;
   const artifactPath = join(traceDirectory(functionName), "trace.json");
   if (!existsSync(artifactPath)) return undefined;
   try {
     const stored = JSON.parse(readFileSync(artifactPath, "utf8")) as LoopTraceResult & { provenance?: Provenance };
     if (!stored?.trace?.passes || typeof stored.source !== "string") return undefined;
-    const recorded = stored.provenance?.files?.[stored.source];
+    if (stored.provenance?.toolchainHash !== toolchainHash()) return undefined;
+    const recorded = stored.provenance.files?.[stored.source];
     if (typeof recorded !== "string") return undefined;
     const absolute = isAbsolute(stored.source) ? stored.source : join(projectRoot(), stored.source);
     if (!existsSync(absolute) || sha256(readFileSync(absolute, "utf8")) !== recorded) return undefined;

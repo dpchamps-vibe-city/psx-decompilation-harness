@@ -19,11 +19,13 @@ preparation, compiler analysis, SDK integration and Pi verification share it.
   Spaces in paths remain one argv
   item. For wrappers, configure an executable wrapper file, not `node file.js`.
 - `compiler`: candidate family/version, optional pinned source directory, and
-  explicitly supported analysis capabilities. The production compile protocol
-  is still cpp → cc1 → maspsx → GAS. Configurable executables are not arbitrary
-  compiler-driver adapters. GCC-source/RTL analysis is not portable to another
-  compiler simply by changing a path. Dumps/emission/implicit-call analyses
-  refuse requests without their declared capability.
+  optional `analysis: { provider, profile }`. The configured provider supplies
+  diagnostic evidence; the harness does not dispatch on compiler versions.
+  Legacy `capabilities` remain compatible when no provider is selected, but
+  are ignored once `analysis` is configured. The production compile protocol
+  remains cpp → cc1 → maspsx → GAS; adding diagnostics does not replace it with
+  another compiler-driver protocol. Unknown providers report unavailable rather
+  than borrowing a GCC parser or pass model.
 - `includeDirs`: shared cpp/GAS include search directories, anchored to the root.
 - `flags`: argument arrays for cpp, cc1, GAS, linker, maspsx, m2c and spimdisasm.
   Definitions belong in cpp arguments; assembler semantics in maspsx arguments.
@@ -60,11 +62,98 @@ Target adapters expose the same source/assembly/flags/verification contract to
 matching tools and skills. Absent manifests or `linked-image` selection use the
 EXE/overlay layout. The one-EXE/paired-archive container model remains a convention; see the generalization checklist.
 
+## Project-owned compiler source
+
+Declare the source of the **configured production compiler**, not whichever GCC
+release the package happens to contain. `compiler.source` accepts an explicitly
+owned directory with `pin.json` and `src/gcc/…`. Both default queries and internal
+resolved-version calls retain this directory. The pin identifies the GCC version,
+upstream archive, recipe/patch inputs, content-hashed source tree and associated
+`cc1` SHA-256. Source queries reject tree drift (including cached queries), version
+contradictions and compiler-binary binding mismatches.
+
+For an existing compiler and an explicit project-owned old-gcc Docker recipe:
+
+```sh
+npm run prepare-compiler-source -- --recipe PATH/TO/Dockerfile --destination tools/vendor/gcc/VERSION-psx
+npm run compiler-source -- verify --json
+```
+
+With an installed package, invoke these scripts through its `scriptHost.ts` with
+`--project PROJECT`, as for other installed tasks. Provisioning rebuilds the same
+recipe with a post-build source export and refuses publication unless `cc1`
+reproduces the currently configured binary's hash. It never replaces that binary,
+changes flags or downloads target/SDK assets. Source-only publication retains
+licenses, the recipe and patches; binary exports stay under ignored `build/`.
+Normal supported compiler builds now retain `compiler-source/` and record its
+hash alongside compiler provenance. New scaffolds point at that project runtime
+bundle. Existing binary caches without source are preserved, not silently rebuilt.
+
+An explicit different `--version` is **cross-version reference only** and emits a
+compatibility warning. Missing source or an unsupported analysis capability is
+not permission to change the production compiler. Source availability alone does
+not implement an RTL/scheduler/oracle provider.
+
+## Configured diagnostic providers
+
+Select a protocol implementation and a project-owned runtime evidence profile:
+
+```json
+"analysis": {
+  "provider": "gcc-rtl",
+  "profile": { "origin": "runtime", "path": "analysis/compiler.json" }
+}
+```
+
+Run `npm run analysis-support -- bootstrap [--function KEY]`, then
+`npm run analysis-support -- status`. Installed-package consumers can proxy
+`tools/agent/analysisSupport.ts` through `scriptHost.ts --project PROJECT`, as
+with the compiler-source tools. The optional function selects its production
+owner flags and per-TU overrides. Bootstrap uses small diagnostic-only probes;
+actual function diagnostics still compile the ordered production TU.
+
+The installed `gcc-rtl` provider is a protocol/parser, not a release whitelist.
+Bootstrap retains inputs, argv, stdout/stderr, instruction counts and unchanged
+compiler-assembly evidence under `build/analysisSupport/`. Profiles bind to the
+configured compiler binary and optional source pin; mismatches disable support.
+Status does not compile, provision or replace a compiler. Bootstrap also requires
+the configured compiler to exist. No production flags, source or target inputs
+are changed.
+
+Native GCC RTL support enables the inherited allocation, scheduling and loop
+diagnostics; bootstrap's unset `passModel` and empty `stageOrder` are not an
+approval gate. Observed dump facts remain distinct from reconstructed/inferred
+conclusions. Without a configured pass order, tracing uses common GCC ordering
+and labels cross-stage transitions inferred. Missing or unreadable inputs limit
+only their dependent analyses, not the whole diagnostic backend.
+
+Pre-delay-slot replay checks the configured snapshot or `.mach` when it exists.
+A missing `.mach` is not repaired by renaming `.jump2`: reversal still reports
+provisional source hypotheses, residuals and raw differences. Observed pseudo
+counts are not round-trip verification. Zero normalized residual does not prove
+an assembler cause when bytes still differ. None of this changes the production
+whole-TU byte oracle.
+
+Instrumentation uses the configured source pin and its build recipe/context,
+with binary/tree binding and exact patch-anchor checks. There is no hardcoded
+fallback compiler. Missing anchors require an instrumentation port to that
+source; they do not disable native RTL, scheduler or loop diagnostics.
+
+On a machine-word residual, reversal/objective reports retain the compiler
+pseudo-instructions, the configured MASPSX expansion and an argv/hash receipt.
+MASPSX → GAS is the production protocol: assembling cc1's `.s` directly with GAS
+can choose another scratch register and is not an acceptance oracle. The original
+bytes alone do not prove that the original compiler emitted an explicit address
+pseudo. Diagnostic expansion capture does not change the normal TU build or
+whole-output verification gate.
+
 ## Commands
 
 ```sh
 npm ci
 npm run setup
+npm run analysis-support -- status           # configured diagnostic availability
+npm run analysis-support -- bootstrap       # explicit small protocol probes
 npm run profile -- --write                 # once target metadata is available
 npm run identify -- --json                 # evidence vs configured choices
 npm run disassemble                       # main EXE, two disassembly passes

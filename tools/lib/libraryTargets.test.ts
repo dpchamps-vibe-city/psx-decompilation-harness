@@ -89,6 +89,17 @@ test("member oracle retains relocation targets/addends, data/BSS/COMMON and reje
   assert.notEqual(relocatableOutputIdentity(parsed), relocatableOutputIdentity(readRelocatableObject(neighbor)), "ledger identity includes neighboring TU data");
 });
 
+test("independent relocation packaging can move, but HI16/LO16 pairing order stays exact", () => {
+  const original = objectFixture(), offset = readRelocatableObject(original).sections.get(".rel.text")!.offset;
+  const rows = [0, 1, 2].map(n => original.subarray(offset + n * 8, offset + (n + 1) * 8));
+  const independentFirst = Buffer.from(original);
+  Buffer.concat([rows[2]!, rows[0]!, rows[1]!]).copy(independentFirst, offset);
+  assert.equal(compareRelocatableObjects(original, independentFirst).verdict, "match");
+  const reorderedPair = Buffer.from(original);
+  Buffer.concat([rows[1]!, rows[0]!, rows[2]!]).copy(reorderedPair, offset);
+  assert.equal(compareRelocatableObjects(original, reorderedPair).verdict, "mismatch");
+});
+
 test("library mode is opt-in; duplicate members stay distinct, profiles and immutable header roles are explicit", () => {
   const root = mkdtempSync(join(tmpdir(), "psx-library-"));
   try {

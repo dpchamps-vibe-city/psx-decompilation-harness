@@ -3,6 +3,7 @@
  * Whole-member acceptance remains a separate, stricter scope. */
 import { readFileSync } from "node:fs";
 import { requireLibraryFunction } from "./libraryTargets.js";
+import { isDirectoryTu } from "./libraryTranslationUnit.js";
 import { objectFunctions, readRelocatableObject, compareRelocatableObjects, type RelocatableObject, type ObjectRelocation } from "./relocatableObject.js";
 import { compareWords, disassembleBytes, symboliseWord, type OracleResult, type RenderedWord } from "./functionOracle.js";
 const NAMES: Record<number, string> = { 0: "R_MIPS_NONE", 1: "R_MIPS_16", 2: "R_MIPS_32", 4: "R_MIPS_26", 5: "R_MIPS_HI16", 6: "R_MIPS_LO16", 7: "R_MIPS_GPREL16", 10: "R_MIPS_PC16" };
@@ -82,7 +83,7 @@ export function compareRelocatableFunction(name: string, objectPath: string): Or
   const targetWords = relocatableFunctionWords(member.object, fn.name), candidateWords = relocatableFunctionWords(object, fn.name, fn.offset, extent);
   const comparison = compareWords(targetWords, candidateWords);
   if (object.symbols.some(s => s.name === `${fn.name}.NON_MATCHING`)) comparison.verdict = "stub";
-  const memberStub = object.symbols.some(s => s.name.endsWith(".NON_MATCHING"));
+  const memberStub = !isDirectoryTu(member) && object.symbols.some(s => s.name.endsWith(".NON_MATCHING"));
   return { ...comparison, functionName: key, vram: fn.offset, objectPath, targetWords, candidateWords,
     verification: { scope: "translation-unit", verdict: memberStub ? "stub" : memberComparison.verdict, differences: memberComparison.differences },
     notes: [`Diagnostic coordinates are ${fn.section} offsets, not RAM; ${fn.inferredSize ? "original symbol extent is inferred" : "original function extent is recorded"}.`,

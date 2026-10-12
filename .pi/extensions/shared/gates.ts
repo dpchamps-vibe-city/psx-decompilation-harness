@@ -6,6 +6,7 @@ import { checkSourcePolicy } from "./source-policy.ts";
 import { Timings } from "../../../tools/lib/contentCache.js";
 import { loadLibraryProject } from "../../../tools/lib/project.js";
 import { libraryMembers, requireLibraryFunction } from "../../../tools/lib/libraryTargets.js";
+import { librarySourceFiles } from "../../../tools/lib/libraryTranslationUnit.js";
 
 /**
  * The oracle's summary lines.
@@ -207,7 +208,7 @@ export async function runGate(options: {
     : options.functionName ? [options.functionName] : [];
   const activeMembers = library ? [...new Set([
     ...(options.functionName ? [requireLibraryFunction(options.functionName, options.projectRoot).member.id] : []),
-    ...members.filter(m => options.changedFiles.includes(m.source)).map(m => m.id),
+    ...members.filter(m => librarySourceFiles(m, options.projectRoot).some(s => options.changedFiles.includes(s))).map(m => m.id),
   ])] : [];
   const policy = timings.measureSync("policy", () => checkSourcePolicy({
     projectRoot: options.projectRoot,

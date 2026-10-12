@@ -277,6 +277,10 @@ function runTaskInInvocation(task: string, args: string[]): void {
     script("build/prepareDependencies");
     script("build/prepareM2c");
     console.log("Pinned public sources prepared in the runtime cache; supply configured external compiler/binutils/Python capabilities when unavailable.");
+    if (loadToolchain().compiler.analysis) {
+      script("agent/analysisSupport", ["status"]);
+      console.log("Bootstrap configured diagnostics explicitly with analysis-support bootstrap [--function KEY]; this never provisions or replaces a compiler.");
+    }
     return;
   }
   if (task === "split-sdk-libs") { splitSdk(); return; }

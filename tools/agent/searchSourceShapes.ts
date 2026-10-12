@@ -278,7 +278,9 @@ async function main(): Promise<void> {
     const directory = join(runRoot, "variants", variant.id);
     const output = join(directory, "source.i");
     try {
-      await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", targetOwner.flags), variant.sourcePath, "-o", output], projectRoot(), abort.signal);
+      const { productionCompileInput } = await import("./decompToolchain.js");
+      const input = productionCompileInput(variant.sourcePath, directory, targetOwner.flags, options.functionName);
+      await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", targetOwner.flags), input, "-o", output], projectRoot(), abort.signal);
       preprocessed.set(variant.id, { variant, hash: preprocessedSemanticHash(output) });
     } catch (error) {
       const result = emptyResult(variant, projectPath(directory), target.length);

@@ -50,7 +50,7 @@
       "type": "object", "additionalProperties": false, "required": ["sourceDir"],
       "properties": {
         "sourceDir": { "$ref": "#/$defs/path", "pattern": "^src/", "default": "src/libraries" },
-        "sourceLayout": { "enum": ["grouped", "member-id"], "default": "grouped", "description": "Grouped paths mirror standalone input directories; archives use their stem and ordinal-prefixed member names. member-id retains the legacy layout." },
+        "sourceLayout": { "enum": ["grouped", "member-id", "tu-directory"], "default": "grouped", "description": "tu-directory groups one-function files and shared data under an ordered tu.json manifest, compiled as one original TU. grouped and member-id retain monolithic source files." },
         "inputRoot": { "$ref": "#/$defs/path", "description": "Directory stripped from input paths for grouped sources. Defaults to the common literal directory prefix of the configured input globs, not their matches." }
       }
     },

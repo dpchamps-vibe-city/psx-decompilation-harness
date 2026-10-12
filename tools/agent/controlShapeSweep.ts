@@ -109,7 +109,7 @@ export function controlShapeSweep(functionName: string, sourceOverride: string, 
     }
   }
   rows.sort((a, b) => a.objective && b.objective ? compareObjectives(a.objective, b.objective, block === undefined ? {} : { block }) || a.id.localeCompare(b.id) : Number(!a.objective) - Number(!b.objective) || a.id.localeCompare(b.id));
-  const inputStable = sha256(readFileSync(sourcePath, "utf8")) === sourceHash && sha256(readFileSync(preprocessOnly(sourcePath, contextDirectory, "input-check"), "utf8")) === contextHash;
+  const inputStable = sha256(readFileSync(sourcePath, "utf8")) === sourceHash && sha256(readFileSync(preprocessOnly(sourcePath, contextDirectory, "input-check", resolveFunctionTarget(functionName).flags), "utf8")) === contextHash;
   const report = { schemaVersion: 1, functionName, source: projectPath(sourcePath), sourceHash, contextHash, targetHash, implementation, frontend: C_FRONTEND_IDENTITY(),
     baseline: baseline.report.objective, directory: projectPath(directory), inputStable, block, site: shapes.site, coverage: { total: shapes.total, evaluated: rows.length, exhaustive: shapes.exhaustive, failed: rows.filter(r => r.error).length },
     exact: inputStable ? rows.filter(r => r.objective?.exact && !r.error).map(r => r.source) : [], variants: rows };

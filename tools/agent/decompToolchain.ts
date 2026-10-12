@@ -8,10 +8,21 @@ import type { Container } from "../lib/container.js";
 import { imageContainerFor, resolveFunctionTarget, requireTargetCapability, sourceFlagContext } from "../lib/targetAdapter.js";
 import { objectFunctions, readRelocatableObject } from "../lib/relocatableObject.js";
 
-import { configuredFlags, configuredTool, executablePath, loadToolchain, requireCompilerCapability, toolchainDigest, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredFlags, configuredTool, configuredCompilerAnalysis, executablePath, loadToolchain, requireCompilerCapability, toolchainDigest, toolchainExecutables } from "../lib/toolchain.js";
 export { configuredTool } from "../lib/toolchain.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
-import { requireLibraryFunction } from "../lib/libraryTargets.js";
+import { requireLibraryFunction, libraryMemberById } from "../lib/libraryTargets.js";
+import { extractSignaturesFromSource } from "./sdkTypes.js";
+import { isDirectoryTu, libraryFunctionSource, libraryCompileInput, libraryDependencyInput, librarySourceFiles } from "../lib/libraryTranslationUnit.js";
+export function productionCompileInput(source: string, output: string, context: FlagContext, stem = "", root = projectRoot()): string {
+  if (context.kind !== "library" || !context.id || source.endsWith(".h")) return source;
+  const member = libraryMemberById(context.id!, root);
+  const symbol = stem.match(/^lib_[a-f0-9]{16}_\d+::([A-Za-z_]\w*)(?:\.|$)/)?.[1];
+  if (isDirectoryTu(member) && !symbol && resolve(root, source) !== resolve(root, member.source) &&
+      !member.functions.some(fn => resolve(root, libraryFunctionSource(member, fn.name)) === resolve(root, source)) &&
+      !extractSignaturesFromSource(readFileSync(resolve(root, source), "utf8")).some(s => member.functions.some(fn => fn.name === s.name))) return source; // standalone header/SDK encoding probe, not a target candidate
+  return libraryCompileInput(member, source, output, root, symbol);
+}
 import { compilerAssemblyOrigin, objectFunctionView, projectCompilerArtifacts, resetCompilerArtifacts, writeObjectFunctionView } from "../lib/compilerArtifacts.js";
 import type { FlagContext } from "../lib/toolchain.js";
 import { readFlagOverrides } from "../lib/flagOverrides.js";
@@ -351,10 +362,50 @@ export function assembleCompilerOutput(
   return object;
 }
 
+export interface AssemblerExpansion {
+  compilerAssembly: string;
+  expandedAssembly: string;
+  receipt: string;
+  compilerExcerpt: string[];
+  expandedExcerpt: string[];
+}
+
+/** Replay ONLY the expansion half of the configured production assembler.
+ * Normal object compilation is unchanged. Omitting --run-assembler prints
+ * MASPSX's GAS input; directly invoking GAS on cc1's .s is not equivalent. */
+export function captureAssemblerExpansion(assembly: string, object: string, symbol: string): AssemblerExpansion {
+  const origin = compilerAssemblyOrigin(assembly);
+  const input = origin?.assembly ?? assembly;
+  const context = origin?.context ?? compilationContext(symbol);
+  const python = configuredTool("python"), maspsx = configuredTool("maspsx");
+  const flags = configuredMaspsxFlags(context), asFlags = configuredFlags("as", context);
+  if (!flags.includes("--run-assembler")) throw new Error("Production MASPSX does not declare --run-assembler; expansion trace is unavailable");
+  const productionArgs = [maspsx, ...flags, "--gnu-as-path", configuredTool("as"), "-o", object, ...asFlags, input];
+  const captureArgs = productionArgs.filter(arg => arg !== "--run-assembler");
+  const expanded = runToolCapturing(python, captureArgs);
+  const expandedAssembly = `${object}.expanded.s`, receipt = `${object}.assembler.json`;
+  writeFileSync(expandedAssembly, expanded.stdout);
+  const hash = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
+  const excerpt = (text: string): string[] => {
+    const lines = text.split("\n"), name = symbol.split("::").pop()!;
+    const start = lines.findIndex(line => line.trim() === `${name}:`);
+    if (start < 0) return [];
+    const end = lines.findIndex((line, index) => index > start && /^\s*\.end\s+/.test(line) && line.trim().endsWith(name));
+    return lines.slice(start, end < 0 ? start + 45 : end + 1).slice(0, 60);
+  };
+  const result = { compilerAssembly: input, expandedAssembly, receipt,
+    compilerExcerpt: excerpt(readFileSync(input, "utf8")), expandedExcerpt: excerpt(expanded.stdout) };
+  writeFileSync(receipt, JSON.stringify({ schemaVersion: 1, ...result, context,
+    compilerAssemblySha256: hash(input), expandedAssemblySha256: hash(expandedAssembly), objectSha256: hash(object),
+    production: { command: python, args: productionArgs }, capture: { command: python, args: captureArgs }, stderr: expanded.stderr,
+  }, null, 2) + "\n");
+  return result;
+}
+
 export function parseImplicitDeclarationWarnings(stderr: string): string[] {
   const callees = new Set<string>();
   for (const line of stderr.split("\n")) {
-    const warning = line.match(/warning: implicit declaration of function `(.+)'/);
+    const warning = line.match(/warning: implicit declaration of function [`'](.+)'/);
     if (warning) callees.add(warning[1]);
   }
   return [...callees];
@@ -373,7 +424,7 @@ export function detectImplicitDeclarations(preprocessed: string, stem: string): 
   const flags = [
     ...configuredFlags("cc1", context),
     ...(loadFlagOverrides().get(overrideKey(stem, context)) || []),
-    "-Wimplicit",
+    ...(configuredCompilerAnalysis().profile?.capture.implicitFlags ?? ["-Wimplicit"]),
   ];
   const result = spawnSync(configuredTool("cc1"), [...flags, preprocessed, "-o", "/dev/null"], {
     cwd: projectRoot(),
@@ -397,7 +448,10 @@ export function detectImplicitDeclarations(preprocessed: string, stem: string): 
  */
 export function sourceDependencyFiles(source: string, context?: FlagContext, root = projectRoot()): string[] {
   const absoluteSource = isAbsolute(source) ? source : join(root, source);
-  const output = runTool(configuredTool("cpp", root), [...configuredFlags("cpp", context ?? sourceFlagContext(absoluteSource, root), root), "-MM", "-MG", absoluteSource], root);
+  const flags = context ?? sourceFlagContext(absoluteSource, root);
+  const member = flags?.kind === "library" ? libraryMemberById(flags.id!, root) : undefined;
+  const input = member && isDirectoryTu(member) ? libraryDependencyInput(member, root) : absoluteSource;
+  const output = runTool(configuredTool("cpp", root), [...configuredFlags("cpp", flags, root), "-MM", "-MG", input], root);
   const files: string[] = [];
   const text = output.replace(/\\\n/g, " ");
   const colon = text.indexOf(":");
@@ -407,7 +461,7 @@ export function sourceDependencyFiles(source: string, context?: FlagContext, roo
     files.push(isAbsolute(token) ? token : join(root, token));
   }
   if (!files.includes(absoluteSource)) files.unshift(absoluteSource);
-  return files;
+  return member && isDirectoryTu(member) ? [...new Set([...librarySourceFiles(member, root).map(p => resolve(root, p)), ...files.filter(p => p !== input)])] : files;
 }
 
 /**
@@ -427,7 +481,9 @@ export function preprocessOnly(source: string, outputDir: string, stem: string, 
   const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(projectRoot(), outputDir);
   mkdirSync(absoluteOutput, { recursive: true });
   const preprocessed = join(absoluteOutput, `${stem}.i`);
-  runTool(configuredTool("cpp"), [...configuredFlags("cpp", context ?? sourceFlagContext(absoluteSource) ?? compilationContext(stem)), absoluteSource, "-o", preprocessed]);
+  const flags = context ?? sourceFlagContext(absoluteSource) ?? compilationContext(stem);
+  const input = productionCompileInput(absoluteSource, absoluteOutput, flags, stem);
+  runTool(configuredTool("cpp"), [...configuredFlags("cpp", flags), input, "-o", preprocessed]);
   return preprocessed;
 }
 
@@ -471,14 +527,14 @@ export function compileSource(
   const context = compilationContext(stem, options.containerKind, options.containerId);
   resetCompilerArtifacts(absoluteOutput, stem);
   if (options.preprocessedText !== undefined) writeFileSync(preprocessed, options.preprocessedText);
-  else runTool(configuredTool("cpp"), [...configuredFlags("cpp", context), absoluteSource, "-o", preprocessed]);
+  else runTool(configuredTool("cpp"), [...configuredFlags("cpp", context), productionCompileInput(absoluteSource, absoluteOutput, context, stem), "-o", preprocessed]);
 
   const overrides = options.useOverrides === false
     ? []
     : (loadFlagOverrides().get(overrideKey(stem, context)) || []);
   const cc1Flags = [...configuredFlags("cc1", context), ...overrides, ...(options.extraCc1Flags || [])];
-  if (options.dumps) { requireCompilerCapability("gcc-rtl-dumps"); cc1Flags.push("-da"); }
-  if (options.emissionAttribution) { requireCompilerCapability("gcc-emission-attribution"); cc1Flags.push("-dp"); }
+  if (options.dumps) { requireCompilerCapability("gcc-rtl-dumps"); cc1Flags.push(...(configuredCompilerAnalysis().profile?.capture.dumpFlags ?? ["-da"])); }
+  if (options.emissionAttribution) { requireCompilerCapability("gcc-emission-attribution"); cc1Flags.push(...(configuredCompilerAnalysis().profile?.capture.emissionFlags ?? ["-dp"])); }
 
   /* Running cc1 in the artifact directory keeps all -da files together. */
   const front = runToolCapturing(configuredTool("cc1"), [...cc1Flags, basename(preprocessed), "-o", basename(assembly)], absoluteOutput);
@@ -530,10 +586,10 @@ export async function compileSourceAsync(
   const object = join(absoluteOutput, `${stem}.c.o`);
   const context = compilationContext(stem, options.containerKind, options.containerId);
   resetCompilerArtifacts(absoluteOutput, stem);
-  await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", context), absoluteSource, "-o", preprocessed], projectRoot(), options.signal);
+  await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", context), productionCompileInput(absoluteSource, absoluteOutput, context, stem), "-o", preprocessed], projectRoot(), options.signal);
   const overrides = options.useOverrides === false ? [] : (loadFlagOverrides().get(overrideKey(stem, context)) || []);
   const cc1Flags = [...configuredFlags("cc1", context), ...overrides];
-  if (options.dumps) { requireCompilerCapability("gcc-rtl-dumps"); cc1Flags.push("-da"); }
+  if (options.dumps) { requireCompilerCapability("gcc-rtl-dumps"); cc1Flags.push(...(configuredCompilerAnalysis().profile?.capture.dumpFlags ?? ["-da"])); }
   const diagnostics = await runToolAsyncCapturingStderr(
     configuredTool("cc1"), [...cc1Flags, basename(preprocessed), "-o", basename(assembly)], absoluteOutput, options.signal);
   if (options.assemble) {

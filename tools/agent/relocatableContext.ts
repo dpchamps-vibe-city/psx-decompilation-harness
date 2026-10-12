@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { configuredFlags, configuredTool } from "../lib/toolchain.js";
 import { libraryMembers, requireLibraryFunction, withLibraryMetadata } from "../lib/libraryTargets.js";
+import { isDirectoryTu, libraryTuStatus } from "../lib/libraryTranslationUnit.js";
 import { libraryFunctionTarget, resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { measureLibraryFunction, libraryBuildIdentities } from "./libraryTarget.js";
 import { prepareM2c } from "../build/prepareM2c.js";
@@ -39,8 +40,9 @@ function exportRelocatableContextScoped(name: string, root: string, dryRun: bool
   const includesGeneratedContext = /#\s*\d+\s+"[^"]*build\/libraries\/context\//.test(preprocessed);
   if (!guard.parses || guard.includeAsm.length || includesGeneratedContext || findings.length || comparison.verdict !== "match")
     return skipped(`clean C and a fresh ${target.verification.scope} MATCH required (${comparison.verdict}; ${findings.map(f => f.message).join("; ")})`);
-  const pairs = extractSignaturesFromSource(preprocessed);
-  if (member.functions.some(fn => !pairs.some(p => p.name === fn.name))) return skipped("inventoried function definition missing");
+  const completed = isDirectoryTu(member) ? new Set(libraryTuStatus(member, root)!.filter(p => p.symbol && !p.stub).map(p => p.symbol)) : new Set(member.functions.map(fn => fn.name));
+  const pairs = extractSignaturesFromSource(preprocessed).filter(p => completed.has(p.name));
+  if ([...completed].filter(n => n !== "__library_member_data").some(name => !pairs.some(p => p.name === name))) return skipped("inventoried function definition missing");
   const index = emptyDeclarationIndex();
   indexDeclarations(index, preprocessed, artifacts.preprocessed, member.id, "source-local");
   // Take types from the compiler's actual scope, not prototypes that conflict
@@ -83,8 +85,8 @@ export function exportAllRelocatableContexts(root = projectRoot(), dryRun = fals
     const previous = new Map<string, string | null>();
     try {
       for (const member of members) {
-        const fn = member.functions[0];
-        if (!fn || !existsSync(join(root, member.source)) || analyzeCSource(readFileSync(join(root, member.source), "utf8")).includeAsm.length) { skipped.push(member.id); continue; }
+        const fn = isDirectoryTu(member) && existsSync(join(root, member.source)) ? member.functions.find(f => !libraryTuStatus(member, root)!.find(p => p.symbol === f.name)!.stub) : member.functions[0];
+        if (!fn || !existsSync(join(root, member.source)) || (!isDirectoryTu(member) && analyzeCSource(readFileSync(join(root, member.source), "utf8")).includeAsm.length)) { skipped.push(member.id); continue; }
         if (!dryRun) {
           const target = libraryFunctionTarget(member, fn, root);
           for (const file of [target.context.types, target.context.functions]) {

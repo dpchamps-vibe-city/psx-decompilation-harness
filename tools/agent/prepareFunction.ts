@@ -3,7 +3,7 @@ import { currentScriptArgs } from "../lib/installedScripts.js";
 import { projectRoot, inRuntimeContext, contextForProject } from "../lib/runtimeContext.js";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { configuredTool, configuredFlags, executablePath, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredCompilerAnalysis, configuredTool, configuredFlags, executablePath, toolchainExecutables } from "../lib/toolchain.js";
 import { prepareM2c } from "../build/prepareM2c.js";
 import { validateVariantSource } from "./variant-lab/manifest.js";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
@@ -32,6 +32,8 @@ import { projectParameters, layoutFields } from "./type-propagation/c-types.js";
 import { injectStaticChain, verifyChainInjection } from "./staticChainInjection.js";
 import type { ChainRow } from "../diagnostics/nestedFunctionScan.js";
 import { loadLibraryProject } from "../lib/project.js";
+import { requireLibraryFunction } from "../lib/libraryTargets.js";
+import { isDirectoryTu, inspectLibraryPart, libraryFunctionSource } from "../lib/libraryTranslationUnit.js";
 import { prepareLibraryFunction } from "./libraryTarget.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 
@@ -63,6 +65,7 @@ export function preparationTools(name: string, root: string, m2c = prepareM2c(ro
 export function packetIsFresh(packet: PreparationPacket, root = projectRoot()): boolean {
   try {
     if (packet.schemaVersion !== 1) return false;
+    if (!packet.discovery.compilerAnalysis || stableHash(packet.discovery.compilerAnalysis) !== stableHash(configuredCompilerAnalysis(root))) return false;
     if (packet.identity.compatibility && packet.identity.compatibility !== COMPONENT_CONTRACTS.preparation) return false;
     return Object.entries(packet.identity.memberships ?? {}).every(([path, members]) =>
       JSON.stringify(allFiles(resolve(root, path)).filter(p => packet.identity.targetKind !== "relocatable-library" || (!p.includes("__pycache__") && !p.endsWith(".pyc"))).map((p) => relative(root, p)).sort()) === JSON.stringify(members)) &&
@@ -216,7 +219,7 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
     context: { index: emptyDeclarationIndex(), projection: "", excluded: [], unknown: [], headers: ["common.h"] },
     generation: { status: "not-attempted" }, compilation: { status: "not-attempted", commands: [], diagnostics: "" },
     comparison: { status: "not-available" }, integration: { state: existing && !options.alternative ? "live" : "staged", changes: [destination], blockers: [], destinationHash: hashText(source) },
-    discovery: { unknowns: [], report: null, priorExperiments: [], preflight: [] }, finalization: { status: "not-attempted" },
+    discovery: { compilerAnalysis: configuredCompilerAnalysis(root), unknowns: [], report: null, priorExperiments: [], preflight: [] }, finalization: { status: "not-attempted" },
   };
   let sequence = 0;
   const command = (exe: string, args: string[], label: string, cwd = root, timeout = 120_000) =>
@@ -594,7 +597,7 @@ async function prepareFunctionInView(functionName: string, options: PreparationO
 /** Compare-and-swap integration. Only an unchanged, clean committed target stub
  * is eligible, and only the preparer's own source is changed. No header publication. */
 export function stagePrepared(packet: PreparationPacket, root = projectRoot()): { staged: boolean; reason?: string } {
-  if (!packet.primary || packet.primary.origin !== "m2c" || packet.compilation.status !== "succeeded" || packet.integration.blockers.length)
+  if (!packet.primary || packet.primary.origin === "existing-attempt" || packet.compilation.status !== "succeeded" || packet.integration.blockers.length)
     return { staged: false, reason: "candidate is not eligible for safe staging" };
   if (packet.discovery.staticChain && !["verified", "not-needed"].includes(packet.discovery.staticChain.status))
     return { staged: false, reason: "static-chain claims or scaffold are not verified" };
@@ -604,6 +607,17 @@ export function stagePrepared(packet: PreparationPacket, root = projectRoot()): 
   if (dirty.trim()) return { staged: false, reason: "destination contains existing uncommitted work" };
   const current = readFileSync(path, "utf8");
   if (packet.identity.targetKind === "relocatable-library") {
+    const { member } = requireLibraryFunction(packet.identity.functionName, root);
+    if (isDirectoryTu(member)) {
+      if (packet.identity.destination !== libraryFunctionSource(member, packet.identity.symbol) ||
+          !inspectLibraryPart(current, { path: packet.identity.destination, symbol: packet.identity.symbol }).stub ||
+          inspectLibraryPart(packet.primary.text, { path: packet.identity.destination, symbol: packet.identity.symbol }).stub ||
+          hashText(current) !== packet.integration.destinationHash)
+        return { staged: false, reason: "destination is not an unchanged exclusive function stub" };
+      writeFileSync(path, packet.primary.text);
+      packet.integration.state = "live"; packet.integration.stagedHash = packet.primary.sha256;
+      return { staged: true };
+    }
     // Only an unchanged TU consisting exclusively of reference INCLUDE_ASM
     // stubs is eligible. Never replace neighboring C bodies or owned globals.
     const guard = analyzeCSource(current);

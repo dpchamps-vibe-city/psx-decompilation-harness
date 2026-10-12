@@ -26,8 +26,7 @@
       "additionalProperties": false,
       "required": [
         "family",
-        "version",
-        "capabilities"
+        "version"
       ],
       "properties": {
         "family": {
@@ -40,7 +39,17 @@
           "$ref": "#/$defs/ownedPath"
         },
         "capabilities": {
-          "$ref": "#/$defs/args"
+          "$ref": "#/$defs/args",
+          "description": "Legacy declarations, used only without an analysis provider."
+        },
+        "analysis": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "profile"],
+          "properties": {
+            "provider": { "$ref": "#/$defs/string" },
+            "profile": { "$ref": "#/$defs/ownedPath" }
+          }
         }
       }
     },

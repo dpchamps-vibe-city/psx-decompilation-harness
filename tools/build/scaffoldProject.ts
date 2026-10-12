@@ -119,6 +119,7 @@ export function supplyInstructions(mode: BootstrapMode): string[] {
     "lib/ is project-owned and trackable: it may contain authoritative library reconstruction targets or SDK extraction/conversion results. Compiled candidates and disposable traces belong in build/, never over authoritative inputs.",
     "Original PSY-Q LIB/LNK inputs require a supplied converter (toolchain.json.tools.psyq2elf). Select supported ELF/ar or converted member targets explicitly in project.json; converted-object identity is not original-LNK identity.",
     "The installed package supplies its own JavaScript dependencies. Configure external cross-binutils, Python, splat/spimdisasm and any custom compiler executable; missing supported pinned tooling is prepared in build/dependencies/, not in tools/.",
+    "Diagnostic support is separate from compilation. Legacy default capabilities remain compatible; when configuring another toolchain, select compiler.analysis.provider/profile and explicitly run tools/agent/analysisSupport.ts bootstrap through the installed scriptHost. No compiler-version branch, automatic pass-model grant or replacement production compiler is implied; see docs/toolchain.md.",
     "Bootstrap prepares pinned public support sources automatically. Network/Git are needed only for absent support assets; original inputs and lib/ contents are never deleted. build/ contains disposable outputs, except append-only experiment history, which cleanup preserves.",
     "Run /reload in Pi, then /skill:psx-identify-project after supplying inputs. Configure target paths/layout, SDK and compiler choices from evidence before splitting or matching. No EXE addresses, section boundaries, SDK identity or byte verification were inferred by bootstrap.",
     "For an EXE, identification must create configs/splat/exe.yaml using the measured header. For a library, review project.json input/header roles before psx_split_project. Verification regenerates the project profile only after successful byte identity.",
@@ -178,7 +179,7 @@ export function planScaffold(root: string, mode: BootstrapMode = "exe", packageR
         target: { kind: "relocatable-library", format: "elf-ar", archives: ["library-input/**/*.a"], standaloneObjects: [] },
         headers: { reference: ["library-input/psyq/INCLUDE"], owned: ["include/library"], context: ["common.h"] },
         selection: { scope: "all-code-members" }, verification: { mode: "relocatable-object" },
-        output: { sourceDir: "src/libraries" }, memberProfiles: {} }), true);
+        output: { sourceDir: "src/libraries", sourceLayout: "tu-directory" }, memberProfiles: {} }), true);
   add("README.psx.md", `# PSX project setup (${mode})\n\nImplementation is supplied by the Pi-installed PSX package, not copied into this repository. No target identification or verification is claimed.\n\n${plan.requirements.map((s, i) => `${i + 1}. ${s}`).join("\n\n")}\n\nBootstrap never clears inputs or overwrites existing project configuration.\n`, true);
 
   const ignoreBefore = currentBytes(root, ".gitignore"), ignore = ignoreBefore?.toString("utf8") ?? "";

@@ -33,5 +33,5 @@ export function libraryMemberSource(project: LibraryProject, input: { path: stri
   // Archive ordinals distinguish duplicate names without consulting any other
   // member. Explicit standalone inputs already carry their full relative path.
   const suffix = input.archive ? `${stem}/${member.ordinal}-${posix.basename(member.name).replace(/\.[^.]*$/, "")}.c` : `${stem}.c`;
-  return `${project.output.sourceDir}/${suffix}`;
+  return `${project.output.sourceDir}/${project.output.sourceLayout === "tu-directory" ? suffix.replace(/\.c$/, "/tu.json") : suffix}`;
 }

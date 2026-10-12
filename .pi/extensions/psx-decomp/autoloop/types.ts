@@ -63,7 +63,7 @@ export interface LoopConfig {
   clearContextBetween: boolean;
   /** Capture matching-tier exit interviews; prep always has its own handoff. */
   handoffSummary: boolean;
-  /** Give the agent one notes-only turn to record grouping evidence before committing. */
+  /** Give agent-authored matches a notes-only turn; static matches skip model documentation. */
   updateFileGroupings: boolean;
   /** Commit each byte-exact, finalized function before moving to the next one. */
   commitOnMatch: boolean;
@@ -132,7 +132,7 @@ export interface LoopState {
 }
 
 export type FunctionOutcome =
-  | { kind: "matched"; functionName: string; tier: string; changedFiles: string[]; documentation?: "pending" | "passed"; commit?: string }
+  | { kind: "matched"; functionName: string; tier: string; changedFiles: string[]; documentation?: Completion["documentation"]; commit?: string }
   | { kind: "parked"; functionName: string; record: ParkRecord; commit?: string }
   | { kind: "aborted"; functionName: string }
   | { kind: "environment-broken"; functionName: string; detail: string };

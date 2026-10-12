@@ -6,6 +6,7 @@ import {
   type CompileArtifacts,
   type DisassembledInstruction,
 } from "../decompToolchain.js";
+import { selectAssemblyFunction } from "../../lib/compilerArtifacts.js";
 import { preserveSource, writeStableJson } from "./artifacts.js";
 import { loadPassSnapshots } from "./pass-diff.js";
 import type {
@@ -60,9 +61,10 @@ function normalizeAlias(mnemonic: string, operands: string[]): { mnemonic: strin
   return { mnemonic, operands };
 }
 
-export function parseCc1Assembly(path: string): NormalizedInstruction[] {
+export function parseCc1Assembly(path: string, symbol?: string): NormalizedInstruction[] {
   const instructions: NormalizedInstruction[] = [];
-  for (const rawLine of readFileSync(path, "utf8").split("\n")) {
+  const text = readFileSync(path, "utf8");
+  for (const rawLine of (symbol ? selectAssemblyFunction(text, symbol) : text).split("\n")) {
     const line = rawLine.replace(/#.*/, "").trim();
     if (!line || line.startsWith(".") || line.endsWith(":")) continue;
     const match = line.match(/^([a-z][a-z0-9.]*)\s*(.*?)\s*$/i);

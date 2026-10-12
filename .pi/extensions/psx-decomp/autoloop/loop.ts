@@ -149,7 +149,7 @@ export async function turn(deps: LoopDeps, message: string): Promise<boolean> {
   try {
     while (!deps.flag.aborted) {
       const before = deps.sink.gate.settled;
-      deps.pi.sendUserMessage(nextMessage);
+      deps.pi.sendUserMessage(nextMessage, { expandPromptTemplates: true });
       const outcome = await waitForTurn({
         gate: deps.sink.gate,
         before,
@@ -549,7 +549,9 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
   let tiersRan = 0;
 
   const completed = current.completions?.[functionName];
-  if (completed && sameInputs(completed.inputs, buildInputs(deps.projectRoot))) {
+  /* A prep-led explicit selection obeys the same role boundary as the picker:
+     old documentation does not bypass preparation. */
+  if (deps.config.ladder[0]?.role !== "prep" && completed && sameInputs(completed.inputs, buildInputs(deps.projectRoot))) {
     current = await documentMatch(deps, current, functionName, completed);
     if (current.completions?.[functionName]?.verification === "invalidated") return { state: current,
       outcome: { kind: "environment-broken", functionName, detail: "Documentation changed verified build inputs; rerun finalization." } };

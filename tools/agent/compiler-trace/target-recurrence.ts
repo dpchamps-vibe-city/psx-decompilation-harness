@@ -4,7 +4,7 @@ import type {
   RegisterRecurrenceHint,
   RtlInstruction,
 } from "./types.js";
-import { hardRegisterName } from "./rtl-parser.js";
+import { firstPseudoRegister, hardRegisterName } from "./rtl-parser.js";
 
 const DESTINATION_FIRST = new Set([
   "add", "addu", "addiu", "sub", "subu", "and", "andi", "or", "ori",
@@ -137,7 +137,7 @@ export function findTargetRegisterRecurrences(
     const candidateRegister = destinationRegister(candidate[candidateIndex]!);
     const uid = candidateToUid.get(candidateIndex);
     if (!targetRegister || !candidateRegister || uid === undefined) continue;
-    const pseudo = preAllocationByUid.get(uid)?.sets.find((reference) => reference.register >= 80)?.register;
+    const pseudo = preAllocationByUid.get(uid)?.sets.find((reference) => reference.register >= firstPseudoRegister())?.register;
     if (pseudo === undefined) continue;
     definitions.push({
       targetIndex,

@@ -22,6 +22,8 @@ import {
   provenanceAudit,
   summarizeWeb,
 } from "./webAnalysis.js";
+import { StubSourceError, objectHandsSymbolToAssembler } from "../lib/functionOracle.js";
+import { functionSymbol } from "../lib/targetAdapter.js";
 import { recognizeIdioms, sdkReconstructionGap } from "./sdkIdioms.js";
 
 export type DiffCategory =
@@ -1025,6 +1027,8 @@ if (isCLI) {
         assemble: true,
         useOverrides: !args.includes("--no-overrides"),
       });
+      if (objectHandsSymbolToAssembler(compiled.object!, functionSymbol(funcName)))
+        throw new StubSourceError(funcName, compiled.object!);
       const targetObject = assembleTarget(funcName, outputDirectory);
       const targetInstructions = disassembleFunctionObject(targetObject, funcName);
       const report = analyzeInstructionSets(

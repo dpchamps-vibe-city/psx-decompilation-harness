@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "../../testing/runtimeTestContext.js";
-import { loadIndex, scanMachineDescription, collectDumpPasses, verifyTree, resolveVersion, vendoredVersions } from "./index.js";
+import { loadIndex, scanMachineDescription, collectDumpPasses, collectSourceDefinitions, COMPILER_SOURCE_INDEX_FORMAT, verifyTree, resolveVersion, vendoredVersions } from "./index.js";
 import { configuredGccVersion } from "../decompToolchain.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -72,6 +72,26 @@ test("dump suffixes map to the passes that ran before the close", () => {
     ".lreg's own block runs no pass");
   assert.ok(lreg!.stateEntering.some((call) => call.name === "local_alloc"),
     "local_alloc precedes the .lreg open");
+});
+
+test("K&R pointer-return definitions retain exact bodies and do not swallow prototypes or neighbors", () => {
+  const source = [
+    "char *mips_move_1word();", "/* prefix */", "char *",
+    "mips_move_1word (operands, insn, unsignedp)", "     rtx operands[];",
+    "     rtx insn;", "     int unsignedp;", "{",
+    '  const char *brace = "}";', "  if (unsignedp) { return operands[0]; }",
+    "  return insn;", "}", "int neighbor(void) { return 7; }",
+  ].join("\n");
+  const definitions = collectSourceDefinitions(source, "mips.c");
+  const matching = definitions.filter(d => d.name === "mips_move_1word");
+  assert.deepEqual(matching.map(d => d.kind).sort(), ["function", "prototype"]);
+  const definition = matching.find(d => d.kind === "function")!;
+  assert.equal(definition.line, 3); assert.equal(definition.endLine, 12);
+  assert.equal(source.slice(definition.start, definition.end), source.split("\n").slice(2, 12).join("\n"));
+  assert.ok(definitions.some(d => d.name === "neighbor" && d.kind === "function"));
+  assert.ok(!definitions.some(d => ["insn", "operands", "unsignedp"].includes(d.name)));
+  const prototype = collectSourceDefinitions("char *only_proto(rtx);\nint unrelated;\n", "p.c");
+  assert.equal(prototype.find(d => d.name === "only_proto")?.kind, "prototype");
 });
 
 test("machine-description scanning balances parens across strings and comments", () => {
@@ -156,6 +176,11 @@ test("project-owned compiler source survives resolved-version calls and rejects 
     const definition = findDefinitions(index, "project_only_marker")[0]!;
     assert.ok(definitionText(index, definition).includes("return 7"));
     assert.equal(loadIndex("2.7.2").treeSha256, index.treeSha256);
+    const cache = join(root, "build/compilerSource", `index-2.7.2-${index.treeSha256}.json`);
+    writeFileSync(cache, JSON.stringify({ ...index, formatVersion: 1, definitions: [] }));
+    const refreshed = loadIndex();
+    assert.equal(refreshed.formatVersion, COMPILER_SOURCE_INDEX_FORMAT);
+    assert.ok(findDefinitions(refreshed, "project_only_marker").length);
     writeFileSync(join(root, "compiler-input/src/gcc/marker.c"), "int changed(void) { return 8; }");
     assert.throws(() => loadIndex(), /source drift/);
     writeFileSync(join(root, "compiler-input/src/gcc/marker.c"), source);

@@ -30,7 +30,7 @@ export function attachCorrespondenceUids(
     const uid = candidate[item.candidateIndex]?.uid;
     if (uid === undefined) continue;
     item.candidateUid = uid;
-    item.evidence.push("Candidate UID follows the final .mach-to-assembly emission-order link.");
+    item.evidence.push("Candidate UID follows the selected final RTL-to-machine emission link; unknown macro expansions remain unlinked.");
   }
 }
 

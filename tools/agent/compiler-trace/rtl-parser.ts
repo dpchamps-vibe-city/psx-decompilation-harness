@@ -7,7 +7,8 @@ import type {
   RtlNoteKind,
 } from "./types.js";
 
-export const FIRST_PSEUDO_REGISTER = 80;
+import { firstPseudoRegister } from "./register-model.js";
+export { firstPseudoRegister };
 
 const HARD_REGISTER_NAMES = [
   "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
@@ -322,7 +323,7 @@ export function classifyRtlEmission(instruction: RtlInstruction): RtlEmission {
 export function pseudoRegisters(instruction: RtlInstruction): Set<number> {
   const result = new Set<number>();
   for (const reference of [...instruction.sets, ...instruction.uses, ...instruction.deaths]) {
-    if (reference.register >= FIRST_PSEUDO_REGISTER) result.add(reference.register);
+    if (reference.register >= firstPseudoRegister()) result.add(reference.register);
   }
   return result;
 }

@@ -318,10 +318,13 @@ export interface CompilerTraceReport {
   schemaVersion: 2;
   analysis?: { provider: string; passOrderKnown: boolean; passModelsAvailable: boolean;
     passOrderConfidence?: "configured" | "inferred" };
+  registerModel?: { status: "observed" | "unavailable"; firstPseudoRegister?: number };
   function: string;
   source: string;
   outputDirectory: string;
   assembly: string;
+  /** Complete production TU object; readers select its named function view. */
+  candidateObject?: string;
   reportArtifact: string;
   flags: string[];
   stages: StageSummary[];

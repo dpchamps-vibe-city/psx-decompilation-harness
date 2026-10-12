@@ -34,7 +34,7 @@ import { buildPseudoProvenance } from "./compiler-trace/pseudo-provenance.js";
 import { reconstructRtlMetadata } from "./compiler-trace/rtl-notes.js";
 import { renderText } from "./compiler-trace/render-text.js";
 import {
-  FIRST_PSEUDO_REGISTER,
+  firstPseudoRegister,
   parseRegisterReferences,
   parseRtlInstructions,
   parseRtlNotes,
@@ -66,7 +66,7 @@ function pseudoOccurrences(content: string): { count: number; pseudos: Set<numbe
   const pseudos = new Set<number>();
   let count = 0;
   for (const reference of parseRegisterReferences(content)) {
-    if (reference.register < FIRST_PSEUDO_REGISTER) continue;
+    if (reference.register < firstPseudoRegister()) continue;
     pseudos.add(reference.register);
     count++;
   }
@@ -99,7 +99,8 @@ function summarizeStages(
   return files.map((file) => {
     const path = join(directory, file);
     const content = contents.get(stageSuffix(file)) ?? "";
-    const occurrences = pseudoOccurrences(content);
+    let occurrences = { count: 0, pseudos: new Set<number>() };
+    try { occurrences = pseudoOccurrences(content); } catch { /* Report register-model unavailability separately. */ }
     const stageMetadata = metadata.get(stageSuffix(file));
     return {
       suffix: stageSuffix(file),
@@ -183,6 +184,8 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
   const files = dumpFiles(options.dumpDirectory, funcName);
   if (files.length === 0) throw new Error(`no preserved GCC dump files found in ${relative(projectRoot(), options.dumpDirectory)}`);
   const parsed = parseAllStages(options.dumpDirectory, funcName, files);
+  if (!parsed.instructions.size)
+    throw new Error(`No selected C/RTL for ${functionSymbol(funcName)}; pass --src with a candidate defining this function. ${parsed.caveats.join(" ")}`);
   const support = configuredCompilerAnalysis();
   const configuredOrder = support.profile?.stageOrder;
   const passOrderKnown = !!configuredOrder?.length;
@@ -190,8 +193,15 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
   const globalStage = order.indexOf("greg");
   const provenanceStages = (globalStage >= 0 ? order.slice(0, globalStage + 1) : order)
     .filter(stage => parsed.instructions.has(stage));
-  const pseudoMap = buildPseudoProvenance(provenanceStages, parsed.instructions);
   const caveats: string[] = [compilerAnalysisSummary(support), ...parsed.caveats];
+  let boundary: number | undefined;
+  let pseudoMap = new Map<number, import("./compiler-trace/types.js").PseudoProvenance>();
+  try {
+    boundary = firstPseudoRegister();
+    pseudoMap = buildPseudoProvenance(provenanceStages, parsed.instructions);
+  } catch (error) {
+    caveats.push(`Register-dependent provenance unavailable: ${String(error)}. Native RTL remains available.`);
+  }
   if (!passOrderKnown) {
     caveats.push("Pass order uses the common GCC ordering fallback, not an independently verified order for this compiler. Cross-stage transitions are inferred; stage-local SET/use/death UIDs remain observed.");
     for (const pseudo of pseudoMap.values()) for (const transition of pseudo.transitions) {
@@ -267,12 +277,14 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
   }
 
   let recurrenceHints: CompilerTraceReport["recurrenceHints"] = [];
+  let candidateObject: string | undefined;
   try {
-    const candidateObject = join(outputDirectory, `${funcName}.c.o`);
-    assembleCompilerOutput(options.assemblyPath, candidateObject);
+    const assembledObject = join(outputDirectory, `${funcName}.c.o`);
+    assembleCompilerOutput(options.assemblyPath, assembledObject);
+    candidateObject = assembledObject;
     const targetObject = assembleTarget(funcName, outputDirectory);
     const target = disassembleObject(targetObject);
-    const candidate = disassembleObject(candidateObject);
+    const candidate = disassembleObject(assembledObject);
     recurrenceHints = findTargetRegisterRecurrences(
       target,
       candidate,
@@ -295,10 +307,12 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
     schemaVersion: 2,
     analysis: { provider: support.provider, passOrderKnown, passModelsAvailable: true,
       passOrderConfidence: passOrderKnown ? "configured" : "inferred" },
+    registerModel: boundary === undefined ? { status: "unavailable" } : { status: "observed", firstPseudoRegister: boundary },
     function: funcName,
     source: relative(projectRoot(), source),
     outputDirectory: relative(projectRoot(), outputDirectory),
     assembly: relative(projectRoot(), options.assemblyPath),
+    ...(candidateObject ? { candidateObject: relative(projectRoot(), candidateObject) } : {}),
     reportArtifact: relative(projectRoot(), reportPath),
     flags: options.flags,
     stages: summarizeStages(options.dumpDirectory, files, parsed.metadata, parsed.contents),

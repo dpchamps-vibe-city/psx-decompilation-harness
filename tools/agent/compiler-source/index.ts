@@ -157,7 +157,9 @@ export interface FileHealth {
   errorNodes: number;
 }
 
+export const COMPILER_SOURCE_INDEX_FORMAT = 2;
 export interface CompilerSourceIndex {
+  formatVersion: number;
   /** The GCC version this index describes; every query carries it forward. */
   version: string;
   treeSha256: string;
@@ -318,9 +320,62 @@ function hasFunctionDeclarator(node: Node | undefined): boolean {
   return false;
 }
 
+/** Recover the grammar's split K&R pointer-return definitions. Tree-sitter
+ * sometimes consumes the first parameter declaration into a declaration and
+ * leaves the body as a sibling compound_statement. Require an identifier-only
+ * parameter list and declarations for exactly those parameters; a prototype
+ * followed by unrelated code must not become a definition. All ranges still
+ * refer to the original source, not a rewritten parse. */
+function recoverKnR(forms: Node[], file: string): Definition[] {
+  const result: Definition[] = [];
+  for (let i = 0; i < forms.length; i++) {
+    const head = forms[i]!;
+    if (head.type !== "declaration") continue;
+    let fn: Node | undefined;
+    walk(head, child => {
+      if (child.type === "function_declarator") { fn = child; return false; }
+      return true;
+    });
+    const parameters = fn && field(fn, "parameters");
+    if (!fn || !parameters) continue;
+    const names = namedChildren(parameters).map(p => {
+      const parts = namedChildren(p);
+      return p.type === "identifier" ? p.text :
+        p.type === "parameter_declaration" && parts.length === 1 && parts[0]!.type === "type_identifier" ? parts[0]!.text : undefined;
+    });
+    if (!names.length || names.some(name => !name)) continue;
+    const trailing = head.text.slice(parameters.endIndex - head.startIndex);
+    const declared: Definition[] = [];
+    collectTopLevel(declared, file, parseC(trailing).rootNode);
+    if (!declared.length || declared.some(d => d.kind !== "variable")) continue;
+    let j = i + 1;
+    for (; j < forms.length; j++) {
+      const next = forms[j]!;
+      if (next.type === "comment") continue;
+      if (next.type !== "declaration") break;
+      collectDeclaration(declared, file, next);
+    }
+    const body = forms[j];
+    const declaredNames = declared.map(d => d.name);
+    if (body?.type !== "compound_statement" || declared.some(d => d.kind !== "variable") ||
+        declaredNames.length !== names.length || new Set(declaredNames).size !== names.length ||
+        names.some(name => !declaredNames.includes(name!))) continue;
+    const name = declaratorName(field(fn, "declarator"))?.text;
+    if (!name) continue;
+    result.push({ name, kind: "function", file, line: head.startPosition.row + 1,
+      endLine: body.endPosition.row + 1, start: head.startIndex, end: body.endIndex });
+    i = j;
+  }
+  return result;
+}
+
 /** Top-level forms, descending through preprocessor conditionals. */
 function collectTopLevel(into: Definition[], file: string, node: Node): void {
-  for (const child of namedChildren(node)) {
+  const forms = namedChildren(node);
+  const recovered = recoverKnR(forms, file);
+  into.push(...recovered);
+  for (const child of forms) {
+    if (recovered.some(d => child.startIndex >= d.start && child.endIndex <= d.end)) continue;
     switch (child.type) {
       case "function_definition": {
         const name = declaratorName(field(child, "declarator"))?.text;
@@ -517,6 +572,12 @@ export function collectDumpPasses(source: string, file: string): DumpPass[] {
 
 const C_EXTENSIONS = [".c", ".h"];
 
+export function collectSourceDefinitions(source: string, file: string): Definition[] {
+  const definitions: Definition[] = [];
+  collectTopLevel(definitions, file, parseC(source).rootNode);
+  return definitions;
+}
+
 export function buildIndex(version?: string): CompilerSourceIndex {
   const verify = verifyTree(version);
   if (!verify.ok) {
@@ -572,6 +633,7 @@ export function buildIndex(version?: string): CompilerSourceIndex {
   }
 
   return {
+    formatVersion: COMPILER_SOURCE_INDEX_FORMAT,
     version: resolved,
     treeSha256: verify.actual,
     definitions,
@@ -594,7 +656,7 @@ export function loadIndex(version?: string, refresh = false): CompilerSourceInde
   const cache = join(CACHE_DIR(), `index-${resolved}-${pin.tree.sha256}.json`);
   if (!refresh && existsSync(cache)) {
     const cached = JSON.parse(readFileSync(cache, "utf8")) as CompilerSourceIndex;
-    if (cached.treeSha256 === pin.tree.sha256 && cached.version === resolved) return cached;
+    if (cached.formatVersion === COMPILER_SOURCE_INDEX_FORMAT && cached.treeSha256 === pin.tree.sha256 && cached.version === resolved) return cached;
   }
   const index = buildIndex(resolved);
   mkdirSync(CACHE_DIR(), { recursive: true });

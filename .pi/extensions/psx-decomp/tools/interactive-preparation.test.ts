@@ -12,17 +12,18 @@ function fixture(t: { after: (f: () => void) => void }) {
   seedProjectFixture(root);
   mkdirSync(join(root, "src")); writeFileSync(join(root, "src/f.c"), "void f(void) {}\n");
   const handlers = new Map<string, (event: any, ctx: any) => Promise<void> | void>();
-  const messages: string[] = [];
-  const pi = { on: (name: string, handler: any) => handlers.set(name, handler), sendUserMessage: (text: string) => messages.push(text) } as unknown as ExtensionAPI;
+  const messages: string[] = [], options: any[] = [];
+  const pi = { on: (name: string, handler: any) => handlers.set(name, handler), sendUserMessage: (text: string, option: any) => { messages.push(text); options.push(option); } } as unknown as ExtensionAPI;
   const ctx = { model: {} as any, isIdle: () => true, ui: { notify: () => {} } };
   const documentation = interactiveDocumentation(pi, root);
   const completion = agentCompletion(root, ["src/f.c"]);
   const saved = () => JSON.parse(readFileSync(join(root, "build/preparation/completions/f.json"), "utf8"));
-  return { root, handlers, messages, ctx, documentation, completion, saved };
+  return { root, handlers, messages, options, ctx, documentation, completion, saved };
 }
 test("only the explicit documentation role's successful settlement records completion", async (t) => {
   const f = fixture(t); f.documentation.start("f", f.completion, f.ctx);
   assert.equal(f.saved().documentation, "pending"); assert.match(f.messages[0]!, /psx-post-decompile-documentation/);
+  assert.equal(f.options[0].expandPromptTemplates, true);
   await f.handlers.get("agent_settled")!({}, f.ctx); assert.equal(f.saved().documentation, "pending");
   await f.handlers.get("before_agent_start")!({ prompt: f.messages[0] }, f.ctx);
   await f.handlers.get("agent_end")!({ messages: [{ role: "assistant", stopReason: "stop" }] }, f.ctx);

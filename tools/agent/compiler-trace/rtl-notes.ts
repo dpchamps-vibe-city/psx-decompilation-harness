@@ -6,6 +6,8 @@ import type {
   RtlStageMetadata,
 } from "./types.js";
 
+import { firstPseudoRegister } from "./register-model.js";
+
 interface StreamEntity {
   uid: number;
   kind: "instruction" | "note";
@@ -32,9 +34,11 @@ function streamEntities(content: string): StreamEntity[] {
 }
 
 function normalizeRegisters(expression: string): string {
+  let boundary: number | undefined;
+  try { boundary = firstPseudoRegister(); } catch { /* Raw RTL remains readable without a register model. */ }
   return expression.replace(REGISTER, (_whole, flags: string, mode: string, rawRegister: string) => {
     const register = parseInt(rawRegister, 10);
-    const identity = register >= 80 ? "pseudo" : `hard-${register}`;
+    const identity = boundary === undefined ? `unclassified-${register}` : register >= boundary ? "pseudo" : `hard-${register}`;
     return `(reg${flags.toLowerCase()}:${mode.toUpperCase()} ${identity})`;
   });
 }

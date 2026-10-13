@@ -151,7 +151,9 @@ export const TOOL_SPECS: ToolSpec[] = [
   ),
   functionTool(
     "psx_flag_probe", "PSX Flag Probe", "flagProbe.ts",
-    "Early per-file flag-hypothesis check, from three independent sources: structural fingerprints decoded from the original binary's bytes (no source needed), a flag-matrix score of the current source, and nearby overrides (flags are per-TU). Run BEFORE deep source archaeology. A matrix showing baseline equal to the delta kills a flag hypothesis cheaply. Writes build/flagProbe/<function>/report.json with a conclusion scoped to the measured source; triage reads it under a function/source/target/toolchain hash check and stops directing you at a flag its own matrix already tied, without erasing the target fingerprint.",
+    "Early per-file flag-hypothesis check, from three independent sources: structural fingerprints decoded from the original binary's bytes (no source needed), a flag-matrix score of the selected C candidate, and nearby overrides (flags are per-TU). Run BEFORE deep source archaeology. Pass src for a build-only candidate; INCLUDE_ASM stubs supply fingerprints, never a C matrix baseline. Writes build/flagProbe/<function>/report.json with a conclusion scoped to the measured source and toolchain.",
+    { extra: { src: Type.Optional(Type.String({ description: "Actual C candidate to probe instead of the function's live source; compiled in its original whole TU" })) },
+      argv: (p) => [p.functionName as string, ...(p.src ? ["--src", p.src as string] : []), ...(p.json ? ["--json"] : [])] },
   ),
 
   /* ---- evidence for a specific mismatch class ---- */

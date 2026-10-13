@@ -1,5 +1,14 @@
 # Migration record
 
+## Follow-up: configured assembler backend
+
+Production now uses cpp → cc1 → configured assembler: legacy MASPSX → GAS by
+omission, or direct GAS with closed compatibility rewrites. Legacy argv and v1
+compilation identities are preserved when omitted. Assembler profiles replace
+the base selection and require original-word evidence and member re-verification;
+see [toolchain backends](toolchain.md#assembler-backends). Historical MASPSX
+measurements below describe that route, not a restriction on GAS acceptance.
+
 ## Source and scope
 
 Source: `../btn-decompilation`, base HEAD

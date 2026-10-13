@@ -18,7 +18,12 @@ export type ToolName = typeof TOOL_NAMES[number] | "psyq2elf";
 export const FLAG_NAMES = ["cpp", "cc1", "as", "ld", "maspsx", "m2c", "spimdisasm"] as const;
 export type FlagName = typeof FLAG_NAMES[number];
 export type ConfiguredPath = string | OwnedPath;
+export type AssemblerKind = "maspsx" | "gas";
+export const ASSEMBLER_REWRITES = ["move-addu"] as const;
+export type AssemblerConfig = { kind: "maspsx" } | { kind: "gas"; inputRewrites: string[] };
+export interface AssemblerSelection { kind: AssemblerKind; inputRewrites: string[] }
 export interface ToolchainConfig {
+  assembler?: AssemblerConfig;
   $schema?: string;
   schemaVersion: 1;
   compiler: { family: string; version: string; source?: ConfiguredPath; capabilities?: string[]; analysis?: CompilerAnalysisSelection };
@@ -26,7 +31,7 @@ export interface ToolchainConfig {
   includeDirs: string[];
   flags: Record<FlagName, string[]>;
   /** A profile replaces the named flag arrays; omitted arrays inherit base. */
-  profiles: Record<string, Partial<Record<FlagName, string[]>> & { includeDirs?: string[] }>;
+  profiles: Record<string, Partial<Record<FlagName, string[]>> & { includeDirs?: string[]; assembler?: AssemblerConfig }>;
   containerProfiles: Record<string, string>;
   sdk: { version: string; convertedDir: ConfiguredPath; originalDir: ConfiguredPath; signatures: ConfiguredPath; headers?: ConfiguredPath };
 }
@@ -50,13 +55,37 @@ function strings(value: unknown, at: string): void {
   if (!Array.isArray(value)) throw new Error(`${TOOLCHAIN_FILE}: ${at} must be an array of arguments, not a shell command`);
   for (const item of value) string(item, at);
 }
+function validateAssembler(value: unknown, at: string): void {
+  const selection = object(value, at);
+  keys(selection, selection.kind === "gas" ? ["kind", "inputRewrites"] : ["kind"], at);
+  if (!["maspsx", "gas"].includes(selection.kind)) throw new Error(`${TOOLCHAIN_FILE}: unknown ${at}.kind ${selection.kind}`);
+  if (selection.kind === "gas") {
+    strings(selection.inputRewrites, `${at}.inputRewrites`);
+    for (const id of selection.inputRewrites) if (!ASSEMBLER_REWRITES.includes(id)) throw new Error(`${TOOLCHAIN_FILE}: unknown assembler input rewrite ${id}`);
+    if (new Set(selection.inputRewrites).size !== selection.inputRewrites.length) throw new Error(`${TOOLCHAIN_FILE}: duplicate ${at}.inputRewrites`);
+  }
+}
+/** GAS assumes undeclared externs are small; this rule is not yet modeled. */
+export function assertAssemblerSmallData(selection: AssemblerSelection, flags: readonly string[]): void {
+  if (selection.kind !== "gas") return;
+  let threshold = 8; // GNU as default, unlike MASPSX's implicit -G0.
+  for (let i = 0; i < flags.length; i++) {
+    const flag = flags[i]!;
+    if (flag === "-G") threshold = Number(flags[++i]);
+    else if (/^-G(?:=)?/.test(flag)) threshold = Number(flag.slice(2).replace(/^=/, ""));
+    else if (flag.startsWith("--gpsize=")) threshold = Number(flag.slice(9));
+    else if (flag === "--gpsize") threshold = Number(flags[++i]);
+  }
+  if (threshold !== 0) throw new Error(`${TOOLCHAIN_FILE}: gas requires explicit -G0 in flags.as; nonzero/default small-data rules are unsupported`);
+}
 export function loadToolchain(root = projectRoot()): ToolchainConfig {
   let value: any;
   try { value = JSON.parse(readFileSync(join(root, TOOLCHAIN_FILE), "utf8")); }
   catch (error) { throw new Error(`Cannot load ${join(root, TOOLCHAIN_FILE)}: ${String(error)}`); }
   object(value, "config");
   if (Object.hasOwn(value, "fileFlags")) throw new Error(`${TOOLCHAIN_FILE}: fileFlags is unsupported; use configs/flag_overrides.mk`);
-  keys(value, ["$schema", "schemaVersion", "compiler", "tools", "includeDirs", "flags", "profiles", "containerProfiles", "sdk"], "config");
+  keys(value, ["$schema", "schemaVersion", "compiler", "tools", "includeDirs", "flags", "profiles", "containerProfiles", "sdk", "assembler"], "config");
+  if (value.assembler !== undefined) validateAssembler(value.assembler, "assembler");
   if (value.schemaVersion !== 1) throw new Error(`${TOOLCHAIN_FILE}: unsupported schemaVersion ${value.schemaVersion}`);
   object(value.compiler, "compiler"); keys(value.compiler, ["family", "version", "source", "capabilities", "analysis"], "compiler");
   string(value.compiler.family, "compiler.family"); string(value.compiler.version, "compiler.version");
@@ -76,8 +105,11 @@ export function loadToolchain(root = projectRoot()): ToolchainConfig {
   for (const name of FLAG_NAMES) strings(value.flags[name], `flags.${name}`);
   object(value.profiles, "profiles");
   for (const [name, profile] of Object.entries(value.profiles)) {
-    const p = object(profile, `profiles.${name}`); keys(p, [...FLAG_NAMES, "includeDirs"], `profiles.${name}`);
-    for (const [flag, args] of Object.entries(p)) strings(args, `profiles.${name}.${flag}`);
+    const p = object(profile, `profiles.${name}`); keys(p, [...FLAG_NAMES, "includeDirs", "assembler"], `profiles.${name}`);
+    for (const [flag, args] of Object.entries(p)) {
+      if (flag === "assembler") validateAssembler(args, `profiles.${name}.assembler`);
+      else strings(args, `profiles.${name}.${flag}`);
+    }
   }
   object(value.containerProfiles, "containerProfiles");
   for (const [id, name] of Object.entries(value.containerProfiles)) {
@@ -88,6 +120,10 @@ export function loadToolchain(root = projectRoot()): ToolchainConfig {
   string(value.sdk.version, "sdk.version");
   for (const name of ["convertedDir", "originalDir", "signatures"]) ownedPath(value.sdk[name], `sdk.${name}`, root);
   if (value.sdk.headers !== undefined) ownedPath(value.sdk.headers, "sdk.headers", root);
+  for (const profile of [undefined, ...Object.values(value.profiles)] as Array<any>) {
+    const assembler = profile?.assembler ?? value.assembler ?? { kind: "maspsx" };
+    assertAssemblerSmallData({ ...assembler, inputRewrites: assembler.inputRewrites ?? [] }, profile?.as ?? value.flags.as);
+  }
   return value as ToolchainConfig;
 }
 function preparePinnedPath(value: ConfiguredPath, path: string, context: RuntimeContext): string {
@@ -125,6 +161,17 @@ export function configuredCompilerSource(root = projectRoot()): string | undefin
   return source;
 }
 export interface FlagContext { id?: string | undefined; kind: "exe" | "overlay" | "library"; profile?: string }
+/** Same owner precedence as flags; a supplied assembler replaces the whole base. */
+export function configuredAssemblerConfig(container?: FlagContext, root = projectRoot()): AssemblerConfig | undefined {
+  const config = loadToolchain(root);
+  const profile = container ? container.profile ?? config.containerProfiles[container.id ?? ""] ?? config.containerProfiles[container.kind] : undefined;
+  if (profile && !config.profiles[profile]) throw new Error(`${TOOLCHAIN_FILE}: unknown profile ${profile}`);
+  return (profile ? config.profiles[profile]?.assembler : undefined) ?? config.assembler;
+}
+export function configuredAssembler(container?: FlagContext, root = projectRoot()): AssemblerSelection {
+  const selection = configuredAssemblerConfig(container, root) ?? { kind: "maspsx" };
+  return { kind: selection.kind, inputRewrites: selection.kind === "gas" ? [...selection.inputRewrites] : [] };
+}
 export function configuredFlags(name: FlagName, container?: FlagContext, root = projectRoot()): string[] {
   const config = loadToolchain(root);
   const profile = container ? container.profile ?? config.containerProfiles[container.id ?? ""] ?? config.containerProfiles[container.kind] : undefined;
@@ -191,8 +238,8 @@ export function configuredCppFrontend(root = projectRoot()): string | null {
     : cpp;
 }
 export function toolchainDigest(root = projectRoot()): string { return createHash("sha256").update(readFileSync(join(root, TOOLCHAIN_FILE))).digest("hex"); }
-export function toolchainExecutables(root = projectRoot()): Record<string, { command: string; path: string | null; sha256: string | null }> {
-  return Object.fromEntries(Object.keys(loadToolchain(root).tools).map(name => {
+export function toolchainExecutables(root = projectRoot(), excluded: string[] = []): Record<string, { command: string; path: string | null; sha256: string | null }> {
+  return Object.fromEntries(Object.keys(loadToolchain(root).tools).filter(name => !excluded.includes(name)).map(name => {
     const command = configuredTool(name as ToolName, root), path = executablePath(command, root);
     return [name, { command, path, sha256: path ? fileDigest(path) : null }];
   }));

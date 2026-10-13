@@ -145,7 +145,7 @@ test("production oracle uses the repo include graph and both configured flag col
     assert.deepEqual(oracle.report.asFlags, configuredAsFlagsForContainer(kind));
     assert.equal(oracle.report.toolchain.compiler.path, configuredCompilerPath().slice(ROOT.length + 1));
     assert.deepEqual(oracle.report.includes.map(i => i.path), ["include/macro.inc", "include/gte_macros.inc"]);
-    assert.ok(oracle.report.maspsxFlags.includes("--run-assembler"));
+    assert.ok(oracle.report.maspsxFlags?.includes("--run-assembler"));
     const raw = readEncodingProbeSection(readFileSync(join(ROOT, oracle.report.probeObject)));
     for (const command of oracle.report.commands) assert.equal(raw.readUInt32LE(command.offset), command.word);
     assert.equal(oracle.report.commands.find(c => c.statement === "rtps")!.word, 0x4a180001);

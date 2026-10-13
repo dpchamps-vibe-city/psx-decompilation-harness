@@ -76,7 +76,7 @@ export function renderReversal(report: ReversalReport): string {
   }
 
   if (!report.exact && report.firstDivergence?.stage === "machine") {
-    lines.push("", "CANDIDATE PRODUCTION EVIDENCE: compiler output and its configured expansion.");
+    lines.push("", "CANDIDATE PRODUCTION EVIDENCE: compiler output and configured assembler expansion.");
     lines.push("  This receipt establishes how this candidate was built; it does not establish the original compiler input or residual owner.");
     if (report.assemblerExpansion) {
       const expansion = report.assemblerExpansion;

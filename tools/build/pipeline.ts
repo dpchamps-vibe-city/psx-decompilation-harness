@@ -1,4 +1,5 @@
 import { projectRoot, harnessRoot } from "../lib/runtimeContext.js";
+import { assemble } from "../lib/assembler.js";
 import { currentScriptArgs } from "../lib/installedScripts.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { splitSdkLibs } from "./splitSdkLibs.js";
@@ -131,8 +132,8 @@ export function compileObject(container: Container, source: string, root = proje
   const dependencies = dependencyPaths(readFileSync(deps, "utf8"), root);
   const before = inputKey(dependencies);
   command(configuredTool("cc1", root), [...flags, preprocessed, "-o", assembly], root);
-  command(configuredTool("python", root), [configuredTool("maspsx", root), ...configuredFlags("maspsx", container, root),
-    "--gnu-as-path", configuredTool("as", root), "-o", output, ...configuredFlags("as", container, root), assembly], root);
+  const assembled = assemble(container, assembly, output, root);
+  if (assembled.stderr) process.stderr.write(assembled.stderr);
   if (before !== inputKey(dependencies)) { rmSync(output, { force: true }); throw new Error(`Inputs changed while compiling ${source}`); }
   publishArtifact(output, before);
   return output;
@@ -142,7 +143,8 @@ function assembleObject(container: Container, source: string, root: string, iden
   const key = digest(JSON.stringify({ identity, flags: configuredFlags("as", container, root), inputs: snapshot(root, [source, ...assemblyIncludes(root)]) }));
   if (artifactCurrent(output, key)) return output;
   rmSync(output, { force: true });
-  command(configuredTool("as", root), [...configuredFlags("as", container, root), source, "-o", output], root);
+  const assembled = assemble(container, source, output, root, { handwritten: true });
+  if (assembled.stderr) process.stderr.write(assembled.stderr);
   publishArtifact(output, key);
   return output;
 }

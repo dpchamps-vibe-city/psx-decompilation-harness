@@ -47,9 +47,10 @@ LNK encoding. Image SDK integration's `patchLibBss`/placement/signature machiner
 is not run on library targets.
 
 Keep compiler executables, candidate version, flags, defines and include search
-paths in `toolchain.json`. This remains the cpp → cc1 → maspsx → GAS protocol;
+paths in `toolchain.json`. This remains cpp → cc1 → configured assembler
+(MASPSX → GAS, or direct GAS with named compatibility rewrites);
 config does not identify the historical compiler or implement a new driver.
-Named profiles can replace any flag array and `includeDirs`. Omitted values
+Named profiles can replace any flag array, `assembler` and `includeDirs`. Omitted values
 inherit base; supplied arrays replace rather than append. A project's
 `toolchainProfile` selects its default profile; `memberProfiles` maps exact IDs
 from inventory to profiles and wins over that default. Otherwise the toolchain's
@@ -67,6 +68,15 @@ npm run split-all
 npm run profile -- --write
 npm run progress
 ```
+
+Choose a member's assembler from `identify`'s original-word indexed-load census
+and, when native LNK libraries are supplied, its packaging signatures. A target
+may mix ASPSX-built and GNU-built members: use an explicit member profile, not a
+single SDK-wide assumption. The configured backend alone is the acceptance
+path; alternatives are diagnostic. Selection changes invalidate verification
+identities and require rechecking the affected members. See
+[assembler backends](toolchain.md#assembler-backends) for rewrite, `-G0` and
+reorder-mode restrictions.
 
 `identify` reports ELF sections, symbols, relocations and member provenance;
 these do not prove the historical compiler/flags. `profile` generates the same

@@ -18,7 +18,7 @@
  */
 
 import { configuredGccVersion, loadFlagOverrides } from "../decompToolchain.js";
-import { configuredFlags, type FlagContext } from "../../lib/toolchain.js";
+import { configuredAssembler, configuredFlags, type FlagContext } from "../../lib/toolchain.js";
 import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
 
 /** The four residual axes, in the order the staged objective compares them. */
@@ -64,7 +64,8 @@ export interface ToolchainFingerprint {
 export function fingerprintOf(functionName: string): ToolchainFingerprint {
   const target = resolveFunctionTarget(functionName), container = target.owner.kind;
   const base = configuredFlags("cc1", target.flags);
-  const contextFlags = ["cpp", "as", "maspsx"].flatMap(stage => configuredFlags(stage as "cpp" | "as" | "maspsx", target.flags).map(f => `${stage}:${f}`)).sort();
+  const assembler = configuredAssembler(target.flags);
+  const contextFlags = ["cpp", "as", ...(assembler.kind === "maspsx" ? ["maspsx"] : [])].flatMap(stage => configuredFlags(stage as "cpp" | "as" | "maspsx", target.flags).map(f => `${stage}:${f}`)).concat(`assembler:${JSON.stringify(assembler)}`).sort();
   const overrides = loadFlagOverrides().get(container === "library" ? target.owner.id : functionName) ?? [];
   const flags = [...base, ...overrides].sort();
   const gcc = configuredGccVersion();

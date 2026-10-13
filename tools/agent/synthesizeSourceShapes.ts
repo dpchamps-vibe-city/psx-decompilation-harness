@@ -113,7 +113,7 @@ function findSearchSummary(functionName: string, specPath: string, baseSourcePat
   if (!existsSync(root)) return undefined;
   const expectedSpec = projectPath(specPath);
   const expectedSource = sha256File(baseSourcePath);
-  const expectedToolchain = sha256(stableJson(configuredToolchainIdentity()));
+  const expectedToolchain = sha256(stableJson(configuredToolchainIdentity(functionName)));
   for (const name of readdirSync(root).sort().reverse()) {
     const manifestPath = join(root, name, "search-manifest.json");
     const summaryPath = join(root, name, "summary.json");

@@ -10,7 +10,9 @@ export interface SearchCacheIdentity {
   preprocessedHash: string;
   compilerFlags: string[];
   compilerHash: string;
-  assemblerShimHash: string;
+  /** Legacy omitted-backend cache keys remain readable. */
+  assemblerShimHash?: string;
+  assemblerIdentityHash?: string;
   trace: boolean;
   full: boolean;
 }

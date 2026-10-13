@@ -190,7 +190,7 @@ async function main(): Promise<void> {
   const basePath = resolveProjectInput(spec.baseSourcePath, "base source");
   const baseSource = readFileSync(basePath, "utf8");
   const baseHash = sha256(baseSource);
-  const toolchain = configuredToolchainIdentity();
+  const toolchain = configuredToolchainIdentity(options.functionName);
   const toolchainHash = sha256(stableJson(toolchain));
   const specHash = sha256(stableJson(spec));
   const analysisHash = analysis ? sha256(stableJson(analysis)) : "none";
@@ -310,7 +310,7 @@ async function main(): Promise<void> {
       preprocessedHash,
       compilerFlags,
       compilerHash: toolchain.compiler.sha256,
-      assemblerShimHash: toolchain.assemblerShim.sha256,
+      ...("assemblerShim" in toolchain ? { assemblerShimHash: toolchain.assemblerShim.sha256 } : { assemblerIdentityHash: sha256(stableJson([toolchain.assembler, toolchain.executables.as])) }),
       trace: spec.traceAllPreprocessed,
       full: false,
     });

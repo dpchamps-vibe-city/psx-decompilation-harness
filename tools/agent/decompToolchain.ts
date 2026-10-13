@@ -1,4 +1,6 @@
 import { projectRoot } from "../lib/runtimeContext.js";
+import { assemble, assembleAsync, assemblerIdentity, captureAssemblerExpansion as captureExpansion } from "../lib/assembler.js";
+export type { AssemblerExpansion } from "../lib/assembler.js";
 import { execFileSync, spawn, spawnSync } from "child_process";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
@@ -8,7 +10,7 @@ import type { Container } from "../lib/container.js";
 import { imageContainerFor, resolveFunctionTarget, requireTargetCapability, sourceFlagContext } from "../lib/targetAdapter.js";
 import { objectFunctions, readRelocatableObject } from "../lib/relocatableObject.js";
 
-import { configuredFlags, configuredTool, configuredCompilerAnalysis, executablePath, loadToolchain, requireCompilerCapability, toolchainDigest, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredAssemblerConfig, configuredFlags, configuredTool, configuredCompilerAnalysis, executablePath, loadToolchain, requireCompilerCapability, toolchainDigest, toolchainExecutables } from "../lib/toolchain.js";
 export { configuredTool } from "../lib/toolchain.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
 import { requireLibraryFunction, libraryMemberById } from "../lib/libraryTargets.js";
@@ -231,11 +233,13 @@ function fileSha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-export function configuredToolchainIdentity() {
-  const executables = toolchainExecutables();
+export function configuredToolchainIdentity(context?: FlagContext | string) {
+  const flags = typeof context === "string" ? resolveFunctionTarget(context).flags : context;
+  const selection = assemblerIdentity(flags);
+  const maspsx = "maspsx" in selection ? { path: relativePath(selection.maspsx.path), sha256: selection.maspsx.sha256 } : undefined;
+  const executables = toolchainExecutables(projectRoot(), selection.kind === "gas" ? ["maspsx"] : []);
   const cc = executables.cc1!;
   if (!cc.path || !cc.sha256) throw new Error(`Configured compiler not found: ${cc.command}. Run npm run setup and provision the toolchain.`);
-  const maspsx = configuredTool("maspsx");
   let cppFrontend: { path: string; sha256: string } | null = null;
   if (loadToolchain().compiler.family === "gcc") {
     const path = executablePath(runTool(configuredTool("cpp"), ["-print-prog-name=cc1"]).trim());
@@ -248,9 +252,14 @@ export function configuredToolchainIdentity() {
     executables,
     cppFrontend,
     compiler: { path: relativePath(cc.path), sha256: cc.sha256, version: firstVersionLine(cc.command, ["--version"]) },
-    assemblerShim: { path: relativePath(maspsx), sha256: fileSha256(maspsx) },
-    cpp: firstVersionLine(configuredTool("cpp"), ["--version"]),
-    assembler: firstVersionLine(configuredTool("as"), ["--version"]),
+    ...(configuredAssemblerConfig(flags) ? {
+      assembler: { kind: selection.kind, inputRewrites: selection.inputRewrites,
+        ...(maspsx ? { maspsx } : {}) },
+      cpp: firstVersionLine(configuredTool("cpp"), ["--version"]),
+      assemblerVersion: firstVersionLine(executables.as!.command, ["--version"]),
+    } : { assemblerShim: maspsx!,
+      cpp: firstVersionLine(configuredTool("cpp"), ["--version"]),
+      assembler: firstVersionLine(executables.as!.command, ["--version"]) }),
     objdump: firstVersionLine(configuredTool("objdump"), ["--version"]),
   };
 }
@@ -350,56 +359,15 @@ export function assembleCompilerOutput(
 ): string {
   const origin = compilerAssemblyOrigin(assembly);
   const context = origin?.context ?? compilationContext(containerId ?? "", kind, containerId);
-  runTool(configuredTool("python"), [
-    configuredTool("maspsx"),
-    ...configuredMaspsxFlags(context),
-    "--gnu-as-path", configuredTool("as"),
-    "-o", object,
-    ...configuredFlags("as", context),
-    origin?.assembly ?? assembly,
-  ]);
+  assemble(context, origin?.assembly ?? assembly, object);
   if (origin) writeObjectFunctionView(object, origin.symbol);
   return object;
 }
 
-export interface AssemblerExpansion {
-  compilerAssembly: string;
-  expandedAssembly: string;
-  receipt: string;
-  compilerExcerpt: string[];
-  expandedExcerpt: string[];
-}
-
-/** Replay ONLY the expansion half of the configured production assembler.
- * Normal object compilation is unchanged. Omitting --run-assembler prints
- * MASPSX's GAS input; directly invoking GAS on cc1's .s is not equivalent. */
-export function captureAssemblerExpansion(assembly: string, object: string, symbol: string): AssemblerExpansion {
+/** Kind-aware capture of the configured production assembler. */
+export function captureAssemblerExpansion(assembly: string, object: string, symbol: string) {
   const origin = compilerAssemblyOrigin(assembly);
-  const input = origin?.assembly ?? assembly;
-  const context = origin?.context ?? compilationContext(symbol);
-  const python = configuredTool("python"), maspsx = configuredTool("maspsx");
-  const flags = configuredMaspsxFlags(context), asFlags = configuredFlags("as", context);
-  if (!flags.includes("--run-assembler")) throw new Error("Production MASPSX does not declare --run-assembler; expansion trace is unavailable");
-  const productionArgs = [maspsx, ...flags, "--gnu-as-path", configuredTool("as"), "-o", object, ...asFlags, input];
-  const captureArgs = productionArgs.filter(arg => arg !== "--run-assembler");
-  const expanded = runToolCapturing(python, captureArgs);
-  const expandedAssembly = `${object}.expanded.s`, receipt = `${object}.assembler.json`;
-  writeFileSync(expandedAssembly, expanded.stdout);
-  const hash = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
-  const excerpt = (text: string): string[] => {
-    const lines = text.split("\n"), name = symbol.split("::").pop()!;
-    const start = lines.findIndex(line => line.trim() === `${name}:`);
-    if (start < 0) return [];
-    const end = lines.findIndex((line, index) => index > start && /^\s*\.end\s+/.test(line) && line.trim().endsWith(name));
-    return lines.slice(start, end < 0 ? start + 45 : end + 1).slice(0, 60);
-  };
-  const result = { compilerAssembly: input, expandedAssembly, receipt,
-    compilerExcerpt: excerpt(readFileSync(input, "utf8")), expandedExcerpt: excerpt(expanded.stdout) };
-  writeFileSync(receipt, JSON.stringify({ schemaVersion: 1, ...result, context,
-    compilerAssemblySha256: hash(input), expandedAssemblySha256: hash(expandedAssembly), objectSha256: hash(object),
-    production: { command: python, args: productionArgs }, capture: { command: python, args: captureArgs }, stderr: expanded.stderr,
-  }, null, 2) + "\n");
-  return result;
+  return captureExpansion(origin?.context ?? compilationContext(symbol), origin?.assembly ?? assembly, object, symbol);
 }
 
 export function parseImplicitDeclarationWarnings(stderr: string): string[] {
@@ -593,10 +561,7 @@ export async function compileSourceAsync(
   const diagnostics = await runToolAsyncCapturingStderr(
     configuredTool("cc1"), [...cc1Flags, basename(preprocessed), "-o", basename(assembly)], absoluteOutput, options.signal);
   if (options.assemble) {
-    await runToolAsync(configuredTool("python"), [
-      configuredTool("maspsx"), ...configuredMaspsxFlags(context),
-      "--gnu-as-path", configuredTool("as"), "-o", object, ...configuredFlags("as", context), assembly,
-    ], projectRoot(), options.signal);
+    await assembleAsync(context, assembly, object, projectRoot(), options.signal);
   }
   const result: CompileArtifacts = {
     source: absoluteSource, preprocessed, assembly, outputDir: absoluteOutput, stem, cc1Flags, diagnostics,
@@ -632,7 +597,6 @@ export function assembleTarget(funcName: string, outputDir: string): string {
      executable's `-G8` puts its own reference bytes in a different section from
      the candidate's, so the comparison would be against the wrong target. */
   const owner = containerForSymbol(funcName);
-  const asFlags = configuredAsFlagsForContainer(owner?.kind ?? "exe", owner?.id);
 
   const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(projectRoot(), outputDir);
   mkdirSync(absoluteOutput, { recursive: true });
@@ -664,7 +628,7 @@ export function assembleTarget(funcName: string, outputDir: string): string {
   );
 
   try {
-    runTool(configuredTool("as"), [...asFlags, stagedWrapper, "-o", stagedObject]);
+    assemble(owner ?? { kind: "exe", id: "exe" }, stagedWrapper, stagedObject, projectRoot(), { handwritten: true });
     renameSync(stagedObject, object);
     renameSync(stagedWrapper, wrapper);
   } catch (error) {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { selectRtlFunction, selectAssemblyFunction } from "../../lib/compilerArtifacts.js";
 import { functionSymbol } from "../../lib/targetAdapter.js";
 import { parseRtlInstructions } from "../compiler-trace/rtl-parser.js";
+import { configuredAssembler } from "../../lib/assembler.js";
 import { parseEmissionAttribution } from "../compiler-trace/emission-attribution.js";
 import type { CompilerTraceReport } from "../compiler-trace/types.js";
 import { normalizeDisassembly } from "../variant-lab/compile.js";
@@ -112,7 +113,7 @@ export function analyzeTargetScheduleFromArtifacts(
   /* Traces are compiled with -dp, so the assembly carries the compiler's own
    * RTL-instruction-to-line attribution. Older traces without it fall back to
    * canonical matching. */
-  const attribution = parseEmissionAttribution(assemblyText);
+  const attribution = parseEmissionAttribution(assemblyText, (trace.assembler ?? configuredAssembler()).kind);
   const uidResult = attachFinalUids(candidate, finalInstructions, attribution);
   const alignment = alignMachineInstructions(target, candidate);
   attachCorrespondenceUids(alignment.correspondence, candidate);

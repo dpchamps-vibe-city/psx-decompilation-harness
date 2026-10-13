@@ -2,7 +2,7 @@
  * version, installation path, Git revision and producer provenance. */
 import { relative, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
-import { configuredCppFrontend, configuredFlags, configuredFileFlags, loadToolchain, toolchainExecutables, type FlagContext } from "./toolchain.js";
+import { configuredAssembler, configuredAssemblerConfig, configuredCppFrontend, configuredFlags, configuredFileFlags, loadToolchain, toolchainExecutables, type FlagContext } from "./toolchain.js";
 import { contextForProject, projectRoot, runtimeContext, type RuntimeContext } from "./runtimeContext.js";
 import { fileDigest } from "./contentCache.js";
 
@@ -29,10 +29,14 @@ export function semanticFlags(flags: readonly string[], context: RuntimeContext)
   });
 }
 export function compilationIdentity(root = projectRoot(), flags?: FlagContext, stem?: string): Record<string, unknown> {
-  const context = contextForProject(root), config = loadToolchain(root), tools = toolchainExecutables(root), frontend = configuredCppFrontend(root);
+  const context = contextForProject(root), config = loadToolchain(root), assembler = configuredAssembler(flags, root),
+    tools = toolchainExecutables(root, assembler.kind === "gas" ? ["maspsx"] : []), frontend = configuredCppFrontend(root);
   return { compatibility: COMPONENT_CONTRACTS.compilation, compiler: { family: config.compiler.family, version: config.compiler.version },
-    tools: { ...Object.fromEntries(["cc1", "cpp", "as", "maspsx", "objdump"].map(name => [name, tools[name]?.sha256 ?? "unavailable"])), cppFrontend: frontend ? fileDigest(frontend) : "unavailable" },
-    flags: Object.fromEntries(["cpp", "cc1", "as", "maspsx"].map(name => [name, semanticFlags(configuredFlags(name as "cc1", flags, root).concat(name === "cc1" && stem ? configuredFileFlags(stem, root) : []), context)])),
+    // Preserve v1 identities when assembler is omitted; explicit selections are keyed.
+    ...(configuredAssemblerConfig(flags, root) ? { assembler } : {}),
+    tools: { ...Object.fromEntries(["cc1", "cpp", "as", ...(assembler.kind === "maspsx" ? ["maspsx"] : []), "objdump"].map(name => [name, tools[name]?.sha256 ?? "unavailable"])),
+      ...(assembler.kind === "gas" ? { assemblerImplementation: fileDigest(`${context.harnessRoot}/tools/lib/assembler.ts`) } : {}), cppFrontend: frontend ? fileDigest(frontend) : "unavailable" },
+    flags: Object.fromEntries(["cpp", "cc1", "as", ...(assembler.kind === "maspsx" ? ["maspsx"] : [])].map(name => [name, semanticFlags(configuredFlags(name as "cc1", flags, root).concat(name === "cc1" && stem ? configuredFileFlags(stem, root) : []), context)])),
   };
 }
 export interface ComparisonDomain { schema: "compiled-comparison-v1"; interpretation: string; target: string; context: string; compilation: string }

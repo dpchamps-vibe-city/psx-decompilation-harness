@@ -45,10 +45,17 @@
         "analysis": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider", "profile"],
+          "required": [
+            "provider",
+            "profile"
+          ],
           "properties": {
-            "provider": { "$ref": "#/$defs/string" },
-            "profile": { "$ref": "#/$defs/ownedPath" }
+            "provider": {
+              "$ref": "#/$defs/string"
+            },
+            "profile": {
+              "$ref": "#/$defs/ownedPath"
+            }
           }
         }
       }
@@ -184,6 +191,9 @@
           },
           "spimdisasm": {
             "$ref": "#/$defs/args"
+          },
+          "assembler": {
+            "$ref": "#/$defs/assembler"
           }
         }
       }
@@ -220,6 +230,9 @@
           "$ref": "#/$defs/ownedPath"
         }
       }
+    },
+    "assembler": {
+      "$ref": "#/$defs/assembler"
     }
   },
   "$defs": {
@@ -256,6 +269,44 @@
             },
             "path": {
               "$ref": "#/$defs/string"
+            }
+          }
+        }
+      ]
+    },
+    "assembler": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "maspsx"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "inputRewrites"
+          ],
+          "properties": {
+            "kind": {
+              "const": "gas"
+            },
+            "inputRewrites": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "move-addu"
+                ]
+              }
             }
           }
         }

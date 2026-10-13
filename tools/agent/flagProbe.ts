@@ -6,28 +6,25 @@ import { projectRoot } from "../lib/runtimeContext.js";
  * Usage:
  *   npx tsx tools/agent/flagProbe.ts func_8001FF98
  *   npx tsx tools/agent/flagProbe.ts func_8001FF98 --json
- *   npx tsx tools/agent/flagProbe.ts func_8001FF98 --with-source build/candidate.c
+ *   npx tsx tools/agent/flagProbe.ts func_8001FF98 --src build/candidate.c
+ *   npx tsx tools/agent/flagProbe.ts func_8001FF98 --with-source build/advisory.c
  *
  * Run this BEFORE burning effort on source-shape archaeology. It answers:
- * "does the target carry a fingerprint that is unreachable (or nearly so)
- * from natural C under the baseline flags, and does a per-file flag delta
- * dominate?" See `psx_reference flags`, section 11, for the governed
- * escalation bar. Historical fingerprints are hypotheses to measure, not
- * evidence about a new target's flags.
+ * "does the target nominate a flag hypothesis, and does a flag delta dominate
+ * on the selected C candidate?" See `psx_reference flags`, section 11, for
+ * the governed escalation bar. Historical fingerprints are hypotheses to
+ * measure, not evidence about a new target's flags or original compiler input.
  *
  * Three independent evidence sources:
  *   1. Target structural fingerprints, decoded from the original binary's
  *      bytes (no source needed):
  *      - nested loop with an in-place bottom-of-loop counter increment
- *        (unreachable from natural C under -fgcse: 2.95.2 loop-PRE splits it;
- *        signals -fno-gcse)
- *      - sequential lui/lw self-clobbering loads: symbolic %hi/%lo pairs
- *        signal -mno-split-addresses (unsplit assembler-macro load;
- *        func_800165D8/func_80016C08 precedent); non-symbolic or
- *        lui-grouping shapes signal -fno-schedule-insns
- *        -fno-schedule-insns2 (SetGfxClip precedent)
- *   2. Flag-matrix compile of the current src/<name>.c (if present): masked
- *      score + instruction count per candidate flag set.
+ *        nominates GCSE experiments where supported by the compiler
+ *      - sequential lui/lw self-clobbering loads nominate address-splitting
+ *        and scheduling experiments, not a unique original macro spelling
+ *   2. Flag-matrix compile of the selected C candidate (if present): masked
+ *      score + instruction count per candidate flag set. Assembly-backed
+ *      stubs supply fingerprints only; --with-source rows remain advisory.
  *   3. Regional context: existing overrides near this function's VRAM
  *      (flags are per-TU; neighbors sharing a TU share flags).
  *
@@ -39,7 +36,8 @@ import { projectRoot } from "../lib/runtimeContext.js";
 
 import { execSync } from "child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
+import { handsSymbolToAssembler } from "./cSourceAnalysis.js";
 import { compileSource, configuredTool, runTool, loadFlagOverrides, assembleTarget, disassembleObject, configuredGccVersion, configuredToolchainIdentity, resolveAsmSource, sourcePathFor } from "./decompToolchain.js";
 import { sha256, stableJson } from "./variant-lab/artifacts.js";
 import { type Container } from "../lib/container.js";
@@ -47,7 +45,7 @@ import { addressEncodedInName, locateFunction } from "../lib/symbolIndex.js";
 import { resolveFunctionTarget, type FunctionTarget } from "../lib/targetAdapter.js";
 import { loadLibraryProject } from "../lib/project.js";
 import { targetWordsOf } from "../lib/functionOracle.js";
-import { configuredFlags } from "../lib/toolchain.js";
+import { configuredAssembler, configuredFlags, type AssemblerKind } from "../lib/toolchain.js";
 
 // Probe rows compile through the same config service as the production build.
 
@@ -87,7 +85,7 @@ export const FLAG_MATRIX: [string, string][] = [
 
 /* ---- report shape ---- */
 
-export type FingerprintKind = "pre-fatal-shape" | "self-clobber-shape";
+export type FingerprintKind = "pre-fatal-shape" | "self-clobber-shape" | "expected-assembler-expansion";
 
 export interface Fingerprint {
   kind: FingerprintKind;
@@ -120,8 +118,12 @@ export interface FlagCandidateVerdict {
 export interface FlagProbeReport {
   schemaVersion: 1;
   function: string;
-  /** SHA-256 of src/<function>.c, or null when there is no source yet. */
+  /** SHA-256 of the selected C candidate; null for missing or assembly-backed input. */
   sourceHash: string | null;
+  /** Explicit source selection, retained so a scratch candidate is never called live C. */
+  sourcePath?: string;
+  sourceLabel?: string;
+  sourceStatus?: ProbeSourceStatus;
   /** SHA-256 of the original assembly the fingerprints were decoded from. */
   targetHash: string;
   toolchainHash: string;
@@ -208,30 +210,36 @@ export function fingerprintBottomIncrement(words: number[]): string[] {
 }
 
 /** Sequential lui rD / lw rD, off(rD) self-clobbering pairs. */
-export function fingerprintSelfClobberLoads(words: number[]): string[] {
+export function fingerprintSelfClobberLoads(words: number[], kind: AssemblerKind = "maspsx"): string[] {
   const hits: string[] = [];
   for (let i = 0; i + 1 < words.length; i++) {
-    const a = words[i], b = words[i + 1];
+    const a = words[i]!, b = words[i + 1]!;
     if (a >>> 26 !== 15) continue;                    /* lui rt,imm */
     const rt = (a >>> 16) & 0x1f;
     if (b >>> 26 === 35 && ((b >>> 21) & 0x1f) === rt && ((b >>> 16) & 0x1f) === rt) {
-      hits.push(`lui/lw self-clobber at words ${i}-${i + 1} (reg $${rt})`);
+      hits.push(`expected absolute-symbol assembler expansion at words ${i}-${i + 1} (reg $${rt}; both backends)`);
+    }
+    if (kind === "gas" && i + 2 < words.length && b >>> 26 === 0 && (b & 63) === 33 && ((b >>> 11) & 31) === rt) {
+      const rs = (b >>> 21) & 31, index = (b >>> 16) & 31;
+      const base = rs === rt ? index : index === rt ? rs : rt, c = words[i + 2]!;
+      if (base !== rt && c >>> 26 === 35 && ((c >>> 21) & 31) === rt && ((c >>> 16) & 31) === rt)
+        hits.push(`expected indexed-symbol GAS load-destination expansion at words ${i}-${i + 2} (reg $${rt})`);
     }
   }
   return hits;
 }
 
-export function fingerprintsOf(words: number[]): Fingerprint[] {
+export function fingerprintsOf(words: number[], kind: AssemblerKind = "maspsx"): Fingerprint[] {
   return [
     ...fingerprintBottomIncrement(words).map((detail): Fingerprint => ({
       kind: "pre-fatal-shape",
       detail,
       candidates: ["-fno-gcse", "-fno-gcse -fno-schedule-insns{,2}"],
     })),
-    ...fingerprintSelfClobberLoads(words).map((detail): Fingerprint => ({
-      kind: "self-clobber-shape",
+    ...fingerprintSelfClobberLoads(words, kind).map((detail): Fingerprint => ({
+      kind: "expected-assembler-expansion",
       detail,
-      candidates: ["-mno-split-addresses", "-fno-schedule-insns{,2}", "-fno-schedule-insns2"],
+      candidates: [],
     })),
   ];
 }
@@ -282,7 +290,7 @@ function compileRow(
   try {
     compileSource(src, dir, name, { assemble: true, extraCc1Flags: extraFlags.split(/\s+/).filter(Boolean) });
   } catch (error: any) {
-    row.error = "compile failed";
+    row.error = `compile failed: ${error?.message ?? String(error)}`;
     return row;
   }
   const got = maskedDisassembly(disassembleObject(join(projectRoot(), dir, `${name}.c.o`)));
@@ -295,7 +303,7 @@ function compileRow(
 }
 
 export function renderRow(row: FlagMatrixRow): string {
-  if (row.error) return row.error;
+  if (row.error) return row.error.replace(/\s+/g, " ").slice(0, 300);
   return `${row.masked}/${row.targetInstructions} masked, ${row.instructions} instrs (target ${row.targetInstructions})`;
 }
 
@@ -423,8 +431,8 @@ export function reportPath(name: string): string {
   return join(projectRoot(), "build/flagProbe", name, "report.json");
 }
 
-export function toolchainHash(): string {
-  return sha256(stableJson(configuredToolchainIdentity()));
+export function toolchainHash(name?: string): string {
+  return sha256(stableJson(configuredToolchainIdentity(name)));
 }
 
 /** Hash of the original assembly the fingerprints were decoded from. */
@@ -442,18 +450,32 @@ export interface ProbeResult {
   matrixSkipped?: string;
 }
 
-export function probe(name: string, extraSources: string[] = []): ProbeResult {
+export type ProbeSourceStatus = "c-candidate" | "assembly-stub" | "missing";
+
+/** Original assembly compiles to its own bytes under every compiler flag; it
+ * supplies fingerprints, never a C flag-matrix baseline. */
+export function probeSourceStatus(source: string | undefined, symbol: string): ProbeSourceStatus {
+  if (source === undefined) return "missing";
+  return handsSymbolToAssembler(source, symbol) ? "assembly-stub" : "c-candidate";
+}
+
+export function probe(name: string, extraSources: string[] = [], selectedSource?: string): ProbeResult {
   const info = getFuncInfo(name);
   if (!info || !info.size) throw new Error(`${name} has no sized subsegment in any container's splat config`);
 
   const words = targetWordsOf(name, info.container ? { container: info.container } : {}).map(w => w.raw);
-  const fingerprints = fingerprintsOf(words);
-  const sourcePath = sourcePathFor(name);
-  const sourceHash = existsSync(sourcePath) ? sha256(readFileSync(sourcePath, "utf-8")) : null;
+  const fingerprints = fingerprintsOf(words, configuredAssembler(resolveFunctionTarget(name).flags).kind);
+  const sourcePath = selectedSource ? resolve(projectRoot(), selectedSource) : sourcePathFor(name);
+  if (selectedSource && !existsSync(sourcePath)) throw new Error(`Selected source does not exist: ${selectedSource}`);
+  const symbol = resolveFunctionTarget(name).symbol;
+  const sourceText = existsSync(sourcePath) ? readFileSync(sourcePath, "utf-8") : undefined;
+  const sourceStatus = probeSourceStatus(sourceText, symbol);
+  const sourceLabel = selectedSource ?? CURRENT_SOURCE_LABEL;
+  const sourceHash = sourceStatus === "c-candidate" ? sha256(sourceText!) : null;
 
   const matrix: FlagMatrixRow[] = [];
   let matrixSkipped: string | undefined;
-  if (sourceHash !== null) {
+  if (sourceHash !== null || extraSources.length > 0) {
     const target = assembleTargetInstrs(name);
     if (!target) matrixSkipped = "no nonmatchings asm for masked scoring";
     else {
@@ -463,26 +485,37 @@ export function probe(name: string, extraSources: string[] = []): ProbeResult {
        * applied. Scoring candidate shapes as well as the current one is what
        * keeps a winning pair from being ranked away one axis at a time. */
       const sources: Array<[string, string | undefined]> = [
-        [CURRENT_SOURCE_LABEL, undefined],
-        ...extraSources.map((path) => [path, path] as [string, string]),
+        ...(sourceHash !== null ? [[sourceLabel, selectedSource] as [string, string | undefined]] : []),
+        ...extraSources.filter(path => path !== selectedSource).map((path) => [path, path] as [string, string]),
       ];
       for (const [label, path] of sources) {
+        if (path) {
+          const absolute = resolve(projectRoot(), path);
+          if (!existsSync(absolute)) throw new Error(`Advisory source does not exist: ${path}`);
+          if (probeSourceStatus(readFileSync(absolute, "utf-8"), symbol) !== "c-candidate") continue;
+        }
         for (const [flagLabel, flags] of FLAG_MATRIX) {
           matrix.push(compileRow(name, flagLabel, flags, target, label, path));
         }
       }
     }
-  } else {
-    matrixSkipped = `no src/${name}.c yet`;
+  }
+  if (!matrixSkipped && matrix.length === 0) {
+    matrixSkipped = sourceStatus === "assembly-stub"
+      ? "selected function is an INCLUDE_ASM backlog stub; fingerprints only, pass --src <candidate.c> for a C flag matrix"
+      : `no selected C candidate at ${sourcePath}`;
   }
 
-  const verdict = concludeMatrix({ rows: matrix, fingerprints, sourceLabel: CURRENT_SOURCE_LABEL });
+  const verdict = concludeMatrix({ rows: matrix, fingerprints, sourceLabel });
   const report: FlagProbeReport = {
     schemaVersion: 1,
     function: name,
     sourceHash,
+    sourcePath,
+    sourceLabel,
+    sourceStatus,
     targetHash: targetHashOf(name) ?? "",
-    toolchainHash: toolchainHash(),
+    toolchainHash: toolchainHash(name),
     fingerprints,
     matrix,
     ...verdict,
@@ -518,6 +551,7 @@ export function renderProbe(result: ProbeResult): string {
   const lines: string[] = [
     `flagProbe ${report.function} @${info.coordinate?.kind === "section" ? `${info.coordinate.section}+0x${info.vram.toString(16)}` : `0x${info.vram.toString(16).toUpperCase()}`} (${info.size} bytes)`,
     "",
+    `Selected source: ${report.sourceLabel ?? CURRENT_SOURCE_LABEL} (${report.sourceStatus ?? "legacy report"})`,
     "Target structural fingerprints (from original bytes):",
   ];
   const preFatal = report.fingerprints.filter((item) => item.kind === "pre-fatal-shape");
@@ -534,6 +568,7 @@ export function renderProbe(result: ProbeResult): string {
   }
   for (const hit of preFatal) lines.push(`  [PRE-fatal shape] ${hit.detail}`);
   for (const hit of selfClobber) lines.push(`  [self-clobber shape] ${hit.detail}`);
+  for (const hit of report.fingerprints.filter(item => item.kind === "expected-assembler-expansion")) lines.push(`  [expected assembler expansion; no flag nomination] ${hit.detail}`);
   if (preFatal.length > 0) {
     lines.push(
       "  PRE-fatal shape: try the counter-reuse idiom FIRST (psx_reference loop).",
@@ -543,17 +578,12 @@ export function renderProbe(result: ProbeResult): string {
   }
   if (selfClobber.length > 0) {
     lines.push(
-      "  self-clobber shape: two distinct remedies, decided by the lui's operand.",
-      "  If the pair is a SYMBOLIC address (lui %hi / lw %lo of a global), it is",
-      "  the unsplit assembler-macro load: -mno-split-addresses candidate",
-      "  (func_800165D8/func_80016C08 precedent — under split addresses the lui",
-      "  is an independent insn and sched2 lifts it away; no source shape or",
-      "  allocation can pin it unless an intervening insn touches its register).",
-      "  If the pairs are non-symbolic or the issue is lui GROUPING across",
-      "  consecutive loads, it is the scheduling class (SetGfxClip/SetGfxOffset",
-      "  precedent: -fno-schedule-insns{,2}). Calibration 2026-07-31: on the",
-      "  decompiled corpus this fires only on documented hard cases and pinned",
-      "  files.");
+      "  This register relation nominates address-splitting and scheduling",
+      "  experiments; their effects and availability depend on the compiler.",
+      "  Original words alone do not distinguish an explicit compiler address",
+      "  sequence from a macro in the unknown original compiler input.",
+      "  A failed/unsupported flag is inconclusive, not a refutation of the",
+      "  configuration hypothesis. Only the selected C matrix measures a remedy.");
   }
 
   lines.push("", "Nearby/existing flag overrides:", nearby.length ? nearby.join("\n") : "  none");
@@ -567,10 +597,16 @@ export function renderProbe(result: ProbeResult): string {
         lines.push(`  ${row.label.padEnd(42)} ${renderRow(row)}`);
       }
     }
-    if ([...new Set(report.matrix.map((row) => row.source))].length === 1) {
+    const selectedLabel = report.sourceLabel ?? CURRENT_SOURCE_LABEL;
+    if (!report.matrix.some((row) => row.source === selectedLabel)) {
       lines.push(
         "",
-        "  Only the current source was scored. If a shape you rejected on score",
+        "  Only advisory sources were scored; they do not own the conclusion.",
+        "  Pass --src <candidate.c> to select a C flag-matrix baseline.");
+    } else if ([...new Set(report.matrix.map((row) => row.source))].length === 1) {
+      lines.push(
+        "",
+        "  Only the selected source was scored. If a shape you rejected on score",
         "  is still mechanically plausible, re-run with --with-source <file> for",
         "  each: the flag that matters may be the one that only pays off there.");
     }
@@ -594,21 +630,27 @@ function main(): void {
   const argv = process.argv.slice(2);
   const name = argv[0];
   if (!name || name.startsWith("--")) {
-    console.error("Usage: npx tsx tools/agent/flagProbe.ts <func_name> [--json] [--with-source <file>]...");
+    console.error("Usage: npx tsx tools/agent/flagProbe.ts <func_name> [--json] [--src <candidate.c>] [--with-source <file>]...");
     process.exit(1);
   }
   const json = argv.includes("--json");
   const extraSources: string[] = [];
+  let selectedSource: string | undefined;
   for (let index = 1; index < argv.length; index++) {
-    if (argv[index] !== "--with-source") continue;
+    const option = argv[index];
+    if (option === "--json") continue;
+    if (option !== "--src" && option !== "--with-source") {
+      console.error(`Unknown argument: ${option}`); process.exit(1);
+    }
     const value = argv[++index];
-    if (!value) { console.error("--with-source requires a path"); process.exit(1); }
-    extraSources.push(value);
+    if (!value || value.startsWith("--")) { console.error(`${option} requires a path`); process.exit(1); }
+    if (option === "--src") selectedSource = value;
+    else extraSources.push(value);
   }
 
   let result: ProbeResult;
   try {
-    result = probe(name, extraSources);
+    result = probe(name, extraSources, selectedSource);
   } catch (error) {
     console.error(`flagProbe: ${(error as Error).message}`);
     process.exit(1);

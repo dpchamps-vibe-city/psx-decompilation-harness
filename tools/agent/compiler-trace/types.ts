@@ -316,6 +316,7 @@ export interface RegisterRecurrenceHint {
 
 export interface CompilerTraceReport {
   schemaVersion: 2;
+  assembler?: import("../../lib/toolchain.js").AssemblerSelection;
   analysis?: { provider: string; passOrderKnown: boolean; passModelsAvailable: boolean;
     passOrderConfidence?: "configured" | "inferred" };
   registerModel?: { status: "observed" | "unavailable"; firstPseudoRegister?: number };

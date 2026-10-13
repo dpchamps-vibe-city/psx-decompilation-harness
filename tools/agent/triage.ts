@@ -1,4 +1,5 @@
 #!/usr/bin/env npx tsx
+import { configuredAssembler, type AssemblerKind } from "../lib/toolchain.js";
 import { projectRoot } from "../lib/runtimeContext.js";
 /**
  * triage.ts — pre-flight symptom detector for one function.
@@ -2105,101 +2106,41 @@ export function flagProbeConclusion(
   if (report.targetHash !== (targetHashOf(name) ?? "")) {
     return { report, fresh: false, reason: "the target assembly changed since the probe ran" };
   }
-  if (report.toolchainHash !== toolchainHash()) {
+  if (report.toolchainHash !== toolchainHash(name)) {
     return { report, fresh: false, reason: "the toolchain changed since the probe ran" };
   }
   return { report, fresh: true };
 }
 
-function detectFlagFingerprint(name: string, srcText?: string): Finding[] {
-  const path = resolveTargetAsm(name);
-  if (!path) return [];
-  const insns = readFileSync(path, "utf-8")
-    .split("\n")
-    .map(stripComment)
-    .filter((line) => line && !line.startsWith(".") && !line.endsWith(":"));
+/** Consume symbolised original words, not the disassembly file's spelling.
+ * ET_REL listings encode numeric fields and put symbolic fixups in .reloc;
+ * searching that file for literal %hi/%lo silently loses their fingerprints. */
+export function symbolicSelfClobberPairs(insns: readonly string[], kind: AssemblerKind = "maspsx"): string[] {
   const pairs: string[] = [];
   for (let i = 0; i + 1 < insns.length; i++) {
-    const hi = insns[i].match(/^lui\s+\$(\w+),\s*%hi\(([^)]+)\)/);
+    const hi = insns[i]!.match(/^lui\s+\$?(\w+),\s*%hi\(([^)]+)\)/);
     if (!hi) continue;
-    const lo = insns[i + 1].match(/^l\w+\s+\$(\w+),\s*%lo\(([^)]+)\)\(\$(\w+)\)/);
+    if (kind === "gas" && i + 2 < insns.length) {
+      const add = insns[i + 1]!.match(/^addu\s+\$?(\w+),\s*\$?(\w+),\s*\$?(\w+)/);
+      const low = insns[i + 2]!.match(/^l\w+\s+\$?(\w+),\s*%lo\(([^)]+)\)\(\$?(\w+)\)/);
+      if (add && low && add[1] === hi[1] && (add[2] === hi[1] && add[3] !== hi[1] || add[3] === hi[1] && add[2] !== hi[1]) &&
+          low[1] === hi[1] && low[3] === hi[1] && low[2] === hi[2]) pairs.push(insns.slice(i, i + 3).join("  /  "));
+    }
+    const lo = insns[i + 1]!.match(/^l\w+\s+\$?(\w+),\s*%lo\(([^)]+)\)\(\$?(\w+)\)/);
     if (lo && lo[1] === hi[1] && lo[3] === hi[1] && lo[2] === hi[2]) {
       pairs.push(`${insns[i]}  /  ${insns[i + 1]}`);
     }
   }
-  if (pairs.length === 0) return [];
+  return pairs;
+}
 
-  const hasOverride = (loadFlagOverrides().get(name)?.length ?? 0) > 0;
-  const see = [
-    "prompts/reference/flags.md",
-    "notes/research/func_800165D8-code-region-fold-and-allocation.md",
-    "notes/research/func_80016C08-tu-owned-globals-and-gp-relative-addressing.md",
-  ];
-  if (hasOverride) {
-    return [{
-      detector: "flag-fingerprint",
-      severity: "info",
-      summary: "symbolic lui/lw self-clobber pair(s); a per-file flag override already covers this function",
-      evidence: pairs,
-      see,
-    }];
-  }
-
-  /* The fingerprint is a fact about the target and stays in the evidence
-   * whatever the probe said. What a fresh measurement changes is whether the
-   * flag is still the ACTIVE remedy to chase. */
-  const cached = flagProbeConclusion(name, srcText);
-  if (cached.fresh && cached.report.conclusion === "not-supported-current-source") {
-    return [{
-      detector: "flag-fingerprint",
-      severity: "info",
-      summary:
-        "symbolic lui/lw self-clobber pair(s) in the target, but a fresh psx_flag_probe run measured " +
-        "the current source does not support this flag hypothesis; continue source-shape/SDK " +
-        "reconstruction. The fingerprint stands — it is scoped to this source, not to every source shape.",
-      evidence: [
-        ...pairs,
-        ...cached.report.candidates.map((candidate) => `${candidate.label}: ${candidate.reason}`),
-      ],
-      see,
-    }];
-  }
-  if (cached.fresh && cached.report.conclusion === "supported") {
-    return [{
-      detector: "flag-fingerprint",
-      severity: "signal",
-      summary:
-        "symbolic lui/lw self-clobber pair(s), and a fresh psx_flag_probe run measured a dominant flag " +
-        `column on the current source (${cached.report.dominantRows.join(", ")}). Apply the evidence bar ` +
-        "in psx_reference flags: fingerprint + dominant column + no contrary regional witness.",
-      evidence: [
-        ...pairs,
-        ...cached.report.candidates
-          .filter((candidate) => candidate.conclusion === "supported")
-          .map((candidate) => candidate.reason),
-      ],
-      see,
-    }];
-  }
-
-  return [{
-    detector: "flag-fingerprint",
-    severity: "signal",
-    summary:
-      "symbolic lui/lw self-clobber pair(s) — likely the unsplit assembler-macro " +
-      "load, unreachable under baseline split addresses (no source shape or " +
-      "allocation pins the lui against sched2 unless another insn touches its " +
-      "register). Run psx_flag_probe: its matrix carries -mno-split-addresses " +
-      "and the scheduling columns, and file-groupings.md may record the flag " +
-      "as this TU's fact. Apply the evidence bar in psx_reference flags.",
-    evidence: [
-      ...pairs,
-      cached.fresh
-        ? `a fresh probe exists but its conclusion is ${cached.report.conclusion}`
-        : `no fresh probe conclusion: ${cached.reason}`,
-    ],
-    see,
-  }];
+function detectFlagFingerprint(name: string, _srcText?: string): Finding[] {
+  const assembler = configuredAssembler(resolveFunctionTarget(name).flags);
+  const pairs = symbolicSelfClobberPairs(targetWordsOf(name).map(word => word.text), assembler.kind);
+  if (!pairs.length) return [];
+  return [{ detector: "flag-fingerprint", severity: "info",
+    summary: "Expected symbolic assembler expansion: absolute loads reuse their destination under both backends; GAS also does so for indexed loads with destination != base. This is not a compiler address-splitting flag fingerprint.",
+    evidence: pairs, see: ["configured assembler expansion/listing", "docs/toolchain.md"] }];
 }
 
 function detectCaptureRa(target: TargetFacts): Finding[] {

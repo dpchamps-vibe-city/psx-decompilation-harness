@@ -25,7 +25,7 @@ export function seedOracle(directory: string, withheld: string[] = [], permitted
   const bundles = new Map<string, VerifiedSeedBundle>(), timings: PhaseTiming[] = [];
   let sharedInputs: string | undefined;
   const sharedIdentity = (fresh = false) => !fresh && sharedInputs ? sharedInputs : sharedInputs = digest(JSON.stringify({ tools: configuredToolchainIdentity(), preprocessing: preprocessingTools(), inputs: snapshot(projectRoot(), [
-    ...buildToolInputs(projectRoot()), "toolchain.json", "build/dep_syms.txt", "build/lib_bss_syms.txt", "configs", "tools/agent", "tools/lib", "tools/vendor/tree-sitter-c", "tools/vendor/maspsx/maspsx.py", "tools/vendor/maspsx/maspsx", "package-lock.json",
+    ...buildToolInputs(projectRoot()), "toolchain.json", "build/dep_syms.txt", "build/lib_bss_syms.txt", "configs", "tools/agent", "tools/lib", "tools/vendor/tree-sitter-c", "package-lock.json",
     "build/engine_syms.txt", ...loadContainers().flatMap((c) => [containerTargetPath(c), c.paths.asmDir, c.paths.ldScript, c.paths.undefinedFuncs, c.paths.undefinedSyms]),
   ], (p) => !p.endsWith(".test.ts") && !p.endsWith(".pyc") && !p.endsWith("project-profile.md")) }));
   const get = (name: string): Prototype | undefined => {

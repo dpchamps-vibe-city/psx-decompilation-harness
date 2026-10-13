@@ -20,11 +20,11 @@ import { projectRoot } from "../lib/runtimeContext.js";
  *   npx tsx tools/agent/residualObjective.ts <function> --dir build/variants --block 6
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { normalizeFunctionName, resolveSource } from "./decompToolchain.js";
 import { type EnsuredArtifact, projectPath, renderProvenance } from "./provenance.js";
-import { priorMeasurement, recordExperiment } from "./experimentLedger.js";
+import { priorMeasurement, recordExperiment, type MeasurementEvidence } from "./experimentLedger.js";
 import { createHash } from "node:crypto";
 import {
   compareObjectives,
@@ -39,12 +39,14 @@ import { allocationDominant, fingerprintWebPartition } from "../diagnostics/fing
 import { addressedWebFacts, renderWebDiff, type PartitionDiff } from "../diagnostics/webPartitionDiff.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { readRelocatableObject, relocatableOutputIdentity } from "../lib/relocatableObject.js";
+import { createMeasurementRun, snapshotMeasurementSource, assertMeasurementSourceUnchanged } from "./pipeline-reversal/measurement.js";
 
 export interface Entry {
   label: string;
   webDiff?: PartitionDiff;
   webUnavailable?: string;
   source?: string;
+  measurement?: MeasurementEvidence;
   /** Set when this row is an INCLUDE_ASM stub: there is nothing to score. */
   stub?: boolean;
   objective: ResidualObjective;
@@ -150,14 +152,21 @@ function stubEntry(label: string, source?: string): Entry {
   return entry;
 }
 
-function score(functionName: string, label: string, source?: string): Entry {
+function score(functionName: string, label: string, directory: string, source?: string): Entry {
+  const selected = resolveSource(functionName, source);
+  const snapshot = snapshotMeasurementSource(selected, directory);
   const artifacts = reversePipeline({
     functionName,
     replay: false,
-    ...(source ? { source, outputDirectory: join(projectRoot(), "build/pipelineReversal", functionName, "objective", label) } : {}),
+    outputDirectory: directory,
+    ...(source ? { source } : {}),
   });
   const entry: Entry = {
     label,
+    measurement: { directory: projectPath(directory), sourceSnapshot: projectPath(snapshot),
+      object: projectPath(artifacts.objectPath),
+      objectSha256: createHash("sha256").update(readFileSync(artifacts.objectPath)).digest("hex"),
+      report: projectPath(join(directory, "report.json")) },
     objective: artifacts.report.objective,
     assemblerExpansion: artifacts.report.assemblerExpansion,
     residualOwner: artifacts.report.residualOwner,
@@ -185,6 +194,7 @@ function score(functionName: string, label: string, source?: string): Entry {
       else entry.webUnavailable = fingerprint.status;
     } catch (error) { entry.webUnavailable = String(error); }
   }
+  assertMeasurementSourceUnchanged(selected, snapshot);
   return entry;
 }
 
@@ -259,7 +269,7 @@ export function residualReportJson(functionName: string, entries: Entry[], block
   return {
     function: functionName, block, best: best?.label ?? null,
     entries: entries.map(entry => ({
-      label: entry.label, source: entry.source, stub: Boolean(entry.stub),
+      label: entry.label, source: entry.source, measurement: entry.measurement, stub: Boolean(entry.stub),
       matchedWords: entry.matchedWords, totalWords: entry.totalWords, objective: entry.objective,
       residualOwner: entry.residualOwner ?? (entry.stub ? "not applicable — no C candidate" : "not established"),
       rawDifferences: entry.rawDifferences ?? null,
@@ -376,7 +386,7 @@ export function renderResidualReport(functionName: string, entries: Entry[], blo
       lines.push("      Raw register, immediate, symbol and operand differences:");
       for (const line of differingWords(functionName, best)) lines.push(`      ${line}`);
       lines.push("      Use psx_compiler_trace with src set to this measured candidate. The original compiler input is unknown.");
-      if (best.assemblerExpansion) lines.push(`      Optional candidate production receipt (not origin evidence): ${best.assemblerExpansion.receipt}`);
+      if (best.assemblerExpansion) lines.push(`      Optional configured assembler expansion receipt (not origin evidence): ${best.assemblerExpansion.receipt}`);
     } else {
       lines.push("NEXT: no open block — the residual is outside the per-block reading; read the full reversal report.");
     }
@@ -424,7 +434,8 @@ function recordAndWarn(functionName: string, entries: Entry[]): string {
   for (const entry of entries) {
     if (entry.stub) continue;
     const sourcePath = entry.source ?? resolveSource(functionName);
-    const sourceText = readFileSync(sourcePath, "utf8");
+    const sourceText = readFileSync(entry.measurement?.sourceSnapshot
+      ? resolve(projectRoot(), entry.measurement.sourceSnapshot) : sourcePath, "utf8");
     const target = resolveFunctionTarget(functionName);
     const dependencies = Object.entries(entry.provenance.provenance.files).filter(([p]) => /\.(h|inc)$/.test(p));
     const domain = comparisonDomain(entry.targetHash!,
@@ -439,6 +450,7 @@ function recordAndWarn(functionName: string, entries: Entry[]): string {
       functionName,
       source: sourcePath,
       sourceText,
+      ...(entry.measurement ? { measurement: entry.measurement } : {}),
       objectPath: entry.provenance.value.object,
       outputHash: entry.objectHash,
       comparisonDomain: domain,
@@ -459,6 +471,7 @@ const isCLI = process.argv[1]?.endsWith("residualObjective.ts");
 if (isCLI) {
   try {
     const options = parseCli(process.argv.slice(2));
+    const run = createMeasurementRun(options.functionName, options.sources);
     /* The baseline row is labelled with the file it measured, not "baseline".
      * A row that names no source reads as "the current state" whatever it was
      * actually derived from, which is how a stale object went unnoticed for a
@@ -466,7 +479,7 @@ if (isCLI) {
     const baselineSource = projectPath(resolveSource(options.functionName));
     let entries: Entry[];
     try {
-      entries = [score(options.functionName, baselineSource)];
+      entries = [score(options.functionName, baselineSource, join(run, "baseline"))];
     } catch (error) {
       /* A stub baseline is only fatal when it is the only thing being asked
          about. With candidates to score it is a row, not a failure. */
@@ -474,19 +487,23 @@ if (isCLI) {
       entries = [stubEntry(baselineSource, baselineSource)];
     }
     options.sources.forEach((source, index) => {
-      entries.push(score(options.functionName, `v${index + 1}:${source.split("/").pop()}`, source));
+      entries.push(score(options.functionName, `v${index + 1}:${source.split("/").pop()}`, join(run, `v${index + 1}`), source));
     });
     /* Recorded on both output paths. The loop takes its end-of-turn reading
        with `--json`, and while that path skipped the ledger the stall counter
        was counting over a history with the loop's own measurements missing
        from it — the majority of them, on any function the loop worked. */
     const recorded = recordAndWarn(options.functionName, entries);
+    writeFileSync(join(run, "measurement.json"), JSON.stringify({ schemaVersion: 1,
+      function: options.functionName, verification: resolveFunctionTarget(options.functionName).verification,
+      entries: entries.map(entry => ({ label: entry.label, source: entry.source,
+        stub: Boolean(entry.stub), measurement: entry.measurement, outputHash: entry.objectHash })) }, null, 2) + "\n");
     if (options.json) {
       console.log(JSON.stringify(residualReportJson(options.functionName, entries, options.block,
         recorded.split("\n").filter(Boolean)), null, 2));
     } else {
       console.log(renderResidualReport(options.functionName, entries, options.block));
-      console.log("");
+      console.log(`\nMeasurement artifacts: ${projectPath(run)}/measurement.json`);
       console.log(recorded);
     }
   } catch (error) {

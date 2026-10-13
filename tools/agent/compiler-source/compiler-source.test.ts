@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { createRuntimeContext, inRuntimeContext } from "../../lib/runtimeContext.js";
 import { digest } from "../../lib/contentCache.js";
 import { loadToolchain } from "../../lib/toolchain.js";
-import { definitionText, findDefinitions, findDumpPass, findPatterns, referencesIn } from "./query.js";
+import { definitionText, findDefinitions, findDumpPass, findPatterns, referencesIn, grep, grepFiles } from "./query.js";
 
 /* The vendored tree is the source cc1 was built from. If it drifts, every
  * citation taken from it silently stops describing the real compiler. */
@@ -186,6 +186,42 @@ test("project-owned compiler source survives resolved-version calls and rejects 
     writeFileSync(join(root, "compiler-input/src/gcc/marker.c"), source);
     writeFileSync(join(root, "cc1"), "different compiler");
     assert.throws(() => loadIndex(), /Compiler-source binding mismatch/);
+  });
+});
+
+test("raw grep covers machine descriptions independently of C parser health and refuses empty file scopes", t => {
+  const root = mkdtempSync(join(tmpdir(), "gcc-md-grep-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const config = structuredClone(loadToolchain());
+  config.compiler.source = { origin: "project", path: "compiler-input" };
+  config.tools.cc1 = { origin: "project", path: "cc1" };
+  const binary = "synthetic compiler identity, never executed";
+  writeFileSync(join(root, "toolchain.json"), JSON.stringify(config));
+  writeFileSync(join(root, "cc1"), binary);
+  const files = {
+    "gcc/config/mips/mips.md": '(define_insn "load_marker" [] "" "lw %0,%1")\n',
+    "gcc/marker.c": "int c_marker(void) { return 7; }\n",
+  };
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(join(root, "compiler-input/src", file, ".."), { recursive: true });
+    writeFileSync(join(root, "compiler-input/src", file), source);
+  }
+  writeFileSync(join(root, "compiler-input/pin.json"), JSON.stringify({
+    name: "synthetic", gccVersion: config.compiler.version,
+    correspondsTo: { binary: "cc1", binarySha256: digest(binary), recipe: "fixture", target: "synthetic" },
+    tree: { root: "src", files: 2, sha256: digest(Object.entries(files).sort(([a], [b]) => a.localeCompare(b))
+      .map(([file, source]) => `${digest(source)}  ${file}\n`).join("")) },
+    included: ["fixture"], excluded: ["production sources"],
+  }));
+  inRuntimeContext(createRuntimeContext(root), () => {
+    const index = loadIndex();
+    assert.ok(!index.health.some(file => file.file.endsWith("mips.md")), "MD is not parsed as C");
+    assert.deepEqual(grepFiles(index, "mips.md"), ["gcc/config/mips/mips.md"]);
+    assert.deepEqual(grep(index, /load_marker/), [{ file: "gcc/config/mips/mips.md", line: 1,
+      text: files["gcc/config/mips/mips.md"].trim() }]);
+    assert.equal(grep(index, /not_present/, grepFiles(index, "mips.md")).length, 0, "a real zero-hit search");
+    assert.throws(() => grepFiles(index, "nonexistent.md"), /no search was performed/);
+    assert.throws(() => grep(index, /load_marker/, []), /no search was performed/);
   });
 });
 

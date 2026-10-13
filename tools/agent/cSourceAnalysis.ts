@@ -280,7 +280,18 @@ export function analyzeCFile(path: string): CSourceReport {
  * disabled text is not mistaken for a declaration.
  */
 export function handsSymbolToAssembler(source: string, symbol: string): boolean {
-  return analyzeCSource(source).includeAsm.some((site) => site.symbol === symbol);
+  const tree = parseC(biosFunctionProjection(source).source);
+  let found = false;
+  try {
+    walkActiveC(tree.rootNode, node => {
+      if (node.type !== "call_expression" || field(node, "function")?.text !== "INCLUDE_ASM") return true;
+      const argumentsNode = field(node, "arguments");
+      const name = argumentsNode && namedChildren(argumentsNode).find(child => child.type === "identifier");
+      if (name?.text === symbol) found = true;
+      return true;
+    });
+  } finally { tree.delete(); }
+  return found;
 }
 
 export function fileHandsSymbolToAssembler(path: string, symbol: string): boolean {

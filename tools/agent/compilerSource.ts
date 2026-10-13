@@ -25,7 +25,7 @@
 import { loadIndex, loadPin, verifyTree, verifyCompilerBinding, vendorDir, vendoredVersions, resolveVersion, type Definition } from "./compiler-source/index.js";
 import { configuredGccVersion } from "./decompToolchain.js";
 import {
-  definitionText, findDefinitions, findDumpPass, findPatterns, grep,
+  definitionText, findDefinitions, findDumpPass, findPatterns, grep, grepFiles,
   patternText, references, enclosingDefinition,
 } from "./compiler-source/query.js";
 
@@ -231,12 +231,13 @@ switch (command) {
   case "grep": {
     if (!subject) usage();
     const index = loadIndex(version);
-    const scope = fileGlob ? index.health.filter((entry) => matchesFile(entry.file)).map((entry) => entry.file) : undefined;
+    const scope = grepFiles(index, fileGlob);
     const found = grep(index, new RegExp(subject), scope);
     if (json) { emit(found); break; }
     for (const hit of found.slice(0, limit)) console.log(`${hit.file}:${hit.line}  ${hit.text}`);
     if (found.length > limit) console.log(`… ${found.length - limit} more (--limit)`);
-    console.log(`\n${found.length} line(s). ${scopeNote()}`);
+    console.log(`\n${found.length} line(s). Searched ${scope.length} C/H/MD file(s)` +
+      `${fileGlob ? ` matching ${JSON.stringify(fileGlob)}` : ""}. ${scopeNote()}`);
     break;
   }
 

@@ -46,12 +46,14 @@ import type { MirInsn, MirProgram } from "../pipeline-reversal/types.js";
 import { align, ngrams } from "./align.js";
 import { tokensAt, type Tier } from "./normalize.js";
 import { compatibility, fingerprintOf, type ToolchainFingerprint } from "./fingerprint.js";
+import { parseC, walk } from "../residual-source-search/tree-sitter-c.js";
 
 /** Why a function is not in the corpus. Reported, never silent. */
 export type Exclusion =
   | "include-asm"
   | "embedded-asm"
   | "register-asm"
+  | "asm-macro"
   | "not-matched"
   | "no-source"
   | "unliftable";
@@ -101,7 +103,24 @@ const ASSEMBLY_MARKERS: Array<{ pattern: RegExp; reason: Exclusion }> = [
   { pattern: /(?:^|[^\w$])asm\s*(?:volatile)?\s*\(/, reason: "embedded-asm" },
 ];
 
-export function excludedReason(sourceText: string): Exclusion | undefined {
+export function excludedReason(sourceText: string, assemblyMacros: readonly string[] = []): Exclusion | undefined {
+  /* Source-token checks alone miss wrappers whose assembly lives in a header.
+   * Only independently classified macro names supplied by the graph qualify;
+   * an arbitrary macro call is not evidence of assembly delegation. */
+  if (assemblyMacros.length) {
+    const macros = new Set(assemblyMacros);
+    for (const macro of macros) {
+      if (!/^[A-Za-z_]\w*$/.test(macro)) throw new Error(`Invalid classified assembly macro: ${macro}`);
+    }
+    let invoked = false;
+    walk(parseC(sourceText).rootNode, node => {
+      if (node.type === "comment" || node.type === "string_literal" || node.type === "char_literal") return false;
+      if ((node.type === "identifier" || node.type === "type_identifier") && macros.has(node.text) &&
+        sourceText.slice(node.endIndex).trimStart().startsWith("(")) invoked = true;
+      return !invoked;
+    });
+    if (invoked) return "asm-macro";
+  }
   for (const marker of ASSEMBLY_MARKERS) {
     if (marker.pattern.test(sourceText)) return marker.reason;
   }
@@ -191,6 +210,12 @@ export interface SearchHit {
   claim: string;
   distance: string;
   provenAxes: string[];
+}
+
+export function corpusCoverage(corpus: Corpus): { eligibleFunctions: number; representedFunctions: number; withoutRegions: string[] } {
+  const represented = new Set(corpus.regions.map(region => region.functionName));
+  return { eligibleFunctions: corpus.included.length, representedFunctions: represented.size,
+    withoutRegions: corpus.included.filter(name => !represented.has(name)) };
 }
 
 export class IdiomIndex {
@@ -285,9 +310,16 @@ export interface BuildOptions {
 }
 
 /** Every function whose source is clean, matched C, with where it lives. */
-export function corpusCandidates(): Array<{ functionName: string; sourcePath: string }> {
+export interface CorpusCandidate {
+  functionName: string;
+  sourcePath: string;
+  /** Graph classification of an assembly-backed platform wrapper, if present. */
+  assemblyMacros?: string[];
+}
+
+export function corpusCandidates(): CorpusCandidate[] {
   const graph = loadCallGraph(projectRoot());
-  const out: Array<{ functionName: string; sourcePath: string }> = [];
+  const out: CorpusCandidate[] = [];
   const library = loadLibraryProject();
   const containers = library ? [] : loadContainers();
   const members = library ? libraryMembers() : [];
@@ -309,7 +341,9 @@ export function corpusCandidates(): Array<{ functionName: string; sourcePath: st
       if (!found) continue;
       path = found;
     }
-    out.push({ functionName: entry.name, sourcePath: path });
+    const platform = (entry as typeof entry & { platformMacro?: { macro?: unknown } }).platformMacro;
+    out.push({ functionName: entry.name, sourcePath: path,
+      ...(typeof platform?.macro === "string" ? { assemblyMacros: [platform.macro] } : {}) });
   }
   return out;
 }
@@ -356,7 +390,7 @@ export function loadCorpus(
       if (skip.has(candidate.functionName)) return;
       /* Eligibility is cheap and always current. A C edit never invalidates the
          original-code lift, and an excluded query never poisons other queries. */
-      const reason = excludedReason(readFileSync(candidate.sourcePath, "utf8"));
+      const reason = excludedReason(readFileSync(candidate.sourcePath, "utf8"), candidate.assemblyMacros);
       if (reason) { corpus.excluded.push({ functionName: candidate.functionName, reason }); return; }
       const target = resolveFunctionTarget(candidate.functionName);
       const location = target.coordinate.kind === "image" ? requireFunctionLocation(candidate.functionName) : undefined;
@@ -401,7 +435,7 @@ function buildCorpusScoped(lift: (functionName: string) => MirProgram | undefine
   candidates.forEach((candidate, index) => {
     options.onProgress?.(index, candidates.length, candidate.functionName);
     const text = readFileSync(candidate.sourcePath, "utf8");
-    const reason = excludedReason(text);
+    const reason = excludedReason(text, candidate.assemblyMacros);
     if (reason) {
       excluded.push({ functionName: candidate.functionName, reason });
       return;

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "../../testing/runtimeTestContext.js";
-import { IdiomIndex, excludedReason, regionsOf, type Corpus } from "./corpus.js";
+import { IdiomIndex, excludedReason, regionsOf, corpusCoverage, type Corpus } from "./corpus.js";
 import { compatibility, type ToolchainFingerprint } from "./fingerprint.js";
 import type { MirInsn, MirProgram } from "../pipeline-reversal/types.js";
 
@@ -36,6 +36,22 @@ test("a source that hands work to the assembler is excluded, and why is named", 
   /* Clean C, including a translation unit that only *mentions* assembly in
      prose, stays in the corpus. */
   assert.equal(excludedReason("/* no asm here, just a comment about asm */\nint f(void) { return 0; }"), undefined);
+});
+
+test("classified assembly-backed header macros are not clean-C donors", () => {
+  const macro = "FIXTURE_ASM_WRAPPER";
+  assert.equal(excludedReason(`${macro}(int, f, (int arg), 0xA0, 7);`, [macro]), "asm-macro");
+  assert.equal(excludedReason(`int f(void) { return ${macro}(7); }`, [macro]), "asm-macro");
+  assert.equal(excludedReason(`int f(void) { return ${macro}(7); }`), undefined, "unknown macros are not assembly evidence");
+  assert.equal(excludedReason(`/* ${macro}(7) */\nint f(void) { return 7; }`, [macro]), undefined);
+  assert.equal(excludedReason(`const char *note = "${macro}(7)";`, [macro]), undefined);
+});
+
+test("corpus coverage counts represented functions, not eligible functions with empty regions", () => {
+  const corpus: Corpus = { tier: 0, fingerprints: {}, included: ["long", "short"], excluded: [],
+    regions: [{ functionName: "long", kind: "block", block: 0, from: 0, to: 4,
+      tokens: ["a", "b", "c", "d"], fingerprint: "fp" }] };
+  assert.deepEqual(corpusCoverage(corpus), { eligibleFunctions: 2, representedFunctions: 1, withoutRegions: ["short"] });
 });
 
 test("regions cover blocks, loops and windows, and skip runs too short to mean anything", () => {

@@ -186,6 +186,8 @@ function entry(label: string, population: number, stub = false): Entry {
 test("JSON preserves raw evidence and interpretation; work belongs to the best measured nonstub", () => {
   const baseline = entry("live", 0, true), worse = entry("worse", 5), best = entry("draft", 2);
   best.residualOwner = "not established";
+  best.measurement = { directory: "build/measurement-1", sourceSnapshot: "build/measurement-1/selected-source.c",
+    object: "build/measurement-1/candidate.o", objectSha256: "fixture", report: "build/measurement-1/report.json" };
   best.analysis = { confidence: "provisional", detail: "replay not verified" };
   best.rawDifferences = { coordinate: { kind: "section", section: ".text", offset: 0, size: 52, inferredSize: false }, rows: [] };
   const entries = [baseline, worse, best];
@@ -194,6 +196,7 @@ test("JSON preserves raw evidence and interpretation; work belongs to the best m
   assert.equal(report.best, "draft"); assert.equal(report.work[0]?.block.population, 2);
   assert.equal(report.entries[0]!.stub, true);
   assert.equal(report.entries[2]!.residualOwner, "not established");
+  assert.deepEqual(report.entries[2]!.measurement, best.measurement);
   assert.deepEqual(report.entries[2]!.rawDifferences, best.rawDifferences);
   assert.equal(report.entries[2]!.interpretation.confidence, "provisional");
   best.objective = entry("zero", 0).objective;

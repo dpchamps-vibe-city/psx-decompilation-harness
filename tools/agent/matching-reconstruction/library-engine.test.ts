@@ -63,6 +63,20 @@ test("BIOS fingerprint is structural, checks the delay slot, and never requests 
   }
 });
 
+test("SDK seven-word BIOS veneers require known constants and only their dead return epilogue", () => {
+  const words = [0x01405024, 0x354a00b0, 0x01204824, 0x01400008, 0x35290018, 0x03e00008, 0];
+  const decode = (values: number[]) => {
+    const bytes = Buffer.alloc(values.length * 4); values.forEach((word, i) => bytes.writeUInt32LE(word, i * 4));
+    return decodeBytes(bytes, 0);
+  };
+  assert.deepEqual(recognizeBiosVeneer(decode(words)), { vector: 0xb0, selector: 0x18, transferOffset: 12 });
+  for (const [index, word] of [[0, 0], [2, 0], [4, 0x35240018], [5, 0x24020001], [6, 0x24040001], [4, 0x354a00c0]]) {
+    const changed = [...words]; changed[index!] = word!;
+    assert.equal(recognizeBiosVeneer(decode(changed)), undefined, `reject altered word ${index}`);
+  }
+  assert.equal(recognizeBiosVeneer(decode([...words, 0x24020001])), undefined, "no hidden neighbor operations");
+});
+
 test("library reconstruction resolves owner-qualified BIOS targets without any executable", t => {
   const f = fixture(t);
   fixtureContext(f.root, () => {

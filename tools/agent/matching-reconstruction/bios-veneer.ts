@@ -8,7 +8,8 @@ export interface BiosVeneer {
 
 /** A narrow original-word fingerprint, not a symbol-name heuristic. A PS-X
  * BIOS dispatch veneer preserves a0..a3 and ra, sets t1, and tail-jumps via t2.
- * Only constant setup and alignment nops are admitted. */
+ * Only constant setup and alignment nops are admitted, plus the SDK's dead
+ * jr-ra/nop epilogue after the tail jump. This is not a C policy exception. */
 export function recognizeBiosVeneer(insns: DecodedInsn[]): BiosVeneer | undefined {
   const jump = insns.findIndex(insn => insn.op === "jr" && insn.rs === 10);
   if (jump < 1 || jump + 1 >= insns.length) return undefined;
@@ -18,12 +19,20 @@ export function recognizeBiosVeneer(insns: DecodedInsn[]): BiosVeneer | undefine
     if (insn.relocations?.length) return undefined;
     if (index === jump) { vector = constants.get(10); continue; }
     if (insn.op === "nop") continue;
-    if (index > jump + 1) return undefined;
+    if (index > jump + 1) {
+      if (index === jump + 2 && insn.op === "jr" && insn.rs === 31 && insns[index + 1]?.op === "nop") continue;
+      return undefined;
+    }
     const destination = definedRegister(insn);
     if (destination !== 9 && destination !== 10) return undefined;
     if (index > jump && destination === 10) return undefined;
-    if (insn.rs !== 0 || (insn.op !== "addiu" && insn.op !== "ori")) return undefined;
-    constants.set(destination, (insn.op === "ori" ? insn.uimm : insn.simm) >>> 0);
+    if (insn.op === "and" && insn.rd === destination && insn.rs === destination && insn.rt === 0) {
+      constants.set(destination, 0); continue;
+    }
+    if (insn.op !== "addiu" && insn.op !== "ori") return undefined;
+    const base = insn.rs === 0 ? 0 : insn.rs === destination ? constants.get(destination) : undefined;
+    if (base === undefined) return undefined;
+    constants.set(destination, (insn.op === "ori" ? base | insn.uimm : base + insn.simm) >>> 0);
   }
   const selector = constants.get(9);
   if (vector === undefined || ![0xa0, 0xb0, 0xc0].includes(vector) || selector === undefined || selector > 0xff) return undefined;

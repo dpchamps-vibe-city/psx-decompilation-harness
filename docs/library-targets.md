@@ -47,7 +47,12 @@ LNK encoding. Image SDK integration's `patchLibBss`/placement/signature machiner
 is not run on library targets.
 
 Keep compiler executables, candidate version, flags, defines and include search
-paths in `toolchain.json`. This remains cpp → cc1 → configured assembler
+paths in `toolchain.json`. On a case-sensitive host, DOS-uppercase SDK filenames
+can break the headers' own lowercase includes. Use a provenance-checked,
+case-normalized reference tree; do not repair immutable originals or let host
+Linux headers satisfy SDK includes. With a self-contained SDK, `flags.cpp`
+should include `-nostdinc`; verify the complete reference-header set below.
+This remains cpp → cc1 → configured assembler
 (MASPSX → GAS, or direct GAS with named compatibility rewrites);
 config does not identify the historical compiler or implement a new driver.
 Named profiles can replace any flag array, `assembler` and `includeDirs`. Omitted values
@@ -110,10 +115,25 @@ prototype scope, function order and per-member flags. Every experiment replaces
 only its selected function include in that same driver. There is no isolated
 compile, post-match stitching or second acceptance environment.
 
+Private entries can also be witnessed by section-relative `R_MIPS_26` JAL
+relocations. Discovery rejects interior sized symbols, fallthrough and
+cross-boundary shared blocks; raw J fields and imports are not boundaries.
+These bounds remain **inferred**, not recovered historical sizes. The adapter
+feeds original section/file coordinates and bounds to the disassembler before
+call discovery, avoiding ET_REL addends being mistaken for listing addresses.
+Complete original code words and boundaries are validated before publishing.
+Private helper names retain the established local listing spelling so already
+matched callers do not acquire fictitious imports; authoritative coordinates
+remain member/section/offset, never those numeric names as runtime addresses.
+
 `split-all` conservatively migrates legacy sources after batch AST preflight.
 It preserves function bodies and declaration order, refuses conflicting copies,
 local-header ambiguities and conditional/location-dependent splits, and never
-chooses between edits. Existing directory TUs are not overwritten. The
+chooses between edits. Existing directory TUs are not overwritten. Newly witnessed private entries
+may extend a directory manifest only by subdividing exclusive canonical
+original-assembly backlog. Existing C, declarations, data and function filenames
+are preserved; a real-C owner or conflicting files require review. Disassembly
+and source preflights run before publishing the batch. The
 `grouped`/`member-id` modes remain whole-member C files.
 
 Reference assembly stays under `build/libraries/nonmatchings/<member-id>/`.
@@ -163,6 +183,38 @@ Static completions retain their packet/evidence and mark model documentation
 Agent-authored matches retain the configured notes workflow. Legacy monolithic
 multi-function TUs still require explicit integration. Untouched INCLUDE_ASM
 compiling is never proof that a draft compiles.
+
+## End-to-end onboarding check
+
+Before model dispatch, test a **real mixed member** with private callees/data,
+not just a tiny leaf or synthetic compiler smoke test:
+
+```sh
+npm run split-all
+npm run library -- check-splits
+npm run library -- preflight 'MEMBER_ID::Symbol'
+npm run check-all
+```
+
+`check-splits` compiles every published original assembly fragment in generated
+reference scaffolds under the configured per-member production toolchain and
+runs the unchanged whole-member byte/symbol/relocation oracle. It does **not**
+compile or certify live reconstructed C and writes no acceptance records.
+`preflight` preprocesses all configured SDK reference headers, validates the
+ordered TU contract, compiles the actual owning TU, checks the whole member,
+and freshly exercises selected-function m2c preparation without promoting
+source or relying on an earlier cached draft. Reports live in
+`build/libraryPreflight/`; failures return nonzero. Draft generation,
+compilation and comparison are separate reported claims: setup can pass while
+an unknown-type draft still needs preparation. Only `check-all`/normal
+finalization certifies live C. A split-fidelity pass cannot hide a failing C
+attempt, and none of these setup checks establishes C completion.
+
+The synthetic regression exercises the same production route with a size-zero
+export, relocation-only private helper, seven-word BIOS veneer, neighboring
+data and DOS-cased headers; negative controls cover header casing and differing
+neighbor data. Private BIOS veneers are classified from original words, not
+queued as ordinary C or granted new assembly-policy exceptions.
 
 ## Oracle, gates and progress
 

@@ -106,6 +106,54 @@ export function writeLibraryTu(member: LibraryMember, source: string, root: stri
   for (const [path, text] of plan.files) writeFileSync(join(directory, path), text, { flag: "wx" });
   writeFileSync(join(root, member.source), JSON.stringify(plan.manifest, null, 2) + "\n", { flag: "wx" });
 }
+/** Newly witnessed private entries may subdivide ONLY an exclusive original
+ * backlog fragment. Real C, headers, existing fragments and original bytes are
+ * never rewritten to make a new inventory fit. Preflight the entire batch. */
+export function extendLibraryBacklog(members: LibraryMember[], root: string): void {
+  const plans: Array<{ path: string; before?: string; after: string }> = [];
+  const observed = new Map<string, string>();
+  for (const member of members.filter(m => isDirectoryTu(m) && existsSync(join(root, m.source)))) {
+    const path = join(root, member.source), before = readFileSync(path, "utf8"); observed.set(path, before);
+    const manifest = readLibraryTu(member, root, { allowDiscoveredBacklog: true });
+    const present = new Set(manifest.parts.map(p => p.symbol)), missing = member.functions.filter(f => !present.has(f.name));
+    if (!missing.length) continue;
+    const additions = new Map<string, LibraryTuPart[]>();
+    for (const fn of missing) {
+      const owners = member.functions.filter(f => f.section === fn.section && present.has(f.name)).sort((a, b) => a.offset - b.offset);
+      const owner = owners.findLast(f => f.offset < fn.offset) ?? owners[0];
+      if (!owner || fn.discovery?.kind !== "call-relocation") throw new Error(`Private split needs source review: ${member.id}::${fn.name}`);
+      const part = manifest.parts.find(p => p.symbol === owner.name)!, source = join(dirname(path), part.path), text = readFileSync(source, "utf8");
+      observed.set(source, text);
+      const guard = analyzeCSource(text);
+      if (!inspectLibraryPart(text, part).stub || guard.includeAsm[0]!.folder !== `build/libraries/nonmatchings/${member.id}`)
+        throw new Error(`Private split needs source review: ${source} contains real C or noncanonical assembly; no edits made`);
+      const next = { path: libraryFunctionFilename(member, fn.name), symbol: fn.name };
+      const target = join(dirname(path), next.path), after = `INCLUDE_ASM("build/libraries/nonmatchings/${member.id}", ${fn.name});\n`;
+      inspectLibraryPart(after, next);
+      if (manifest.parts.some(p => p.path.toLowerCase() === next.path.toLowerCase()) || existsSync(target))
+        throw new Error(`Private split destination already exists: ${target}; no edits made`);
+      plans.push({ path: target, after });
+      const group = additions.get(owner.name) ?? []; group.push(next); additions.set(owner.name, group);
+    }
+    const parts = manifest.parts.flatMap(part => {
+      const group = part.symbol ? additions.get(part.symbol) ?? [] : [];
+      const owner = member.functions.find(f => f.name === part.symbol);
+      const earlier = group.filter(p => member.functions.find(f => f.name === p.symbol)!.offset < owner!.offset);
+      return [...earlier, part, ...group.filter(p => !earlier.includes(p))];
+    });
+    plans.push({ path, before, after: JSON.stringify({ ...manifest, parts }, null, 2) + "\n" });
+  }
+  for (const [path, before] of observed) if (readFileSync(path, "utf8") !== before) throw new Error(`Source changed during private split: ${path}`);
+  for (const plan of plans) {
+    if (plan.before === undefined) writeFileSync(plan.path, plan.after, { flag: "wx" });
+    else writeFileSync(plan.path, plan.after);
+  }
+  if (plans.length) {
+    mkdirSync(join(root, "build/libraries"), { recursive: true });
+    writeFileSync(join(root, "build/libraries/private-split-migration.json"), JSON.stringify({ schemaVersion: 1,
+      changes: plans.map(p => ({ path: p.path, ...(p.before ? { beforeHash: hash(p.before) } : {}), afterHash: hash(p.after) })) }, null, 2) + "\n");
+  }
+}
 function migrateLibraryTuDirectories(members: LibraryMember[], project: LibraryProject, root: string): LibrarySourceMove[] {
   const plans: Array<{ member: LibraryMember; from: string; content: string; plan: ReturnType<typeof planLibraryTu> }> = [];
   const inputs = new Map(libraryInputFiles(project, root).map(input => [input.path, input]));
@@ -117,7 +165,7 @@ function migrateLibraryTuDirectories(members: LibraryMember[], project: LibraryP
     const candidates = [...new Set([grouped, legacyLibrarySource(project, member.id, member.member)])].filter(p => existsSync(join(root, p)));
     if (existsSync(join(root, member.source))) {
       if (candidates.length) throw new Error(`Conflicting monolithic and directory TU: ${member.source}; no edits made`);
-      readLibraryTu(member, root); continue;
+      readLibraryTu(member, root, { allowDiscoveredBacklog: true }); continue;
     }
     if (!candidates.length) continue;
     const from = candidates[0]!;
@@ -135,6 +183,7 @@ function migrateLibraryTuDirectories(members: LibraryMember[], project: LibraryP
   // Preflight the entire batch, then publish directories before removing old
   // copies. The report keeps the source hash and exact ordered fragments.
   for (const p of plans) if (readFileSync(join(root, p.from), "utf8") !== p.content) throw new Error(`Source changed during TU migration: ${p.from}`);
+  extendLibraryBacklog(members, root);
   const moves = plans.map(p => ({ from: p.from, to: p.member.source, sha256: hash(p.content), action: "moved" as const }));
   for (const p of plans) {
     writeLibraryTu(p.member, p.content, root);

@@ -59,6 +59,17 @@ test("a measurement is recorded and read back", () => {
   assert.deepEqual(entries[0]!.key, [0, 0, 6, 30]);
 });
 
+test("immutable artifact receipts survive ledger serialization without inventing them for legacy rows", () => {
+  const name = uniqueFunction();
+  const measurement = { directory: "build/measurement-1", sourceSnapshot: "build/measurement-1/selected-source.c",
+    object: "build/measurement-1/candidate.o", objectSha256: "fixture hash", report: "build/measurement-1/report.json" };
+  recordExperiment({ ...entry(name, "src/a.c", "out1", [0, 0, 6, 30], "int a;"), measurement });
+  recordExperiment(entry(name, "src/b.c", "out2", [0, 0, 6, 29], "int b;"));
+  const rows = readLedger(name);
+  assert.deepEqual(rows[0]?.measurement, measurement);
+  assert.equal(rows[1]?.measurement, undefined);
+});
+
 test("re-measuring an unchanged source does not grow the ledger", () => {
   const name = uniqueFunction();
   recordExperiment(entry(name, "src/a.c", "out1", [0, 0, 6, 30], "int a;"));

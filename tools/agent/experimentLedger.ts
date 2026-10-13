@@ -42,6 +42,14 @@ import type { ResidualObjective } from "./pipeline-reversal/objective.js";
  */
 export const LEDGER_SCHEMA_VERSION = 2;
 
+export interface MeasurementEvidence {
+  directory: string;
+  sourceSnapshot: string;
+  object: string;
+  objectSha256: string;
+  report: string;
+}
+
 export interface LedgerEntry {
   schemaVersion: number;
   function: string;
@@ -69,6 +77,8 @@ export interface LedgerEntry {
   outputHash: string;
   comparisonDomain?: ComparisonDomain;
   producer?: { package?: string; location?: string };
+  /** Immutable run artifacts; absent on legacy/cache-only measurements. */
+  measurement?: MeasurementEvidence;
   /** The staged residual key: [control-flow, population, schedule, allocation]. */
   key: number[];
   /**
@@ -155,6 +165,7 @@ export function readLedger(functionName: string): LedgerEntry[] {
 
 export interface RecordInput {
   functionName: string;
+  measurement?: MeasurementEvidence;
   comparisonDomain?: ComparisonDomain;
   producer?: { package?: string; location?: string };
   source: string;
@@ -238,6 +249,7 @@ function appendExperiment(input: RecordInput, sourceHash: string, sourcePath: st
     outputHash: input.outputHash,
     ...(input.comparisonDomain ? { comparisonDomain: input.comparisonDomain } : {}),
     ...(input.producer ? { producer: input.producer } : {}),
+    ...(input.measurement ? { measurement: input.measurement } : {}),
     key: input.objective.key,
     exact: input.objective.exact === true,
     /* Only the blocks that are actually open, and only those the residual can

@@ -27,7 +27,7 @@ const { buildCorpus, corpusCandidates, excludedReason, loadCorpus } = await fixt
 
 test("incremental regions equal a frozen full build and exclusions do not poison later queries", () => withSymbolMetadata(() => {
   const candidates = corpusCandidates();
-  const eligible = candidates.filter(c => !excludedReason(readFileSync(c.sourcePath, "utf8"))).map(c => c.functionName);
+  const eligible = candidates.filter(c => !excludedReason(readFileSync(c.sourcePath, "utf8"), c.assemblyMacros)).map(c => c.functionName);
   assert.equal(eligible.length, 2);
   for (const name of eligible) {
     const { container } = requireFunctionLocation(name);
@@ -39,4 +39,26 @@ test("incremental regions equal a frozen full build and exclusions do not poison
   calls = 0; assert.deepEqual(loadCorpus(lift), full); assert.equal(calls, 0);
   loadCorpus(lift, { exclude: [eligible[0]!] }); assert.equal(calls, 0);
   assert.deepEqual(loadCorpus(lift), full); assert.equal(calls, 0);
+}));
+
+test("current assembly-macro eligibility is checked before reusing original-region caches", () => withSymbolMetadata(() => {
+  const graphPath = join(fixture.root, "build/callGraph.json");
+  const saved = readFileSync(graphPath, "utf8"), graph = JSON.parse(saved);
+  const name = "fixture_offset", macro = "FIXTURE_ASM_WRAPPER";
+  graph.functions.find((entry: { name: string }) => entry.name === name).platformMacro = { macro };
+  fixture.put("build/callGraph.json", JSON.stringify(graph));
+  fixture.put(`src/${name}.c`, `${macro}(int, ${name}, (int n), 0xA0, 7);\n`);
+  try {
+    assert.deepEqual(corpusCandidates().find(c => c.functionName === name)?.assemblyMacros, [macro]);
+    const check = (corpus: ReturnType<typeof buildCorpus>) => {
+      assert.ok(!corpus.included.includes(name));
+      assert.ok(!corpus.regions.some(region => region.functionName === name));
+      assert.ok(corpus.excluded.some(entry => entry.functionName === name && entry.reason === "asm-macro"));
+    };
+    check(buildCorpus(targetProgram));
+    check(loadCorpus(targetProgram));
+  } finally {
+    fixture.put("build/callGraph.json", saved);
+    fixture.put(`src/${name}.c`, sources.fixture_offset);
+  }
 }));

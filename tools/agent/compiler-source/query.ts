@@ -118,9 +118,20 @@ export interface GrepHit {
   text: string;
 }
 
+/** Resolve the actual raw-search domain; an empty scope is not a zero-hit search. */
+export function grepFiles(index: CompilerSourceIndex, fileSubstring?: string): string[] {
+  const files = index.searchFiles.filter(file => !fileSubstring || file.includes(fileSubstring));
+  if (files.length === 0) throw new Error(
+    `No compiler source files in grep scope ${JSON.stringify(fileSubstring ?? "all C/H/MD files")}. ` +
+    `The raw-search catalogue covers ${index.searchFiles.length} C/H/MD files; no search was performed.`,
+  );
+  return files;
+}
+
 export function grep(index: CompilerSourceIndex, pattern: RegExp, files?: string[]): GrepHit[] {
   const out: GrepHit[] = [];
-  const scope = files ?? index.health.map((entry) => entry.file);
+  const scope = files ?? grepFiles(index);
+  if (scope.length === 0) throw new Error("Empty compiler-source grep scope; no search was performed.");
   for (const file of scope) {
     const source = readSource(index.version, file);
     source.split("\n").forEach((text, offset) => {

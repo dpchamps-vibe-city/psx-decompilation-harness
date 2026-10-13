@@ -44,8 +44,11 @@ import { inverseAssembler } from "./pipeline-reversal/inverse-assembler.js";
 import { inverseDbr } from "./pipeline-reversal/inverse-dbr.js";
 import type { MirProgram } from "./pipeline-reversal/types.js";
 import { tokensAt, type Tier } from "./idiom-corpus/normalize.js";
-import { loadCorpus, IdiomIndex, type Corpus, type SearchHit } from "./idiom-corpus/corpus.js";
+import { loadCorpus, corpusCoverage, IdiomIndex, type Corpus, type SearchHit } from "./idiom-corpus/corpus.js";
 import { fingerprintOf } from "./idiom-corpus/fingerprint.js";
+import { scratchRegisterCensus } from "./idiom-corpus/scratch-census.js";
+import { withLibraryMetadata } from "../lib/libraryTargets.js";
+import { withSymbolMetadata } from "../lib/symbolIndex.js";
 
 /**
  * The original function's program, at the waypoint the residual is read at:
@@ -301,13 +304,18 @@ if (isCLI) {
       queryFingerprint: fingerprintOf(functionName!),
     });
 
+    const scratchCensus = withLibraryMetadata(() => withSymbolMetadata(() =>
+      scratchRegisterCensus(targetWordsOf(functionName!), corpus.included, targetWordsOf)));
+
     if (args.includes("--json")) {
       console.log(JSON.stringify({
         function: functionName,
         tier,
         block: blockArgument === undefined ? undefined : Number(blockArgument),
-        corpus: { regions: index.size, functions: corpus.included.length, excluded: corpus.excluded, buildMs },
+        corpus: { regions: index.size, functions: corpus.included.length, coverage: corpusCoverage(corpus),
+          excluded: corpus.excluded, buildMs },
         query: tokens,
+        scratchCensus: { queryFunction: functionName, queryScope: "whole original function before macro/slot inverses", ...scratchCensus },
         hits,
       }, null, 2));
     } else {
@@ -317,16 +325,30 @@ if (isCLI) {
       );
       const byReason = new Map<string, number>();
       for (const item of corpus.excluded) byReason.set(item.reason, (byReason.get(item.reason) ?? 0) + 1);
+      const coverage = corpusCoverage(corpus);
       console.log(
-        `corpus: ${index.size} regions from ${corpus.included.length} clean-C matched functions; ` +
+        `corpus: ${index.size} regions from ${coverage.representedFunctions} represented clean-C matched functions ` +
+        `(${coverage.eligibleFunctions} eligible, ${coverage.withoutRegions.length} without searchable regions); ` +
         `excluded ${[...byReason].map(([reason, count]) => `${count} ${reason}`).join(", ") || "none"}; ` +
         `built in ${buildMs} ms`,
       );
       console.log("");
+      if (scratchCensus.status !== "not-applicable") {
+        console.log(`RAW SCRATCH-REGISTER CENSUS (whole original query function): ${scratchCensus.status}; ` +
+          `${scratchCensus.scannedFunctions}/${scratchCensus.eligibleFunctions} eligible functions read`);
+        for (const pattern of scratchCensus.patterns) {
+          console.log(`  ${pattern.signature}: ${pattern.occurrences} occurrence(s) in ${pattern.functions} function(s)`);
+          for (const example of pattern.examples) console.log(`    ${example.function} at original word ${example.wordIndex}`);
+          if (pattern.examplesTruncated) console.log("    further occurrences counted but not listed");
+        }
+        for (const failure of scratchCensus.unreadable) console.log(`  UNREADABLE ${failure.function}: ${failure.detail}`);
+        console.log(`  ${scratchCensus.basis}`);
+        console.log("");
+      }
       if (hits.length === 0) {
         console.log("no region in the corpus shares a rare shape run with this query.");
-        console.log("That is a finding: this shape has no precedent in the matched set at this tier.");
-        console.log("Try --tier 1 (op classes, survives an addressing-macro difference) before concluding it.");
+        console.log("No donor retrieved by this n-gram search; this is not a raw-instruction pattern census.");
+        console.log("Try --tier 1 (op classes, survives an addressing-macro difference).");
       }
       hits.forEach((hit, position) => {
         for (const line of renderHit(hit, tokens, position)) console.log(line);

@@ -157,7 +157,7 @@ export interface FileHealth {
   errorNodes: number;
 }
 
-export const COMPILER_SOURCE_INDEX_FORMAT = 2;
+export const COMPILER_SOURCE_INDEX_FORMAT = 3;
 export interface CompilerSourceIndex {
   formatVersion: number;
   /** The GCC version this index describes; every query carries it forward. */
@@ -167,6 +167,8 @@ export interface CompilerSourceIndex {
   patterns: MachinePattern[];
   dumpPasses: DumpPass[];
   health: FileHealth[];
+  /** Raw-search coverage is independent of the C parser's health catalogue. */
+  searchFiles: string[];
   fileCount: number;
 }
 
@@ -640,6 +642,7 @@ export function buildIndex(version?: string): CompilerSourceIndex {
     patterns,
     dumpPasses,
     health,
+    searchFiles: files.filter(file => /\.(?:c|h|md)$/.test(file)),
     fileCount: files.length,
   };
 }
@@ -656,7 +659,8 @@ export function loadIndex(version?: string, refresh = false): CompilerSourceInde
   const cache = join(CACHE_DIR(), `index-${resolved}-${pin.tree.sha256}.json`);
   if (!refresh && existsSync(cache)) {
     const cached = JSON.parse(readFileSync(cache, "utf8")) as CompilerSourceIndex;
-    if (cached.formatVersion === COMPILER_SOURCE_INDEX_FORMAT && cached.treeSha256 === pin.tree.sha256 && cached.version === resolved) return cached;
+    if (cached.formatVersion === COMPILER_SOURCE_INDEX_FORMAT && Array.isArray(cached.searchFiles) &&
+      cached.treeSha256 === pin.tree.sha256 && cached.version === resolved) return cached;
   }
   const index = buildIndex(resolved);
   mkdirSync(CACHE_DIR(), { recursive: true });

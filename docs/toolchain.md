@@ -23,14 +23,16 @@ preparation, compiler analysis, SDK integration and Pi verification share it.
   diagnostic evidence; the harness does not dispatch on compiler versions.
   Legacy `capabilities` remain compatible when no provider is selected, but
   are ignored once `analysis` is configured. The production compile protocol
-  remains cpp → cc1 → maspsx → GAS; adding diagnostics does not replace it with
+  remains cpp → cc1 → configured assembler (MASPSX → GAS, or direct GAS with
+  named compatibility rewrites); adding diagnostics does not replace it with
   another compiler-driver protocol. Unknown providers report unavailable rather
   than borrowing a GCC parser or pass model.
 - `includeDirs`: shared cpp/GAS include search directories, anchored to the root.
 - `flags`: argument arrays for cpp, cc1, GAS, linker, maspsx, m2c and spimdisasm.
-  Definitions belong in cpp arguments; assembler semantics in maspsx arguments.
+  Definitions belong in cpp arguments. ASPSX emulation belongs in maspsx arguments;
+  direct GAS receives exactly `flags.as`, with no implicit optimization or `-G`.
 - `profiles`: named replacements for any flag array (cpp/cc1/GAS/linker/maspsx/
-  m2c/spimdisasm) and `includeDirs`. Omitted values inherit base; supplied arrays
+  m2c/spimdisasm), `assembler` and `includeDirs`. Omitted values inherit base; supplied arrays
   **replace**, not append. Production compilation selects the owner profile
   before preprocessing, so its defines/includes travel with its compile flags.
 - `containerProfiles`: explicitly select a profile by exact owner id, then
@@ -48,7 +50,7 @@ preparation, compiler analysis, SDK integration and Pi verification share it.
   exists. Supply `tools.psyq2elf` for supported LIB/LNK conversion; both colliding
   and non-colliding members retain provenance and refuse differing outputs.
 
-The shipped GCC 2.95.2 / ASPSX 2.80 / `-O2 -G8` choices are a **supported starting
+The shipped GCC 2.95.2 / MASPSX (ASPSX 2.80 starting mode) / `-O2 -G8` choices are a **supported starting
 candidate**, not facts about a new target. Owners inherit it until
 explicitly configured. Do not copy BTN flags, addresses, SDK claims or approvals.
 Use `/skill:psx-identify-project` to identify assets and configure a new project.
@@ -61,6 +63,60 @@ header roles and member profiles; see [Library targets](library-targets.md).
 Target adapters expose the same source/assembly/flags/verification contract to
 matching tools and skills. Absent manifests or `linked-image` selection use the
 EXE/overlay layout. The one-EXE/paired-archive container model remains a convention; see the generalization checklist.
+
+## Assembler backends
+
+Schema v1 keeps `tools.maspsx` and `flags.maspsx` required, even for GAS-only
+projects; GAS contexts ignore them. With no `assembler` key, MASPSX and its
+legacy argv/compilation identities are unchanged. Bootstrap retains this default.
+An explicit profile assembler replaces the base selection, not its rewrite list:
+
+```json
+"assembler": { "kind": "gas", "inputRewrites": ["move-addu"] },
+"profiles": {
+  "native": { "assembler": { "kind": "maspsx" } }
+}
+```
+
+`inputRewrites` is required for `gas` (an empty array is valid), forbidden for
+`maspsx`, and accepts only known IDs. `move-addu` rewrites an entire instruction
+line `move rd,rs` to `addu rd,rs,$0`, retaining trailing `#` comments and line
+count. It reconciles period encoding with modern GAS's `or` encoding. Labels,
+directives, comments, included stubs and handwritten `#APP` regions are unchanged.
+A new rewrite requires original-word evidence and a focused regression fixture;
+rewrites are not an unrestricted text filter or a means to patch target words.
+
+`tools/lib/assembler.ts` owns every assembler command. Direct GAS writes
+`<object>.as-input.s`, then invokes `tools.as` with `flags.as` from the project
+root, so relative `.include`s still resolve. MASPSX forces GAS `-G0` unless
+`--dont-force-G0` is configured; direct GAS does not. GAS requires an explicit
+zero threshold: nonzero `-G` (including its default) is unsupported because GAS
+assumes undeclared externs are small, unlike ASPSX's declaration-based rule.
+
+GAS's default optimization permits reorder-mode branch-slot swapping, including
+a macro's final word (never a MIPS1 load). `-O` remains an ordinary `flags.as`
+argument; lowering it requires target evidence, not a matching-score guess.
+MASPSX forces noreorder at compiler function boundaries and inserts hazard nops
+into its text. GAS inserts hazards internally, so compiler-text attribution
+cannot see them: inspect the object or listing instead.
+
+Expansion capture preserves MASPSX's text output. For GAS it retains rewritten
+input plus `<object>.listing.txt` (`-alm`) mapping each source line to its words.
+A separate listing assembly is byte-compared with the production object; its
+receipt carries kind, rewrites, both argvs, and input/listing/object hashes.
+Cache/verification identities include effective kind and rewrites, and the
+MASPSX hash/flags only when used; changing selection makes receipts stale.
+
+`identify` reports per-member indexed-load scratch relations (`gas-rule`,
+`aspsx-rule`, or ambiguous), plus native LNK packaging when supplied through
+`sdk.originalDir`. For `l* D,sym(B)`, GAS uses D when D != B and `$at` otherwise;
+ASPSX uses `$at`. Absolute loads reuse D under either backend; stores use `$at`.
+Thus absolute self-clobber pairs are expected assembler expansions, **not**
+compiler address-splitting fingerprints. Converter-style section IDs (`0xF001`),
+absence of file records and native IDs (`1`), constructors/destructors and file
+records are separate packaging witnesses. Incomplete parsing is reported, never
+read as absence evidence. No report automatically changes configuration or
+identifies an assembler release. Keep target-specific conclusions in the project.
 
 ## Project-owned compiler source
 
@@ -136,6 +192,17 @@ the configured pinned MIPS compiler source inside the active project context,
 not from a fixed pseudo threshold. Missing register evidence leaves native RTL
 readable while register-dependent interpretations are unavailable.
 
+Flag-probe also accepts `--src` (tool parameter `src`) to select the primary C
+candidate in its original production TU. INCLUDE_ASM backlog supplies original
+fingerprints only, never a compiler-flag matrix: recompiling assembly under a
+compiler flag cannot validate that flag. `--with-source` rows are advisory and
+cannot own a conclusion for an unmeasured primary. Reports bind the selected
+source path/status/hash, target and toolchain; unsupported flags retain the
+compiler's error and remain inconclusive. Triage reads symbolic original words,
+including ET_REL relocation fixups, rather than assuming literal `%hi/%lo` in
+the disassembly file. These fingerprints nominate compiler-specific experiments;
+they do not recover original compiler input or identify a compiler version.
+
 Residual-objective JSON retains stub status, raw differences, interpretation
 confidence and ownership. A zero modeled key with differing words is explicitly
 an unexplained byte residual; work is selected from the best measured nonstub.
@@ -145,6 +212,27 @@ allocation term cannot rank candidates or license allocator-only directions.
 Raw differences and native RTL are the default evidence path, not an automatic
 assembler-expansion dump. Candidate build receipts do not recover original
 compiler input.
+Residual-objective runs preserve each invocation in a new `objective/measurement-*`
+directory, with selected-source snapshots, full-object hashes and report references.
+The source fragment is still compiled in its original production TU; its snapshot
+is evidence, not an independently compiled replacement. Explicit source paths are
+validated before creating run state, and a selected source changing during the
+measurement prevents recording the result. Historical mutable-cache paths are not
+upgraded into immutable evidence. Program-level ledger deduplication is unchanged;
+the invocation's manifest preserves receipts even when its program was measured
+before.
+
+Idiom retrieval excludes classified assembly-backed platform macro invocations,
+not just literal `asm`/`INCLUDE_ASM`. Its coverage distinguishes eligible clean-C
+functions from those contributing searchable regions. For a query containing an
+indexed LUI/ADDU/load relation, it also counts that scratch-register relation in
+every eligible function's original words, including functions too short to form
+an indexed region. Counts are exhaustive only when every named function is read;
+limited example lists do not limit counts. This census establishes a raw register
+relation, not original compiler input or assembler behavior. Raw compiler-source grep
+covers C, headers and machine descriptions independently of C-parser health; a
+file filter selecting no covered files fails without performing a search.
+
 Recipe-atlas/near-miss image flag columns currently refuse library targets
 explicitly, before any EXE lookup or catalogue compilation.
 
@@ -161,12 +249,13 @@ fallback compiler. Missing anchors require an instrumentation port to that
 source; they do not disable native RTL, scheduler or loop diagnostics.
 
 On a machine-word residual, reversal/objective reports retain the compiler
-pseudo-instructions, the configured MASPSX expansion and an argv/hash receipt.
-MASPSX → GAS is the production protocol: assembling cc1's `.s` directly with GAS
-can choose another scratch register and is not an acceptance oracle. The original
-bytes alone do not prove that the original compiler emitted an explicit address
-pseudo. Diagnostic expansion capture does not change the normal TU build or
-whole-output verification gate.
+pseudo-instructions, the configured assembler expansion and an argv/hash receipt.
+The **configured assembler is the only acceptance path**; assembling through any
+other backend is diagnostic only. Changing an owner's assembler requires
+original-word assembler-family evidence and re-verification of its members.
+The original bytes alone do not prove that the compiler emitted an explicit
+address pseudo. Diagnostic capture does not change production flags or weaken
+the normal whole-output verification gate.
 
 ## Commands
 

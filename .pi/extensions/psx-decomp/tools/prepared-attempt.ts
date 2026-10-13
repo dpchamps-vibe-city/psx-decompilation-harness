@@ -7,7 +7,8 @@ import { recordedCommand, commandText } from "../../../../tools/lib/recordedComm
 import { fileDigest as hashFile, digest as hashText } from "../../../../tools/lib/contentCache.js";
 import { loadContainers } from "../../../../tools/lib/container.ts";
 import { libraryInputFiles, loadLibraryProject } from "../../../../tools/lib/project.js";
-import { configuredToolchainIdentity } from "../../../../tools/agent/decompToolchain.ts";
+import { buildToolInputs } from "../../../../tools/build/buildInputs.js";
+import { snapshot } from "../../../../tools/lib/contentCache.js";
 import { packetOpening, packetEvidence, type PreparationPacket } from "../../../../tools/agent/campaign/packet.ts";
 
 export interface PreparedAttempt { packet: PreparationPacket; path: string }
@@ -35,13 +36,13 @@ export function buildInputs(root: string): Record<string, string> {
     }
   };
   for (const dir of ["src", "include", "configs"]) visit(join(root, dir));
-  const tools = configuredToolchainIdentity(), library = loadLibraryProject(root);
+  const library = loadLibraryProject(root);
   if (library) {
     for (const dir of [...library.headers.reference, ...library.headers.owned]) visit(resolve(root, dir));
   }
   const targets = library ? libraryInputFiles(library, root).map(i => i.path) : loadContainers(root).map(c => c.targetPath);
-  for (const file of [tools.compiler.path, tools.assemblerShim.path, ...(tools.cppFrontend ? [tools.cppFrontend.path] : []),
-    ...Object.values(tools.executables).flatMap(t => t.path ? [t.path] : []), ...targets])
+  Object.assign(inputs, snapshot(root, buildToolInputs(root), path => !path.endsWith(".pyc") && !path.includes("/.git/")));
+  for (const file of targets)
     inputs[relative(root, resolve(root, file))] = hashFile(resolve(root, file));
   for (const file of ["project.json", ".pi/autoloop.json"]) inputs[file] = hashFile(join(root, file));
   inputs["$compilation"] = stableHash(compilationIdentity(root));

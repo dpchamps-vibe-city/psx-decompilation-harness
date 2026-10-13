@@ -14,7 +14,7 @@ import { hex } from "./macroInstructions.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
 import { libraryMembers, libraryTargetKey, resolveLibraryCall, withLibraryMetadata } from "../lib/libraryTargets.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
-import { configuredFlags, configuredSdkHeaders, type FlagContext } from "../lib/toolchain.js";
+import { configuredAssembler, configuredFlags, configuredSdkHeaders, type FlagContext } from "../lib/toolchain.js";
 import { deriveRepoMacroEncodings, type RepoEncodingReport } from "./macroEncodings.js";
 import { extractMacroTemplates, loadMacroHeaders, type TemplateLibrary } from "./macroTemplates.js";
 import { tileMacroFunction, type MacroFunction, type MacroFunctionReport, type TilerOptions } from "./macroTiler.js";
@@ -171,7 +171,8 @@ function detectMacroIdentitiesScoped(options: MacroIdentityOptions): MacroIdenti
   // encoding probe, not a separate compiler run for every library member.
   const contextKey = (fn: MacroFunction): string => {
     const context = contextOf(fn);
-    return JSON.stringify([context.kind, ...(["cpp", "cc1", "as", "maspsx"] as const).map(stage => configuredFlags(stage, context))]);
+    return JSON.stringify([context.kind, configuredAssembler(context), ...(["cpp", "cc1", "as"] as const).map(stage => configuredFlags(stage, context)),
+      ...(configuredAssembler(context).kind === "maspsx" ? [configuredFlags("maspsx", context)] : [])]);
   };
   const encodingToolchains: RepoEncodingReport[] = [];
   const libraries = new Map<string, TemplateLibrary>();
@@ -237,7 +238,7 @@ export function detectFunctionMacroIdentity(functionName: string): { function: M
 export function formatMacroIdentityReport(report: MacroIdentityReport, all = false): string {
   const lines = [`Macro identity census: ${report.functions.length} functions, ${report.templateCount} header templates, ${report.detectedFunctions.length} detected functions.`, "Compatibility only: all C statements require byte-oracle verification."];
   lines.push(`Command encodings: ${report.commandEncodingMode}`);
-  for (const oracle of report.encodingToolchains) lines.push(`  ${oracle.containerKind}: ${oracle.commands.length} GAS commands verified through cpp/cc1/maspsx/GAS; ${oracle.probeObject}`);
+  for (const oracle of report.encodingToolchains) lines.push(`  ${oracle.containerKind}: ${oracle.commands.length} GAS commands verified through cpp/cc1/configured assembler; ${oracle.probeObject}`);
   lines.push(`Coverage (${report.coverage.scope}): ${report.coverage.functionByteSource}; ${report.coverage.sourceEligibility}`);
   for (const c of report.coverage.containersScanned) lines.push(`  SCANNED ${c.container}: ${c.functionCount} functions; ${c.textRanges.length} splat text ranges`);
   for (const c of report.coverage.containersSkipped) lines.push(`  NOT TILED ${c.container} (${c.targetPath}): ${c.reason}`);
@@ -284,7 +285,7 @@ export function formatMacroIdentityReport(report: MacroIdentityReport, all = fal
 
 function main(args: string[]): void {
   if (args.includes("--help")) {
-    console.log("Usage: npx tsx tools/diagnostics/macroIdentity.ts [--json] [--all] [--container ID] [--function NAME] [--headers PATH ...] [--raw-headers] [--mine tier-a|tier-b|all]\nDefault: tile every configured EXE/overlay function including INCLUDE_ASM; inventory skipped extracted overlays and report presence-only clusters.\n--all includes clean no-cop2 functions. --json includes the full census and diagnostics.\n--headers is repeatable and replaces default header paths; supports files/directories.\nSDK command encodings use production cpp/cc1/maspsx/GAS and the repo's active .inc include graph.\n--raw-headers disables that oracle for raw extraction diagnostics (not a production census).\nPresence is splat-text-bounded when enabled and unbounded/data-contaminable otherwise. Mining is opt-in, bounded, and reports incompleteness. No source edits or policy grants.");
+    console.log("Usage: npx tsx tools/diagnostics/macroIdentity.ts [--json] [--all] [--container ID] [--function NAME] [--headers PATH ...] [--raw-headers] [--mine tier-a|tier-b|all]\nDefault: tile every configured EXE/overlay function including INCLUDE_ASM; inventory skipped extracted overlays and report presence-only clusters.\n--all includes clean no-cop2 functions. --json includes the full census and diagnostics.\n--headers is repeatable and replaces default header paths; supports files/directories.\nSDK command encodings use production cpp/cc1/configured assembler and the repo's active .inc include graph.\n--raw-headers disables that oracle for raw extraction diagnostics (not a production census).\nPresence is splat-text-bounded when enabled and unbounded/data-contaminable otherwise. Mining is opt-in, bounded, and reports incompleteness. No source edits or policy grants.");
     return;
   }
   const headerPaths: string[] = [];

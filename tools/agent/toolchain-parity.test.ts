@@ -71,19 +71,17 @@ test("toolchain parity: no tool restates a flag set literally", () => {
  * translation unit the build no longer produces. Name the tokens, not just the
  * variable, because a literal maspsx invocation needs no named constant.
  */
-test("toolchain parity: no tool spells out a maspsx flag", () => {
+test("toolchain parity: assembler commands belong only to the shared builder", () => {
   const offenders: string[] = [];
-  for (const dir of ["tools/agent", "tools/build"]) {
-    const base = join(ROOT, dir);
-    for (const entry of readdirSync(base)) {
-      if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) continue;
-      for (const line of readFileSync(join(base, entry), "utf-8").split("\n")) {
-        if (/^\s*\*/.test(line.trim()) || line.includes(".indexOf(")) continue; /* prose or flag inspection, not an invocation */
-        if (/["'`][^"'`]*--(aspsx-version|dont-force-G0|use-comm-section|run-assembler)/.test(line)) {
-          offenders.push(`${dir}/${entry}: ${line.trim().slice(0, 70)}`);
-        }
-      }
+  const scan = (dir: string) => {
+    for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+      const path = dir + "/" + entry.name;
+      if (entry.isDirectory()) { if (entry.name !== "vendor" && dir !== "tools/testing") scan(path); continue; }
+      if (!path.endsWith(".ts") || path.endsWith(".test.ts") || path === "tools/lib/assembler.ts") continue;
+      const text = readFileSync(join(ROOT, path), "utf8");
+      if (/configuredTool\(["'](?:maspsx|as)["']/.test(text) || /["']--gnu-as-path["']/.test(text)) offenders.push(path);
     }
-  }
-  assert.deepEqual(offenders, [], "maspsx flags must come from toolchain.json via configuredMaspsxFlags");
+  };
+  for (const dir of ["tools/lib", "tools/agent", "tools/build", "tools/diagnostics"]) scan(dir);
+  assert.deepEqual(offenders, [], "only tools/lib/assembler.ts builds assembler invocations");
 });

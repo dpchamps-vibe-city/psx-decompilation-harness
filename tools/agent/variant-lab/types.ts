@@ -190,9 +190,10 @@ export interface ToolIdentity {
   node: string;
   variantLab: { schemaVersion: 1; sha256: string };
   compiler: { path: string; sha256: string; version: string };
-  assemblerShim: { path: string; sha256: string };
+  assemblerShim?: { path: string; sha256: string };
   cpp: string;
-  assembler: string;
+  assembler: string | { kind: "maspsx" | "gas"; inputRewrites: string[]; maspsx?: { path: string; sha256: string } };
+  assemblerVersion?: string;
   objdump: string;
 }
 

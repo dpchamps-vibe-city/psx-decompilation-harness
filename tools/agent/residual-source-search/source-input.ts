@@ -214,7 +214,7 @@ export function establishBaseline(options: BaselineOptions): BaselineResult {
       "they are aligned away rather than charged to the source.");
   }
 
-  const toolchain = configuredToolchainIdentity();
+  const toolchain = configuredToolchainIdentity(options.functionName);
   const bundle: BaselineBundle = {
     schemaVersion: RESIDUAL_SEARCH_SCHEMA_VERSION,
     function: options.functionName,

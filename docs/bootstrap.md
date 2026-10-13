@@ -86,6 +86,11 @@ entries with directly preceding evidence comments and matching source-policy
 allowlist entries in the same patch, integrated through the existing worker
 mechanism.
 
+Scaffolding leaves the assembler at MASPSX, the backwards-compatible default;
+identification never switches it automatically. Select direct GAS or per-owner
+assembler profiles only from target evidence, then re-verify (see
+[assembler backends](toolchain.md#assembler-backends)).
+
 After supplying inputs, run `/skill:psx-identify-project`. Defaults are candidates,
 not detected SDK/compiler facts. `psx_verify_build` checks executable bytes only
 at 120 seconds; `psx_finalize_function` performs the exact/function, all-container

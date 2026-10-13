@@ -24,10 +24,10 @@ import {
 } from "fs";
 import { basename, isAbsolute, join, relative } from "path";
 import { assembleCompilerOutput, assembleTarget, compileSource, disassembleObject, normalizeFunctionName, resolveSource } from "./decompToolchain.js";
-import { configuredCompilerAnalysis, supportsCompilerCapability, requireCompilerCapability } from "../lib/toolchain.js";
+import { configuredAssembler, type AssemblerSelection, configuredCompilerAnalysis, supportsCompilerCapability, requireCompilerCapability } from "../lib/toolchain.js";
 import { compilerAnalysisSummary } from "../lib/compilerAnalysis.js";
 import { selectRtlFunction } from "../lib/compilerArtifacts.js";
-import { functionSymbol } from "../lib/targetAdapter.js";
+import { functionSymbol, resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { detectAllocationFeedback } from "./compiler-trace/hard-register-hazards.js";
 import { analyzeAllocation, applyAllocation } from "./compiler-trace/local-allocation.js";
 import { buildPseudoProvenance } from "./compiler-trace/pseudo-provenance.js";
@@ -171,6 +171,7 @@ export interface ExistingTraceArtifacts {
   dumpDirectory: string;
   outputDirectory: string;
   flags: string[];
+  assembler?: AssemblerSelection;
   reportFileName?: string;
 }
 
@@ -305,6 +306,7 @@ export function buildTraceReportFromArtifacts(options: ExistingTraceArtifacts): 
   const reportPath = join(outputDirectory, options.reportFileName || "report.json");
   const report: CompilerTraceReport = {
     schemaVersion: 2,
+    ...(options.assembler ? { assembler: options.assembler } : {}),
     analysis: { provider: support.provider, passOrderKnown, passModelsAvailable: true,
       passOrderConfidence: passOrderKnown ? "configured" : "inferred" },
     registerModel: boundary === undefined ? { status: "unavailable" } : { status: "observed", firstPseudoRegister: boundary },
@@ -357,6 +359,7 @@ export function buildTraceReport(
     dumpDirectory: outputDirectory,
     outputDirectory,
     flags: artifacts.cc1Flags,
+    assembler: configuredAssembler(resolveFunctionTarget(funcName).flags),
   });
 }
 

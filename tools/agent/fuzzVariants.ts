@@ -524,7 +524,7 @@ function main(): void {
   const baseline = variants.find((variant) => variant.baseline)!;
   const mode = options.cc1Only ? "cc1-only" : "full";
   const toolchain = {
-    ...configuredToolchainIdentity(),
+    ...configuredToolchainIdentity(options.functionName),
     variantLab: { schemaVersion: 1 as const, sha256: variantLabImplementationHash() },
   };
   const targetOwner = resolveFunctionTarget(options.functionName);

@@ -14,6 +14,8 @@
  * decision.
  */
 
+import { assemblerRules } from "../../lib/assembler.js";
+import type { AssemblerKind } from "../../lib/toolchain.js";
 import type { FiberSite, MirInsn, MirProgram } from "./types.js";
 
 export interface AssemblerInverseResult {
@@ -21,7 +23,7 @@ export interface AssemblerInverseResult {
   /** Machine indexes removed, with the reason each was an assembler artifact. */
   removed: Array<{ index: number; vram?: number; reason: string }>;
   /** Machine index pairs folded into one instruction. */
-  merged: Array<{ indexes: number[]; text: string }>;
+  merged: Array<{ indexes: number[]; text: string; rule?: string }>;
   sites: FiberSite[];
 }
 
@@ -34,7 +36,10 @@ function loadDelayHazard(previous: MirInsn | undefined, next: MirInsn | undefine
   return next.uses.includes(loaded);
 }
 
-export function inverseAssembler(machine: MirProgram): AssemblerInverseResult {
+export function inverseAssembler(machine: MirProgram, kind: AssemblerKind = "maspsx"): AssemblerInverseResult {
+  const rules = assemblerRules(kind);
+  const sameSymbol = (a: MirInsn, b: MirInsn) => a.symbol !== undefined && a.symbol === b.symbol ||
+    a.symbolAddress !== undefined && a.symbolAddress === b.symbolAddress;
   const removed: AssemblerInverseResult["removed"] = [];
   const merged: AssemblerInverseResult["merged"] = [];
   const sites: FiberSite[] = [];
@@ -42,7 +47,7 @@ export function inverseAssembler(machine: MirProgram): AssemblerInverseResult {
   const source = machine.insns;
 
   for (let position = 0; position < source.length; position++) {
-    const insn = source[position];
+    const insn = source[position]!;
 
     if (insn.isNop) {
       const previous = source[position - 1];
@@ -67,10 +72,29 @@ export function inverseAssembler(machine: MirProgram): AssemblerInverseResult {
      * must not be confused: there the HIGH is a real RTL instruction the
      * scheduler may move, and folding it would delete a scheduling decision.
      * The register identity is what separates them. */
-    const next = source[position + 1];
+    const next = source[position + 1], low = source[position + 2];
+    const temp = insn.defs[0];
+    const base = next?.uses.find(register => register !== temp);
+    const indexed = insn.mnemonic === "lui" && next?.mnemonic === "addu" && low !== undefined &&
+      temp !== undefined && base !== undefined && next.defs[0] === temp && next.uses.includes(temp) &&
+      (low.isLoad || low.isStore) && sameSymbol(insn, low) && low.uses.includes(temp) &&
+      (temp === "at" || rules.indexedLoadTemp === "destination-unless-base" && low.isLoad && low.defs[0] === temp && temp !== base) &&
+      insn.delaySlotOf === undefined && next.delaySlotOf === undefined && low.delaySlotOf === undefined &&
+      insn.block === low.block;
+    if (indexed) {
+      const value = low.isLoad ? low.defs[0] : low.uses.find(register => register !== temp);
+      const operands = [value!, `${insn.symbol}(${base})`];
+      const folded: MirInsn = { ...low, index: insn.index, id: insn.id, operands,
+        text: `${low.mnemonic} ${operands.join(",")}`, shape: `${low.mnemonic} <reg>,${insn.symbol}(<reg>)`,
+        uses: [...new Set([...low.uses.filter(register => register !== temp), base])] };
+      if (insn.vram !== undefined) folded.vram = insn.vram;
+      merged.push({ indexes: [insn.index, next.index, low.index], text: folded.text,
+        rule: temp === "at" ? "indexed-symbol-at (ASPSX or GAS)" : "indexed-symbol-load-destination (GAS)" });
+      kept.push(folded); position += 2; continue;
+    }
     const macroLoad = insn.mnemonic === "lui" && next !== undefined &&
       (next.isLoad || next.isStore) &&
-      insn.symbolAddress !== undefined && next.symbolAddress === insn.symbolAddress &&
+      sameSymbol(insn, next) &&
       next.uses.includes(insn.defs[0]!) &&
       (insn.defs[0] === "at" || (next.isLoad && next.defs[0] === insn.defs[0]));
     if (macroLoad) {
@@ -83,7 +107,7 @@ export function inverseAssembler(machine: MirProgram): AssemblerInverseResult {
         uses: next.uses.filter((register) => register !== insn.defs[0]),
       };
       if (insn.vram !== undefined) folded.vram = insn.vram;
-      merged.push({ indexes: [insn.index, next.index], text: folded.text });
+      merged.push({ indexes: [insn.index, next.index], text: folded.text, rule: "absolute-symbol-load/store (ASPSX or GAS)" });
       kept.push(folded);
       position++;
       continue;

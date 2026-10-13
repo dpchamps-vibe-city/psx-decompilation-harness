@@ -1,14 +1,14 @@
 import { projectRoot } from "../lib/runtimeContext.js";
 /** Project-owned GTE command encoding oracle. Discover the GAS definitions
  * included by a real common.h compile, then compile probes with the SAME
- * cpp -> configured cc1 -> maspsx -> GAS pipeline as production C. No foreign
+ * cpp -> configured cc1 -> configured assembler pipeline as production C. No foreign
  * replacement header, copied opcode table or target-dependent choice is used.
  * SDK literals remain intact; the report records the required GAS substitution. */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { compileSource, configuredMaspsxFlags, configuredToolchainIdentity } from "../agent/decompToolchain.js";
-import { configuredFlags, type FlagContext } from "../lib/toolchain.js";
+import { configuredAssembler, configuredFlags, type AssemblerSelection, type FlagContext } from "../lib/toolchain.js";
 import { libraryContext } from "../lib/project.js";
 import { elf32SectionSizes } from "../lib/elfSections.js";
 import type { CommandEncodingEvidence, MacroTemplate, TemplateLibrary } from "./macroTemplates.js";
@@ -22,7 +22,8 @@ export interface RepoEncodingReport {
   toolchain: ReturnType<typeof configuredToolchainIdentity>;
   cppFlags: string[];
   cc1Flags: string[];
-  maspsxFlags: string[];
+  assembler: AssemblerSelection;
+  maspsxFlags?: string[];
   asFlags: string[];
   includes: Array<{ path: string; sha256: string }>;
   probeSource: string;
@@ -207,7 +208,7 @@ export function deriveRepoMacroEncodings(library: TemplateLibrary, containerKind
     writeFileSync(path, `/* Generated diagnostic GAS substitutions; include after ${vintage}. */\n${definitions}`);
     reconstructionHeaders.push({ vintage, path: projectPath(path), sha256: digest(readFileSync(path)) });
   }
-  const report: RepoEncodingReport = { containerKind, ...(containerId ? { containerId } : {}), toolchain: configuredToolchainIdentity(), cppFlags: configuredFlags("cpp", flagContext), cc1Flags: probe.cc1Flags, maspsxFlags: configuredMaspsxFlags(flagContext), asFlags, includes: includes.map(input => ({ path: projectPath(input.path), sha256: digest(input.source) })), probeSource: projectPath(probeSource), probeAssembly: projectPath(probe.assembly), probeObject: projectPath(probe.object!), probeObjectSha256: objectSha256, commands, reconstructionHeaders };
+  const report: RepoEncodingReport = { containerKind, ...(containerId ? { containerId } : {}), toolchain: configuredToolchainIdentity(flagContext), assembler: configuredAssembler(flagContext), cppFlags: configuredFlags("cpp", flagContext), cc1Flags: probe.cc1Flags, ...(configuredAssembler(flagContext).kind === "maspsx" ? { maspsxFlags: configuredMaspsxFlags(flagContext) } : {}), asFlags, includes: includes.map(input => ({ path: projectPath(input.path), sha256: digest(input.source) })), probeSource: projectPath(probeSource), probeAssembly: projectPath(probe.assembly), probeObject: projectPath(probe.object!), probeObjectSha256: objectSha256, commands, reconstructionHeaders };
   writeFileSync(join(dir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
   return { library: { templates, diagnostics: diagnostics.filter(d => !d.reason.startsWith("DMPSX sentinel") || templates.some(t => t.header === d.header && t.macro === d.macro && t.blocks.some(b => b.instructions.some(p => p.op === "literal-word")))) }, report };
 }

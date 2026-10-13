@@ -31,7 +31,8 @@ import { projectRoot } from "../lib/runtimeContext.js";
 import { existsSync, readFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
-import { configuredTool } from "../lib/toolchain.js";
+import { configuredAssembler, configuredTool } from "../lib/toolchain.js";
+import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { loadLibraryProject } from "../lib/project.js";
 import { libraryMembers, requireLibraryFunction } from "../lib/libraryTargets.js";
 import { libraryFunctionSource } from "../lib/libraryTranslationUnit.js";
@@ -164,6 +165,9 @@ export function deriveOwnership(filter?: string): OwnershipRecord[] {
 
   for (const span of loadFunctionSpans()) {
     if (filter && span.name !== filter) continue;
+    // GAS -G>0 is rejected by configuration. At -G0 there is no ASPSX
+    // declaration-based GP ownership inference to make.
+    if (configuredAssembler(resolveFunctionTarget(span.name).flags).kind !== "maspsx") continue;
     const rom = vramToRom(span.vram, info);
     const bytes = binary.subarray(rom, rom + span.size);
     const accesses = scanGpAccesses(bytes, span.vram, info.gpValue, index);
@@ -202,7 +206,7 @@ export function deriveOwnership(filter?: string): OwnershipRecord[] {
  * not been decompiled yet.
  */
 export function requiredDefinitions(record: OwnershipRecord): string[] {
-  if (record.source !== "c") return [];
+  if (record.source !== "c" || configuredAssembler(resolveFunctionTarget(record.name).flags).kind !== "maspsx") return [];
   if (record.fromObject && record.fromObject.length > 0) return record.fromObject;
   return record.fromBytes;
 }

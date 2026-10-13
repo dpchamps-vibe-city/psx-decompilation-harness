@@ -28,6 +28,8 @@
  *   the assembler's.
  */
 
+import type { AssemblerKind } from "../../lib/toolchain.js";
+
 /** One RTL instruction and the assembly it emitted, in order. */
 export interface EmissionPacket {
   /** RTL instruction UID, matching the `.mach`/`.dbr` dumps. */
@@ -65,7 +67,7 @@ export function isMultiInstruction(packet: EmissionPacket): boolean {
   return packet.lines.length > 1;
 }
 
-export function parseEmissionAttribution(assembly: string): EmissionAttribution {
+export function parseEmissionAttribution(assembly: string, kind: AssemblerKind = "maspsx"): EmissionAttribution {
   const packets: EmissionPacket[] = [];
   const unattributed: string[] = [];
   const caveats: string[] = [];
@@ -111,7 +113,7 @@ export function parseEmissionAttribution(assembly: string): EmissionAttribution 
       continue;
     }
 
-    if (ASSEMBLER_INSERTED.test(line)) open.assemblerInserted.push(line);
+    if (kind === "maspsx" && ASSEMBLER_INSERTED.test(line)) open.assemblerInserted.push(line);
     else open.lines.push(line);
   }
 
@@ -134,6 +136,7 @@ export function parseEmissionAttribution(assembly: string): EmissionAttribution 
       "instruction; their members are not independent scheduling participants",
     );
   }
+  if (kind === "gas") caveats.push("GAS inserts hazard nops and swaps delay slots internally; assemblerInserted is empty. See the configured assembler listing/object, not compiler text, for these effects.");
   return { packets, unattributed, caveats };
 }
 

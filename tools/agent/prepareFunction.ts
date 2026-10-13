@@ -1,3 +1,4 @@
+import { assemblerInvocation } from "../lib/assembler.js";
 import { COMPONENT_CONTRACTS, compilationIdentity, stableHash } from "../lib/cacheIdentity.js";
 import { currentScriptArgs } from "../lib/installedScripts.js";
 import { projectRoot, inRuntimeContext, contextForProject } from "../lib/runtimeContext.js";
@@ -652,8 +653,8 @@ async function measurePreparation(packet: PreparationPacket, root: string, direc
     front = await command(configuredCompilerPath(), [...packet.identity.flags, preprocessed, "-o", assembly], "cc1");
     packet.compilation.commands.push(front);
     if (front.status === 0) {
-      assembler = await command(configuredTool("python", root), [configuredTool("maspsx", root), ...configuredFlags("maspsx", container, root), "--gnu-as-path", configuredTool("as", root), "-o", object,
-        ...configuredAsFlagsForContainer(container.kind, container.id), assembly], "assembler");
+      const invocation = assemblerInvocation(container, assembly, object, root);
+      assembler = await command(invocation.command, invocation.args, "assembler");
       packet.compilation.commands.push(assembler);
     }
   }

@@ -160,7 +160,7 @@ export async function runResidualSourceSearch(options: RunResidualSearchOptions)
   const functionName = options.functionName;
   const source = readFileSync(options.sourcePath, "utf8");
   const sourceHash = sha256(source);
-  const toolchainHash = sha256(stableJson(configuredToolchainIdentity()));
+  const toolchainHash = sha256(stableJson(configuredToolchainIdentity(functionName)));
   const implementationHash = residualImplementationHash();
   const runId = computeRunId({ functionName, sourceHash, toolchainHash, implementationHash });
   const runRoot = options.runRootOverride ?? join(projectRoot(), "build/residualSourceSearch", functionName, runId);

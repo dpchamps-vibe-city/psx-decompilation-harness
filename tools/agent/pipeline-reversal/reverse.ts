@@ -1,4 +1,5 @@
 import { HARNESS_ROOT } from "../../lib/runtimeContext.js";
+import { configuredAssembler } from "../../lib/assembler.js";
 import { projectRoot } from "../../lib/runtimeContext.js";
 /**
  * The backward chain, end to end.
@@ -110,8 +111,9 @@ export function candidateObjectInputs(functionName: string, source: string, root
     values: { mode: "compiled", owner: target.owner,
       cppFlags: configuredFlags("cpp", context, root),
       cc1Flags: [...configuredFlags("cc1", context, root), ...configuredFileFlags(member?.id ?? target.symbol, root)],
-      asFlags: configuredFlags("as", context, root), maspsxFlags: configuredFlags("maspsx", context, root) },
-    implementation: [join(HARNESS_ROOT, "tools/agent/decompToolchain.ts"), join(HARNESS_ROOT, "tools/lib/compilerArtifacts.ts"), join(HARNESS_ROOT, "tools/lib/targetAdapter.ts")],
+      asFlags: configuredFlags("as", context, root), assembler: configuredAssembler(context, root),
+      ...(configuredAssembler(context, root).kind === "maspsx" ? { maspsxFlags: configuredFlags("maspsx", context, root) } : {}) },
+    implementation: [join(HARNESS_ROOT, "tools/lib/assembler.ts"), join(HARNESS_ROOT, "tools/agent/decompToolchain.ts"), join(HARNESS_ROOT, "tools/lib/compilerArtifacts.ts"), join(HARNESS_ROOT, "tools/lib/targetAdapter.ts")],
   };
 }
 
@@ -221,8 +223,9 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
   const targetMachine = liftWords({ functionName, words: oracle.targetWords, index });
   const candidateMachine = liftWords({ functionName, words: oracle.candidateWords, index });
 
-  const targetAssembler = inverseAssembler(targetMachine);
-  const candidateAssembler = inverseAssembler(candidateMachine);
+  const assemblerKind = configuredAssembler(target.flags).kind;
+  const targetAssembler = inverseAssembler(targetMachine, assemblerKind);
+  const candidateAssembler = inverseAssembler(candidateMachine, assemblerKind);
   const targetDbr = inverseDbr(targetAssembler.program);
   const candidateDbr = inverseDbr(candidateAssembler.program);
   const targetAlloc = inverseAlloc(targetDbr.program);

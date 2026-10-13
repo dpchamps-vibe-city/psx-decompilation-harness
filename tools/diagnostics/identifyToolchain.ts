@@ -3,7 +3,8 @@ import { currentScriptArgs } from "../lib/installedScripts.js";
 /** Identification observations and configured tools are intentionally separate.
  * This command never edits toolchain.json or invents compiler/ABI flags. */
 import { execFileSync } from "node:child_process";
-import { configuredSdk, loadToolchain } from "../lib/toolchain.js";
+import { assemblerFamilyEvidence } from "./assemblerEvidence.js";
+import { configuredAssembler, configuredSdk, loadToolchain } from "../lib/toolchain.js";
 import { detectToolchain } from "../lib/toolchainProfile.js";
 import { loadLibraryProject } from "../lib/project.js";
 import { libraryInventory } from "../lib/libraryTargets.js";
@@ -21,7 +22,8 @@ if (args.includes("--help")) {
     const report = {
       detected: project ? { status: "undetermined", compiler: "ELF metadata does not identify the historical compiler/flags", target: libraryInventory() }
         : detectToolchain({ deep: args.includes("--deep"), refresh: true }),
-      configured: { compiler: config.compiler, sdk: configuredSdk(), profiles: config.containerProfiles,
+      assemblerFamily: assemblerFamilyEvidence(),
+      configured: { compiler: config.compiler, assembler: configuredAssembler(), assemblerProfiles: Object.fromEntries(Object.keys(config.profiles).map(profile => [profile, configuredAssembler({ kind: project ? "library" : "exe", profile })])),  sdk: configuredSdk(), profiles: config.containerProfiles,
         ...(project ? { defaultProfile: project.toolchainProfile, ownerProfiles: project.memberProfiles } : {}) },
       limitations: ["SDK signatures do not identify the original compiler version, optimization flags or assembler version.",
         "A configured compiler/profile is a candidate, not evidence. Mixed SDKs or tied signature counts require review.",

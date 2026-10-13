@@ -136,7 +136,8 @@ function attributeSplitAddresses(
     for (const register of insn.defs) {
       const source = insn.uses.find((used) => held.has(used));
       const copied = source ? copyDestination(insn, source) : undefined;
-      if (copied === register && source) {
+      const indexedHigh = insn.mnemonic === "addu" && insn.uses.includes(register) && source === register;
+      if ((copied === register || indexedHigh) && source) {
         const value = held.get(source)!;
         held.set(register, { high: value.high, carriers: [...value.carriers, position] });
       } else held.delete(register);

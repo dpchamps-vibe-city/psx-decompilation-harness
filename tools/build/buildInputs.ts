@@ -1,16 +1,19 @@
 /** Content identity for builds and verification receipts, including executable
  * contents, configuration, environment and include search membership. */
+import { contextForProject } from "../lib/runtimeContext.js";
 import { dirname, join, resolve } from "node:path";
 import { digest, filesUnder, snapshot, writeIfChanged } from "../lib/contentCache.js";
-import { configuredCppFrontend, configuredTool, loadToolchain, TOOLCHAIN_FILE, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredCppFrontend, loadToolchain, TOOLCHAIN_FILE, toolchainExecutables } from "../lib/toolchain.js";
 
 export function buildToolInputs(root: string): string[] {
-  const paths = Object.values(toolchainExecutables(root)).flatMap(tool => tool.path ? [tool.path] : []);
+  const tools = toolchainExecutables(root);
+  const paths = Object.values(tools).flatMap(tool => tool.path ? [tool.path] : []);
   const frontend = configuredCppFrontend(root);
   if (frontend) paths.push(frontend);
-  return [...paths, TOOLCHAIN_FILE, "package.json", "package-lock.json", "tools/build/pipeline.ts", "tools/build/buildInputs.ts",
-    "tools/lib/toolchain.ts", "tools/lib/contentCache.ts", "tools/agent/decompToolchain.ts", "tools/agent/preprocessedCache.ts",
-    join(dirname(configuredTool("maspsx", root)), "maspsx")];
+  const implementation = ["tools/build/pipeline.ts", "tools/build/buildInputs.ts", "tools/lib/toolchain.ts", "tools/lib/assembler.ts",
+    "tools/lib/contentCache.ts", "tools/agent/decompToolchain.ts", "tools/agent/preprocessedCache.ts"];
+  return [...paths, TOOLCHAIN_FILE, "package.json", "package-lock.json", ...implementation.map(path => join(contextForProject(root).harnessRoot, path)),
+    ...(tools.maspsx?.path ? [join(dirname(tools.maspsx.path), "maspsx")] : [])];
 }
 export function buildInputIdentity(root: string, values: string[] = []): string {
   const config = loadToolchain(root);

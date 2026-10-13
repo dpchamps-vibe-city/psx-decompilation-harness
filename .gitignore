@@ -3,6 +3,8 @@
 /extracted/
 /library-input/
 /include/psyq/
+# Locally supplied proprietary SDK assets, including converted copies.
+/tools/vendor/psyq47/
 /.pi/git/
 /.pi/npm/
 /run_output/

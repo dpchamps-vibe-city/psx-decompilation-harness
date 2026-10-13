@@ -11,13 +11,24 @@ export interface LibraryTuPart { path: string; symbol?: string }
 export interface LibraryTuManifest { schemaVersion: 1; member: string; parts: LibraryTuPart[] }
 export const isDirectoryTu = (member: LibraryMember) => member.source.endsWith("/tu.json");
 export function libraryFunctionFilename(member: LibraryMember, symbol: string): string {
-  const collision = member.functions.filter(fn => fn.name.toLowerCase() === symbol.toLowerCase()).length > 1;
-  return `${collision ? `${member.functions.findIndex(fn => fn.name === symbol)}-` : ""}${symbol}.c`;
+  const original = member.functions.filter(fn => !fn.discovery);
+  if (member.object) original.sort((a, b) => member.object.symbols.findIndex(s => s.name === a.name) - member.object.symbols.findIndex(s => s.name === b.name));
+  const fn = member.functions.find(fn => fn.name === symbol);
+  // Newly recovered entries must not renumber existing case-distinct source
+  // files. Original symbol-TABLE ordinals (not address order) retain the
+  // established path contract even when the function inventory is sorted.
+  if (fn?.discovery) {
+    const collision = member.functions.filter(f => f.name.toLowerCase() === symbol.toLowerCase()).length > 1;
+    const prefix = collision ? `private-${member.object.sections.get(fn.section)!.index}-${fn.offset.toString(16)}-` : "";
+    return `${prefix}${symbol}.c`;
+  }
+  const collision = original.filter(fn => fn.name.toLowerCase() === symbol.toLowerCase()).length > 1;
+  return `${collision ? `${original.findIndex(fn => fn.name === symbol)}-` : ""}${symbol}.c`;
 }
 export function libraryFunctionSource(member: LibraryMember, symbol: string): string {
   return isDirectoryTu(member) ? join(dirname(member.source), libraryFunctionFilename(member, symbol)).replaceAll("\\", "/") : member.source;
 }
-export function readLibraryTu(member: LibraryMember, root: string): LibraryTuManifest {
+export function readLibraryTu(member: LibraryMember, root: string, options: { allowDiscoveredBacklog?: boolean } = {}): LibraryTuManifest {
   const manifest = JSON.parse(readFileSync(resolve(root, member.source), "utf8")) as LibraryTuManifest;
   if (manifest.schemaVersion !== 1 || manifest.member !== member.id || !Array.isArray(manifest.parts) || !manifest.parts.length ||
       Object.keys(manifest).some(k => !["schemaVersion", "member", "parts"].includes(k))) throw new Error(`Invalid TU manifest: ${member.source}`);
@@ -34,7 +45,7 @@ export function readLibraryTu(member: LibraryMember, root: string): LibraryTuMan
       if (part.symbol !== "__library_member_data" && part.path !== libraryFunctionFilename(member, part.symbol)) throw new Error(`Function TU part must be ${libraryFunctionFilename(member, part.symbol)}`);
     }
   }
-  if (member.functions.some(fn => !symbols.has(fn.name)) || [...symbols].some(s => s !== "__library_member_data" && !member.functions.some(fn => fn.name === s)))
+  if (member.functions.some(fn => !symbols.has(fn.name) && !(options.allowDiscoveredBacklog && fn.discovery?.kind === "call-relocation")) || [...symbols].some(s => s !== "__library_member_data" && !member.functions.some(fn => fn.name === s)))
     throw new Error(`TU manifest must list every original function exactly once: ${member.source}`);
   return manifest;
 }

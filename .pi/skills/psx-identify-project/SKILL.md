@@ -188,6 +188,21 @@ psx_generate_project_profile({write: true})
 psx_project_progress({})
 ```
 
+For a relocatable-library project, also run the established end-to-end check
+from [Library targets](../../../docs/library-targets.md):
+
+```sh
+npm run library -- check-splits
+npm run library -- preflight 'MEMBER_ID::Symbol'
+```
+
+Choose a real mixed member with private callees/shared storage, not just an
+already-working tiny leaf. SDK preprocessing, relocation-aware boundaries,
+whole-member identity and m2c generation must all be measured before model
+dispatch. Keep draft compilation/exactness separate from setup success; a
+split-fidelity pass does not certify live C. On case-sensitive hosts verify
+DOS header casing and prevent host headers from silently supplying SDK includes.
+
 For selected containers, use `psx_split_project({container: "ID"})` and
 `psx_verify_project({container: "ID"})`. Keep validation lean; do not build a large
 new test suite to onboard a project. `psx_check_configuration` is useful once a Git

@@ -11,6 +11,7 @@ import { configuredCompilerAnalysis, configuredFlags, configuredTool, toolchainE
 import { libraryContext, loadLibraryProject, libraryInputFiles } from "../lib/project.js";
 import { libraryInventory, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, withLibraryMetadata, type LibraryMember } from "../lib/libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, type ObjectComparison } from "../lib/relocatableObject.js";
+import { libraryDisassemblySymbols, validateLibraryDisassembly } from "../lib/libraryDisassembly.js";
 import { libraryAssemblyParts, librarySourceScaffold } from "../lib/libraryAssembly.js";
 import { migrateLibrarySources, writeLibraryTu } from "./librarySources.js";
 import { isDirectoryTu, inspectLibraryPart, libraryFunctionSource, librarySourceFiles, libraryTuStatus } from "../lib/libraryTranslationUnit.js";
@@ -187,8 +188,13 @@ export function renderLibraryComparison(comparison: ObjectComparison): string {
 export function disassembleLibraryMember(member: LibraryMember, root = projectRoot()): string {
   const original = materializeOriginal(member, root), path = join(root, member.assembly);
   mkdirSync(dirname(path), { recursive: true });
-  const assembly = runTool(configuredTool("spimdisasm", root), ["elfObjDisasm", original, "-", ...configuredFlags("spimdisasm", libraryContext(member.id, root), root),
-    "--no-libultra-syms", "--no-ique-syms", "--no-hardware-regs", "--no-default-banned", "--no-cop0-named-registers", "--quiet"], root);
+  const symbols = join(dirname(path), "function-bounds.txt");
+  writeFileSync(symbols, libraryDisassemblySymbols(member));
+  const flags = configuredFlags("spimdisasm", libraryContext(member.id, root), root);
+  if (flags.some(f => f === "--symbol-addrs" || f.startsWith("--symbol-addrs="))) throw new Error("Library disassembly owns its section-relative symbol bounds; remove --symbol-addrs from configured flags");
+  const assembly = runTool(configuredTool("spimdisasm", root), ["elfObjDisasm", original, "-", ...flags,
+    "--symbol-addrs", symbols, "--no-libultra-syms", "--no-ique-syms", "--no-hardware-regs", "--no-default-banned", "--no-cop0-named-registers", "--quiet"], root);
+  validateLibraryDisassembly(member, assembly);
   writeFileSync(path, assembly); return path;
 }
 export function writeLibraryGraph(root = projectRoot()) {
@@ -229,12 +235,16 @@ function writeLibraryGraphScoped(members: LibraryMember[], root: string) {
 }
 export function splitLibrary(root = projectRoot()): void {
   const project = loadLibraryProject(root)!, members = libraryMembers(root);
+  // Validate the whole batch before changing live manifests or publishing new
+  // backlog fragments. Failed disassembly must not leave a half-migrated TU.
+  const staged = members.map(member => {
+    const assembly = disassembleLibraryMember(member, root);
+    return { member, parts: libraryAssemblyParts(member, readFileSync(assembly, "utf8")) };
+  });
   const moves = migrateLibrarySources(members, project, root);
   if (moves.length) console.log(`Migrated ${moves.length} library sources to their derived paths; function/declaration order preserved.`);
-  for (const member of members) {
-    const assembly = disassembleLibraryMember(member, root);
+  for (const { member, parts } of staged) {
     const folder = `build/libraries/nonmatchings/${member.id}`;
-    const parts = libraryAssemblyParts(member, readFileSync(assembly, "utf8"));
     mkdirSync(join(root, folder), { recursive: true });
     for (const part of parts) writeFileSync(join(root, folder, `${part.symbol}.s`), part.text);
     const path = join(root, member.source);
@@ -367,7 +377,14 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
         const scope = preprocessOnly(member.source, join(directory, "owner-scope"), key, target.flags);
         indexDeclarations(index, readFileSync(scope, "utf8"), relative(root, scope), member.id, "source-local");
       }
-      const roots = [...(isDirectoryTu(member) ? [fn.name, ...index.declarations.filter(d => d.visibility === "source-local" && d.kind === "object").map(d => d.name)] : member.functions.map(fn => fn.name)), ...member.object.symbols.filter(s => s.binding !== 0 && s.name && !s.name.endsWith(".NON_MATCHING")).map(s => s.name)];
+      const callees = member.object.relocations.filter(r => r.type === 4 && r.section === fn.section && r.offset >= fn.offset && r.offset < fn.offset + fn.size)
+        .flatMap(r => {
+          const word = member.object.sections.get(r.section)!.data.readUInt32LE(r.offset);
+          if (word >>> 26 !== 3) return [];
+          const call = resolveLibraryCall(member, r.reference, (word & 0x3ffffff) * 4, [member]);
+          return call ? [call.slice(call.lastIndexOf("::") + 2)] : [];
+        });
+      const roots = [...(isDirectoryTu(member) ? [fn.name, ...callees, ...index.declarations.filter(d => d.visibility === "source-local" && d.kind === "object").map(d => d.name)] : member.functions.map(fn => fn.name)), ...member.object.symbols.filter(s => s.binding !== 0 && s.name && !s.name.endsWith(".NON_MATCHING")).map(s => s.name)];
       const projection = projectDeclarations(index, roots, member.id), projectedPath = join(directory, "m2c.ctx");
       writeFileSync(projectedPath, projection.text);
       packet.context = { ...packet.context, index, projection: relative(root, projectedPath), excluded: projection.excluded, unknown: projection.unknown };

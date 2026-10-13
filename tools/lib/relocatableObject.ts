@@ -5,6 +5,7 @@
  * ABI bookkeeping are not emitted program content. Unsupported objects never
  * produce MATCH. Debug/file/local-symbol names are not program identity. */
 import { elf32Sections, type Elf32Section } from "./elfSections.js";
+import { discoverPrivateFunctions, type ObjectFunction } from "./relocatableCode.js";
 export interface ObjectSymbol {
   name: string; value: number; size: number; binding: number; type: number; visibility: number; section: string;
 }
@@ -131,13 +132,17 @@ export function compareRelocatableObjects(original: Buffer, candidate: Buffer): 
     return { verdict: "undetermined", matchedWords: 0, totalWords: 0, candidateWords: 0, differences: [String(error)] };
   }
 }
-/** Symbol extents are only bounds when the original has no size annotation.
- * Include local FUNC labels, but never treat every local branch label as a function. */
-export function objectFunctions(object: RelocatableObject): { name: string; section: string; offset: number; size: number; inferredSize: boolean }[] {
+/** Size-zero extents remain bounds, not historical function-size claims.
+ * Preserve original FUNC/export labels and conservative private JAL entries;
+ * never promote every local branch label or an unrelocated J field. */
+export function objectFunctions(object: RelocatableObject): ObjectFunction[] {
   const code = object.symbols.filter(s => object.sections.get(s.section)?.flags! & 4 && (s.type === 2 || (s.binding !== 0 && s.type === 0)));
-  return code.filter(s => /^[A-Za-z_]\w*$/.test(s.name)).map(s => {
-    const next = Math.min(object.sections.get(s.section)!.size, ...code.filter(n => n.section === s.section && n.value > s.value).map(n => n.value));
+  const named = code.filter(s => /^[A-Za-z_]\w*$/.test(s.name)).map(s => {
     if (s.value >= object.sections.get(s.section)!.size || s.value + s.size > object.sections.get(s.section)!.size) throw new Error(`Invalid code symbol extent: ${s.name}`);
-    return { name: s.name, section: s.section, offset: s.value, size: s.size || next - s.value, inferredSize: s.size === 0 };
+    return { name: s.name, section: s.section, offset: s.value, size: s.size, inferredSize: s.size === 0 };
   });
+  const functions = [...named, ...discoverPrivateFunctions(object, named)];
+  return functions.map(fn => ({ ...fn, size: fn.size || Math.min(object.sections.get(fn.section)!.size,
+    ...functions.filter(n => n.section === fn.section && n.offset > fn.offset).map(n => n.offset)) - fn.offset }))
+    .sort((a, b) => object.sections.get(a.section)!.index - object.sections.get(b.section)!.index || a.offset - b.offset);
 }

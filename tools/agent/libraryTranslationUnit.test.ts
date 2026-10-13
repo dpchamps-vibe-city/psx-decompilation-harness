@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { LibraryMember } from "../lib/libraryTargets.js";
-import { planLibraryTu, writeLibraryTu } from "./librarySources.js";
+import { planLibraryTu, writeLibraryTu, extendLibraryBacklog } from "./librarySources.js";
 import { inspectLibraryPart, libraryCompileInput, libraryTuStatus, readLibraryTu } from "../lib/libraryTranslationUnit.js";
 import { libraryAssemblyParts } from "../lib/libraryAssembly.js";
 import { compareRelocatableObjects, readRelocatableObject, objectFunctions } from "../lib/relocatableObject.js";
@@ -113,6 +113,12 @@ test("case-distinct symbols get stable, non-colliding function files", () => {
     f.member.functions = [{ name: "StartGun" }, { name: "StartGUN" }] as LibraryMember["functions"];
     writeLibraryTu(f.member, f.stub("StartGun") + f.stub("StartGUN"), f.root);
     assert.deepEqual(readLibraryTu(f.member, f.root).parts.map(p => p.path), ["0-StartGun.c", "1-StartGUN.c"]);
+    f.member.object = { symbols: [{ name: "StartGun" }, { name: "StartGUN" }] } as LibraryMember["object"];
+    f.member.functions.reverse(); // Address sorting may differ from symbol-table order.
+    f.member.functions.unshift({ name: "func_text_00000010", section: ".text", offset: 16, size: 8,
+      inferredSize: true, discovery: { kind: "call-relocation", sites: [] } });
+    assert.deepEqual(readLibraryTu(f.member, f.root, { allowDiscoveredBacklog: true }).parts.map(p => p.path),
+      ["0-StartGun.c", "1-StartGUN.c"], "private discovery must not renumber existing function paths");
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -135,6 +141,46 @@ test("generated reference stubs preserve the strict whole-object oracle, private
     writeFileSync(join(f.root, "candidate.s"), parts.map(p => p.text).join("\n").replace(".word 7", ".word 8"));
     assert.equal(compareRelocatableObjects(bytes, assemble()).verdict, "mismatch", "wrong shared data cannot be hidden by matching function words");
   } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("private split extends only original backlog, preserves neighbors and is idempotent", () => {
+  const f = fixture();
+  try {
+    f.member.functions = [{ name: "first", section: ".text", offset: 0 }, { name: "second", section: ".text", offset: 32 }] as LibraryMember["functions"];
+    writeLibraryTu(f.member, '#include "common.h"\n' + f.stub("first") + f.stub("second") + f.stub("__library_member_data"), f.root);
+    const first = readFileSync(join(f.directory, "first.c")), data = readFileSync(join(f.directory, "_data.c"));
+    f.member.functions.splice(1, 0, { name: "func_text_00000010", section: ".text", offset: 16, size: 16, inferredSize: true,
+      discovery: { kind: "call-relocation", sites: [{ section: ".text", offset: 4 }] } });
+    assert.throws(() => readLibraryTu(f.member, f.root), /every original function/);
+    extendLibraryBacklog([f.member], f.root);
+    assert.deepEqual(readLibraryTu(f.member, f.root).parts.map(p => p.symbol).filter(Boolean), ["first", "func_text_00000010", "second", "__library_member_data"]);
+    assert(readFileSync(join(f.directory, "first.c")).equals(first));
+    assert(readFileSync(join(f.directory, "_data.c")).equals(data));
+    assert.equal(libraryTuStatus(f.member, f.root)!.filter(p => p.stub).length, 4);
+    extendLibraryBacklog([f.member], f.root);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("private split refuses real C, missing original functions and unlisted edits without partial publication", () => {
+  for (const mode of ["real-c", "missing-original", "unlisted-file"]) {
+    const f = fixture();
+    try {
+      f.member.functions = [{ name: "first", section: ".text", offset: 0 }, { name: "second", section: ".text", offset: 32 }] as LibraryMember["functions"];
+      writeLibraryTu(f.member, f.stub("first") + f.stub("second"), f.root);
+      f.member.functions.splice(1, 0, { name: "func_text_00000010", section: ".text", offset: 16, size: 16, inferredSize: true,
+        discovery: { kind: "call-relocation", sites: [{ section: ".text", offset: 4 }] } });
+      if (mode === "real-c") writeFileSync(join(f.directory, "first.c"), "int first(void) { return 7; }\n");
+      if (mode === "missing-original") {
+        const manifest = JSON.parse(readFileSync(join(f.root, f.member.source), "utf8")); manifest.parts.pop();
+        writeFileSync(join(f.root, f.member.source), JSON.stringify(manifest));
+      }
+      if (mode === "unlisted-file") writeFileSync(join(f.directory, "func_text_00000010.c"), "/* preserved attempt */\n");
+      const before = readFileSync(join(f.root, f.member.source));
+      assert.throws(() => extendLibraryBacklog([f.member], f.root), /source review|every original function|already exists/);
+      assert(readFileSync(join(f.root, f.member.source)).equals(before));
+      if (mode !== "unlisted-file") assert.equal(existsSync(join(f.directory, "func_text_00000010.c")), false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  }
 });
 
 test("canonical BIOS definition stays one function fragment, not generated instructions", () => {

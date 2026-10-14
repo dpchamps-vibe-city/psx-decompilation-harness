@@ -52,10 +52,27 @@ roles; do not infer these from an m2c declaration.
   reported compatible alternatives, even if it expands to assembly. Use the
   reported header/vintage and operand evidence; unresolved operands and candidate
   calls are not verified C. This does not authorize handwritten assembly,
-  register pinning, new stubs, copied macro bodies or allowlist changes. COP2
-  presence without a template match grants nothing.
+  register pinning, new stubs or allowlist changes. COP2 presence without a
+  template match grants nothing. A new shared operation definition is a separate
+  evidence-backed route, described below.
 - Use C89: declarations first in a block, `/* */` comments, no C99 syntax.
-  No new assembly, register pinning, flag overrides or other policy exemptions.
+  No raw assembly, register pinning, flag overrides or ad hoc policy exemptions.
+
+## Missing shared operations
+
+Agents may create project include-file operation macros on strong evidence;
+there is no per-macro human approval step. Search existing project and configured
+SDK headers first. Read [operation-macro evidence](../../../docs/macro-evidence.md)
+before defining an exceptional operation. It needs positive SDK/original-word witnesses, not merely a draft the
+compiler cannot express. Keep it a thin semantic operation, preserve ABI and
+operand effects, include its header explicitly, and record exceptional definitions
+in `configs/macro-evidence.json`. Do not copy whole functions or conceal scalar
+allocation workarounds. Inspectable C helpers need no evidence manifest.
+
+Prep may establish the definition and preserve candidate witnesses, but cannot
+claim the evidence gate has passed before the required production-byte checks
+exist. Hand those outstanding checks to the matching tier as explicit blockers;
+do not tune bytes during prep or ask a human to approve the macro.
 
 Call `psx_c_source_guard` before moving or replacing C. Refresh `psx_m2c`
 after repairs: it preserves edited primary drafts and measures them with the

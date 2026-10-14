@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { DEFAULT_CONFIG } from "../../shared/config.ts";
 import { emptyState, withLoopExemptions } from "./state.ts";
-import { KEEP_GOING, escalationMessage, nudgeMessage, openingMessage } from "./prompts.ts";
+import { KEEP_GOING, escalationMessage, nudgeMessage, openingMessage, rejectionReport, reviewMessage } from "./prompts.ts";
 
 test("a parked function is exempted from the include-asm rule, and nothing else is", () => {
   const state = emptyState();
@@ -62,7 +62,9 @@ test("every non-matching return carries the same nudge", () => {
   /* The nudge states the four-step protocol, not just encouragement: a turn told
    * only to keep going spends its context reasoning forward from the last
    * report instead of producing a measurement. */
-  assert.match(KEEP_GOING, /there is clean C that matches this function 100%/);
+  assert.doesNotMatch(KEEP_GOING, /there is clean C that matches this function 100%/);
+  assert.match(KEEP_GOING, /Do not assume every original target has a clean-C expression/);
+  assert.match(KEEP_GOING, /no per-macro human approval/);
   assert.match(KEEP_GOING, /One experiment is one edit and one measurement/);
   /* "Turn" is the harness's word for one assistant response. Using it for a
    * loop iteration told an agent it owed exactly one measurement per response,
@@ -78,8 +80,20 @@ test("the opening message carries the protocol, because the nudge may never fire
    * at 1 it never fires, so the opening message is the only thing an agent
    * reads — and a protocol that lives only in the nudge is read by nothing. */
   const opening = openingMessage("func_80012345");
-  assert.match(opening, /Do not stop until the function is byte-exact/);
+  assert.match(opening, /Work toward byte identity/);
+  assert.match(opening, /configs\/macro-evidence\.json/);
+  assert.match(opening, /no per-macro human approval/);
   assert.match(opening, /back to back/);
   assert.match(opening, /psx_residual_objective/);
   assert.doesNotMatch(opening, /This turn runs/);
+});
+
+test("policy review cannot substitute an approval or a clean-C promise for macro evidence", () => {
+  const findings = [{ kind: "platform-macro", file: "include/operations.h", message: "missing proof" }];
+  const review = reviewMessage("target", findings), rejection = rejectionReport("target", findings, "missing original witnesses");
+  assert.match(review, /not per-macro approval/);
+  assert.match(review, /not waived here/);
+  assert.doesNotMatch(rejection, /The remaining divergence has a clean-C expression/);
+  assert.match(rejection, /without per-macro approval/);
+  assert.match(rejection, /does not prove/);
 });

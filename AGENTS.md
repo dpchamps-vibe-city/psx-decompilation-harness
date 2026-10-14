@@ -89,10 +89,15 @@ this template's defaults, not universal game facts.
 - Preserve the clean-source policy. For ordinary compiled functions, embedded
   assembly, hard-register pinning, and new assembly stubs are not valid
   decompilation solutions. Honor only exceptions established by the active
-  project's classification and policy. Unless explicitly specified by the user.
+  project's classification and policy. Evidence-backed shared operation macros
+  are an authorized route: create them in project include files when positive
+  SDK/original-code evidence and unchanged-production byte checks establish the
+  operation. Follow `docs/macro-evidence.md` and record exceptional definitions
+  in `configs/macro-evidence.json`. No per-macro human approval or allowlist
+  change is required. Being stuck or forcing an ordinary allocation is not evidence.
 - A per-file compiler flag override needs the evidence bar in
   `psx_reference flags`, and lands with its evidence comment and allowlist
-  entry in the same human-reviewed change (`toolchain.json.fileFlags`; keep
+  entry in the same human-reviewed change (`configs/flag_overrides.mk`; keep
   evidence in project metadata). Workers may not change the toolchain. Without
   that evidence an override is forbidden. Never use a flag to switch off an
   optimization the target shows signs of using.

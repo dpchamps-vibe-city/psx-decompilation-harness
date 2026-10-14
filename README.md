@@ -95,6 +95,13 @@ exceptions; adding one is a human decision, not an agent workaround.
 Library TU exceptions use the member ID, not invented addresses or one symbol's
 approval borrowed by its neighbors.
 
+**Shared operation macros do not require per-macro human approval.** Agents may
+create project include-file macros with strong SDK/original-code evidence and
+unchanged-production byte verification. Exceptional definitions use the automatic
+`configs/macro-evidence.json` gate, not the function allowlist. Inspectable C
+helpers need no manifest. See [evidence-backed macros](docs/macro-evidence.md)
+for the proof requirements, fingerprint command and verification workflow.
+
 ## Validation and references
 
 `npm test` passes without BTN assets using [isolated fixtures](test-fixtures/harness/README.md)

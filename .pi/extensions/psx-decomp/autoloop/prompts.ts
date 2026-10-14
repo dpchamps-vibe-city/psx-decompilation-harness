@@ -19,7 +19,9 @@ export const DECOMPILE_SKILL = "psx-decompile-function";
  * produces a measurement and one that produces an argument.
  */
 export const KEEP_GOING = [
-  "Keep going — there is clean C that matches this function 100%, and you stop only when it does.",
+  "Keep going toward verified byte identity. Do not assume every original target has a clean-C expression.",
+  "Positive SDK/original-code evidence can justify a shared include-file operation macro; follow the matching skill's linked operation-macro evidence guide and the automatic gate, with no per-macro human approval.",
+  "A failed spelling search is not that evidence. Report witnessed target/build blockers with their premises instead of forcing a workaround.",
   "",
   "One experiment is one edit and one measurement:",
   "1. OBSERVE — run one tool. Three bullets of what it printed. No inference.",
@@ -247,6 +249,7 @@ export function openingMessage(functionName: string): string {
     "as many as it takes — without pausing to summarise, check in, or report progress.",
     "The single-experiment rule is about attribution, never about pace: there is no",
     "budget of one measurement. Ordinary matching difficulty is not a build blocker.",
+    "Do not assume every original was compiled from clean C. A positive SDK/original-word hardware or ABI operation may justify a shared include-file macro under the matching skill's linked evidence guide and configs/macro-evidence.json; no per-macro human approval is required. Inspectable C helpers need no manifest. Being stuck is not evidence, and raw assembly or register-forcing workarounds remain forbidden.",
     "",
     "If you can name the next experiment, run it. A compile is under a second, so",
     "'next experiment, when resuming' is always the wrong sentence — the run costs",
@@ -256,7 +259,7 @@ export function openingMessage(functionName: string): string {
     "that diagnostic, not another one.",
     "",
     "Return when byte-exact, when a witnessed build/capability blocker prevents a valid experiment, or when a",
-    "human decision is required (an allowlist entry, a policy exception). State the evidence and scope briefly; never treat matching difficulty as proof of impossibility.",
+    "human decision is required for another, non-macro policy exception. Evidence-backed macros are an authorized solution route, not an approval request. State the evidence and scope briefly; never treat matching difficulty as proof of impossibility.",
     "Do not commit or create a worktree. Candidate experiments may live under build/; integration is scoped to this function's src/, include/, and configs/ inputs.",
   ].join(" ");
 }
@@ -420,8 +423,8 @@ export function reviewMessage(functionName: string, findings: PolicyFinding[], s
     "correct answer for this function — a genuine, documented exception class — or is it a workaround",
     "for a structural hypothesis the tier failed to find?",
     "",
-    "An exemption asserts permanently, to every later agent, that the construct is correct here.",
-    "Being stuck is not that assertion. Approve only on positive evidence; reject by default.",
+    "Shared include-file operation macros use the automatic configs/macro-evidence.json proof gate, not per-macro approval. Valid evidence-bound calls do not need an exemption; missing or failed evidence must be repaired through that gate, not waived here.",
+    "For other exception classes, an exemption asserts that the construct is correct here. Being stuck is not that assertion. Use positive SDK/original-code evidence, never a universal claim that clean C must exist or a failed spelling search as proof that it cannot.",
     "",
     "Answer by calling `psx_loop_policy_verdict` exactly once. Do not edit any files in this turn.",
   ].join("\n");
@@ -435,6 +438,6 @@ export function rejectionReport(functionName: string, findings: PolicyFinding[],
     "",
     `Reviewer rationale: ${rationale.trim() || "(none given)"}`,
     "",
-    "Do not reintroduce them. The remaining divergence has a clean-C expression; find it.",
+    "Do not reintroduce unsupported constructs. This rejection does not prove that the remaining divergence has a clean-C expression. Re-audit the structural premises; if positive hardware/ABI evidence supports a thin shared operation macro, establish it through the matching skill's linked operation-macro evidence guide and the automatic gate without per-macro approval. Otherwise continue measured source experiments or report a witnessed blocker.",
   ].join("\n");
 }

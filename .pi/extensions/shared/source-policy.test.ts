@@ -24,12 +24,13 @@ test("allows comments and the narrow empty memory scheduling barrier", () => {
   assert.equal(result.pass, true);
 });
 
-test("loaded BIOS tail transfers require explicit approval and one destination", () => {
+test("loaded BIOS tail transfers require a canonical enable or verified evidence and one destination", () => {
   const config = structuredClone(DEFAULT_CONFIG);
   const source = (argumentsText: string) => `void target(void) { PSX_BIOS_TAILJUMP_LOAD(${argumentsText}); }\n`;
   config.sourcePolicy.allowBiosTailJumpMacro = false;
   assert(sourceConstructFindings(source("entry_slot"), config).some(finding => finding.kind === "platform-macro"));
 
+  assert.deepEqual(sourceConstructFindings(source("entry_slot"), config, { evidenceMacros: new Map([["PSX_BIOS_TAILJUMP_LOAD", 1]]) }), []);
   config.sourcePolicy.allowBiosTailJumpMacro = true;
   for (const argument of ["entry_slot", "entries[0]", "(void *)(address + 4)"])
     assert.deepEqual(sourceConstructFindings(source(argument), config), [], argument);
@@ -317,4 +318,50 @@ test("a bare-address allowlist key is the executable's, never another container'
   config.sourcePolicy.allowlist = { "ovl_30:0x800b7e24": ["embedded-asm"] };
   assert.equal(scan("ovl_30_fn", "ovl_30", "src/overlays/ovl_30/ovl_30_fn.c").pass, true);
   assert.equal(scan("exe_fn", "exe", "src/exe_fn.c").pass, false);
+});
+
+
+test("opaque local operation macros fail closed even when their bodies do not parse", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  for (const definition of [
+    '#define TRANSFER(destination) do { register void *p __asm__("$9") = (destination); goto *p; } while (0)',
+    '#define PIN(value) register int p __asm__("$9") = (value)',
+    '#define JUMP(destination) goto *destination',
+    '#define EMIT(value) __asm__("nop")',
+  ]) {
+    const findings = sourceConstructFindings(`${definition}\nvoid target(void) {}\n`, config);
+    assert(findings.some(f => ["platform-macro", "register-asm", "embedded-asm"].includes(f.kind)), definition);
+  }
+});
+
+test("inspectable C helpers, literal mentions and classified barriers still pass", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  for (const definition of [
+    '#define MAXIMUM(a, b) ((a) > (b) ? (a) : (b))',
+    '#define SET(value) do { result = (value); } while (0)',
+    '#define MESSAGE "goto *ptr; __asm__(\\\"nop\\\"); // not code"',
+    '#define BARRIER() __asm__ volatile("" ::: "memory")',
+  ]) assert.deepEqual(sourceConstructFindings(`${definition}\nvoid target(void) {}\n`, config), [], definition);
+});
+
+test("verified definition scope skips only that operation; duplicate definitions and invalid invocations fail", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  const definition = '#define TRANSFER(destination) do { register void *p __asm__("$9") = (destination); goto *p; } while (0)\n';
+  const evidenceMacros = new Map([["TRANSFER", 1]]), scope = { evidenceMacros, definitions: evidenceMacros };
+  assert.deepEqual(sourceConstructFindings(definition, config, scope), []);
+  assert(sourceConstructFindings(definition + '__asm__("nop");\n', config, scope).some(f => f.kind === "embedded-asm"));
+  assert(sourceConstructFindings(definition, config, { evidenceMacros }).some(f => /fingerprinted/.test(f.message)));
+  assert.deepEqual(sourceConstructFindings('void target(void) { TRANSFER(slot); }', config, { evidenceMacros }), []);
+  for (const source of ['void target(void) { TRANSFER(); }', 'void target(void) { TRANSFER(a, b); }', '#undef TRANSFER\nvoid target(void) {}'])
+    assert(sourceConstructFindings(source, config, { evidenceMacros }).some(f => f.kind === "platform-macro"), source);
+});
+
+test("full header AST audit supersedes physical patch lines", () => {
+  const { root, config } = fixture("void target(void) {}\n");
+  mkdirSync(join(root, "include"));
+  const source = '#define BARRIER() __asm__ volatile( \\\n "" ::: "memory")\n';
+  writeFileSync(join(root, "include/helpers.h"), source);
+  const patch = ['+++ b/include/helpers.h', '@@ -0,0 +1,2 @@', ...source.trimEnd().split("\n").map(line => "+" + line)].join("\n");
+  const result = checkSourcePolicy({ projectRoot: root, config, changedFiles: ["include/helpers.h"], patch });
+  assert.equal(result.pass, true, JSON.stringify(result.hardFailures));
 });

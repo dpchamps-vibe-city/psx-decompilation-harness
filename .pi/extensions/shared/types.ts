@@ -295,7 +295,8 @@ export interface AutodecompConfig {
     /** Explicit project approval for the canonical PSX_BIOS_SYSCALL operation,
      * not raw function asm, register pinning or arbitrary macro definitions. */
     allowBiosSyscallMacro?: boolean;
-    /** Canonical fixed-register BIOS tail transfer and its padding only. */
+    /** Legacy enable switch for canonical fixed-vector and loaded-entry BIOS
+     * transfers, not arbitrary definitions. Evidence-bound macros need no new switch. */
     allowBiosTailJumpMacro?: boolean;
     allowlist: Record<string, string[]>;
   };

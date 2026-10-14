@@ -33,11 +33,19 @@ match.
 Three things end the work:
 
 - `psx_finalize_function` passes;
-- you hit something only a human can decide — an allowlist entry, a policy
-  exception; or
+- you hit something only a human can decide — a non-macro allowlist entry or
+  another policy exception not covered by the evidence gate; or
 - a witnessed input/build blocker or original-word target classification prevents
   clean-C reconstruction (for example, a BIOS assembly veneer whose implementation
   is in ROM, not this object). An engine capability refusal alone is not proof.
+
+Evidence-backed operation macros are a solution route, not a human-decision
+stop. Agents may create shared definitions in project include files when strong
+SDK/original-code evidence and production byte checks establish the operation.
+Follow [operation-macro evidence](../../../docs/macro-evidence.md); exceptional definitions use the automatic
+`configs/macro-evidence.json` gate. Do not ask for per-macro approval, change the
+function allowlist, or hide an allocation workaround in a macro. Failed spelling
+searches prove neither that clean C exists nor that an exceptional macro is needed.
 
 For standalone `/decompile` or `/fix-decomp`, persist either non-matching outcome
 with `psx_park_function`, its exact target key, reason and evidence before stopping.
@@ -366,9 +374,15 @@ is not a finish line. Its build step compares every container the project
 builds, not only the one you edited — an edit to a shared symbol relinks the
 others, and a gate scoped to one binary would pass while another one changed.
 
-Embedded assembly, hard-register pinning and new assembly stubs are not
-decompilation solutions. Where the target genuinely requires one, it needs an
-allowlist entry, and that is a human decision — file it, do not grant it.
+Raw embedded assembly, hard-register pinning and new assembly stubs are not
+ordinary decompilation solutions. A positively witnessed hardware/ABI operation
+may instead be reconstructed as an evidence-backed shared include-file macro,
+without per-macro human approval. Its definition, operands, original witnesses
+and unchanged-production byte checks must pass the [operation-macro evidence
+requirements](../../../docs/macro-evidence.md) and the
+source-policy gate. Verify every affected user and the full project after a
+shared-header edit. Other policy exceptions still follow the existing human
+review rules; do not grant those yourself.
 
 ## Reporting
 
@@ -379,8 +393,8 @@ an experiment.
 You write exactly one of three things, at the end:
 
 - **A match.** What `psx_finalize_function` verified.
-- **A human decision.** The one thing that needs deciding — an allowlist entry,
-  a policy exception — in a paragraph, with the residual key and the axes the
+- **A human decision.** The one non-macro exception that needs deciding — an
+  allowlist entry or other uncovered policy exception — in a paragraph, with the residual key and the axes the
   ledger shows as closed.
 - **A witnessed blocker.** Its evidence and premises, with confirmation that
   standalone work was durably parked (or handed back to the active controller).

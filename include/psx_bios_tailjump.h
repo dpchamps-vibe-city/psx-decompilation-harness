@@ -14,6 +14,13 @@ register unsigned long __psx_bios_selector __asm__("$9");
         goto *__psx_bios_entry; \
     } while (0)
 
+/* Loaded-entry transfer: $9 holds the address, not a service selector. */
+#define PSX_BIOS_TAILJUMP_LOAD(destination) \
+    do { \
+        register void *__psx_bios_entry __asm__("$9") = (destination); \
+        goto *__psx_bios_entry; \
+    } while (0)
+
 /* Public definition: expose the SDK signature and service binding together
  * with the terminal transfer. */
 #define PSX_BIOS_FUNCTION(result, name, parameters, vector, selector) \

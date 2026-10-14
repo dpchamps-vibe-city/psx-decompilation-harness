@@ -14,15 +14,11 @@ register unsigned long __psx_bios_selector __asm__("$9");
         goto *__psx_bios_entry; \
     } while (0)
 
-/* Backend padding only, not another executable return. */
-#define PSX_BIOS_TAILJUMP_END() __asm__(".balign 8")
-
-/* Public definition: expose the SDK signature and service binding together;
- * keep the terminal transfer and padded extent inside this operation. */
+/* Public definition: expose the SDK signature and service binding together
+ * with the terminal transfer. */
 #define PSX_BIOS_FUNCTION(result, name, parameters, vector, selector) \
     result name parameters { \
         PSX_BIOS_TAILJUMP(vector, selector); \
-    } \
-    PSX_BIOS_TAILJUMP_END()
+    }
 
 #endif

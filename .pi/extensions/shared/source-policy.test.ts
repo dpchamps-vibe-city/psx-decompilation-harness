@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "../../../tools/testing/runtimeTestContext.js";
 import { DEFAULT_CONFIG, loadConfig } from "./config.ts";
-import { checkSourcePolicy, isPendingStub } from "./source-policy.ts";
+import { checkSourcePolicy, isPendingStub, sourceConstructFindings } from "./source-policy.ts";
 
 function fixture(source: string) {
   const root = mkdtempSync(join(tmpdir(), "autodecomp-policy-"));
@@ -22,6 +22,41 @@ test("allows comments and the narrow empty memory scheduling barrier", () => {
   const { root, config } = fixture(`/* __asm__(\"not code\") */\nvoid target(void) {\n    __asm__ volatile(\"\" ::: \"memory\");\n}\n`);
   const result = checkSourcePolicy({ projectRoot: root, config, functionName: "target", scanFunctions: ["target"] });
   assert.equal(result.pass, true);
+});
+
+test("loaded BIOS tail transfers require explicit approval and one destination", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  const source = (argumentsText: string) => `void target(void) { PSX_BIOS_TAILJUMP_LOAD(${argumentsText}); }\n`;
+  config.sourcePolicy.allowBiosTailJumpMacro = false;
+  assert(sourceConstructFindings(source("entry_slot"), config).some(finding => finding.kind === "platform-macro"));
+
+  config.sourcePolicy.allowBiosTailJumpMacro = true;
+  for (const argument of ["entry_slot", "entries[0]", "(void *)(address + 4)"])
+    assert.deepEqual(sourceConstructFindings(source(argument), config), [], argument);
+  for (const argumentsText of ["", "entry_slot, other_slot"])
+    assert(sourceConstructFindings(source(argumentsText), config).some(finding => finding.kind === "platform-macro"), argumentsText);
+});
+
+test("loaded BIOS tail transfers remain approval-checked through a forwarding macro", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  const source = "#define FORWARD_TRANSFER(destination) PSX_BIOS_TAILJUMP_LOAD(destination)\nvoid target(void) { FORWARD_TRANSFER(entry_slot); }\n";
+  config.sourcePolicy.allowBiosTailJumpMacro = false;
+  assert(sourceConstructFindings(source, config).some(finding => finding.kind === "platform-macro"));
+  config.sourcePolicy.allowBiosTailJumpMacro = true;
+  assert.deepEqual(sourceConstructFindings(source, config), []);
+});
+
+test("loaded BIOS tail-transfer operations cannot be redefined or undefined", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.sourcePolicy.allowBiosTailJumpMacro = true;
+  for (const directive of [
+    "#define PSX_BIOS_TAILJUMP_LOAD(destination) ((void)0)",
+    '#define PSX_BIOS_TAILJUMP_LOAD(destination) do { register void *p __asm__("$9") = (destination); goto *p; } while (0)',
+    "#undef PSX_BIOS_TAILJUMP_LOAD",
+  ]) {
+    const findings = sourceConstructFindings(`${directive}\nvoid target(void) {}\n`, config);
+    assert(findings.some(finding => finding.kind === "platform-macro" && /Do not (redefine|undefine)/.test(finding.message)), directive);
+  }
 });
 
 test("rejects register pinning, embedded assembly, and stubs", () => {

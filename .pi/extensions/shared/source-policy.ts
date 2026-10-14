@@ -3,7 +3,7 @@ import { relative, resolve, sep } from "node:path";
 import type { AutodecompConfig, PolicyFinding, SourcePolicyResult } from "./types.ts";
 import { analyzeCSource, capturePrevRetSites, matchingConstructs, walkActiveC } from "../../../tools/agent/cSourceGuard.ts";
 import { parseC, field, namedChildren } from "../../../tools/agent/residual-source-search/tree-sitter-c.ts";
-import { BIOS_SYSCALL_HEADER, BIOS_SYSCALL_MACRO, isBiosSyscallHeader, BIOS_TAILJUMP_HEADER, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_END_MACRO, isBiosTailJumpHeader } from "../../../tools/lib/biosSyscallMacro.js";
+import { BIOS_SYSCALL_HEADER, BIOS_SYSCALL_MACRO, isBiosSyscallHeader, BIOS_TAILJUMP_HEADER, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_LOAD_MACRO, BIOS_TAILJUMP_END_MACRO, isBiosTailJumpHeader } from "../../../tools/lib/biosSyscallMacro.js";
 import { BIOS_FUNCTION_MACRO, biosFunctionProjection } from "../../../tools/lib/biosFunctionMacro.js";
 import { loadLibraryProject } from "../../../tools/lib/project.js";
 import { libraryMemberForSource, withLibraryMetadata } from "../../../tools/lib/libraryTargets.js";
@@ -351,15 +351,21 @@ export function sourceConstructFindings(source: string, config: AutodecompConfig
         findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_TAILJUMP requires explicit approval, a literal A0/B0/C0 vector and an 8-bit literal selector" });
       }
     }
+    if (node.type === "call_expression" && field(node, "function")?.text === BIOS_TAILJUMP_LOAD_MACRO) {
+      const args = field(node, "arguments"), values = args ? namedChildren(args) : [];
+      if (!config.sourcePolicy.allowBiosTailJumpMacro || values.length !== 1) {
+        findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_TAILJUMP_LOAD requires explicit approval and one destination expression" });
+      }
+    }
     const end = node.type === "call_expression" ? field(node, "function") : node.type === "function_declarator" ? field(node, "declarator") : undefined;
     if (end?.text === BIOS_TAILJUMP_END_MACRO && (!config.sourcePolicy.allowBiosTailJumpMacro || namedChildren(field(node, "arguments") ?? field(node, "parameters")!).length)) {
       findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_TAILJUMP_END requires explicit approval and no arguments" });
     }
-    if (node.type === "preproc_call" && /^#\s*undef\s+PSX_BIOS_(?:FUNCTION|SYSCALL|TAILJUMP(?:_END)?)\b/.test(node.text)) {
+    if (node.type === "preproc_call" && /^#\s*undef\s+PSX_BIOS_(?:FUNCTION|SYSCALL|TAILJUMP(?:_(?:END|LOAD))?)\b/.test(node.text)) {
       findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "Do not undefine canonical BIOS operations" });
     }
     if (node.type === "preproc_function_def" || node.type === "preproc_def") {
-      if ([BIOS_FUNCTION_MACRO, BIOS_SYSCALL_MACRO, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_END_MACRO].includes(field(node, "name")?.text ?? "")) findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "Do not redefine BIOS operations; use the canonical platform header" });
+      if ([BIOS_FUNCTION_MACRO, BIOS_SYSCALL_MACRO, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_LOAD_MACRO, BIOS_TAILJUMP_END_MACRO].includes(field(node, "name")?.text ?? "")) findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "Do not redefine BIOS operations; use the canonical platform header" });
       if (field(node, "name")?.text === "CAPTURE_PREV_RET")
         findings.push({ kind: "register-asm", line: node.startPosition.row + 1, message: "Do not redefine the standing CAPTURE_PREV_RET construct; use common.h" });
       /* tree-sitter exposes a replacement list as opaque preproc_arg. Fold

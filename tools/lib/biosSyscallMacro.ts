@@ -6,6 +6,7 @@ import { loadConfig } from "../../.pi/extensions/shared/config.js";
 export const BIOS_SYSCALL_MACRO = "PSX_BIOS_SYSCALL";
 export const BIOS_SYSCALL_HEADER = "include/library/psx_bios.h";
 export const BIOS_TAILJUMP_MACRO = "PSX_BIOS_TAILJUMP";
+export const BIOS_TAILJUMP_LOAD_MACRO = "PSX_BIOS_TAILJUMP_LOAD";
 export const BIOS_TAILJUMP_END_MACRO = "PSX_BIOS_TAILJUMP_END";
 export const BIOS_TAILJUMP_HEADER = "include/library/psx_bios_tailjump.h";
 export function biosSyscallHeaderText(): string {

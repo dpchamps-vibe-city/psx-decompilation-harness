@@ -65,6 +65,7 @@ test("mixed stubs, multi-function candidates and wrong assembly ownership are re
   try {
     assert.throws(() => inspectLibraryPart(f.stub("first") + "int second(void) { return 0; }", { path: "first.c", symbol: "first" }), /mixed\/partial/);
     assert.throws(() => inspectLibraryPart("int first(void) { return 0; } int second(void) { return 0; }", { path: "first.c", symbol: "first" }), /define only first/);
+    assert.throws(() => inspectLibraryPart("int first(void) { int nested(void) { return 1; } return nested(); }", { path: "first.c", symbol: "first" }), /nested function definitions/);
     assert.throws(() => inspectLibraryPart(f.stub("second"), { path: "first.c", symbol: "first" }), /mixed\/partial/);
     assert.throws(() => inspectLibraryPart("int first(void) { return 0; }", { path: "_shared.h" }), /cannot define functions/);
     writeLibraryTu(f.member, f.stub("first") + f.stub("second"), f.root);
@@ -161,14 +162,35 @@ test("private split extends only original backlog, preserves neighbors and is id
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("address-taken callbacks extend only their original backlog into separate ordered function files", () => {
+  const f = fixture();
+  try {
+    f.member.functions = [{ name: "first", section: ".text", offset: 0 }, { name: "second", section: ".text", offset: 64 }] as LibraryMember["functions"];
+    writeLibraryTu(f.member, '#include "common.h"\n' + f.stub("first") + f.stub("second") + f.stub("__library_member_data"), f.root);
+    const preserved = ["_shared-0.h", "first.c", "second.c", "_data.c"].map(path => [path, readFileSync(join(f.directory, path))] as const);
+    f.member.functions.splice(1, 0, ...[32, 40].map(offset => ({ name: `callback_${offset}`, section: ".text", offset, size: 8, inferredSize: true,
+      discovery: { kind: "address-relocation" as const, sites: [{ section: ".text", offset: offset - 32 }] } })));
+    assert.throws(() => readLibraryTu(f.member, f.root), /every original function/);
+    extendLibraryBacklog([f.member], f.root);
+    assert.deepEqual(readLibraryTu(f.member, f.root).parts.map(p => p.symbol).filter(Boolean),
+      ["first", "callback_32", "callback_40", "second", "__library_member_data"]);
+    for (const name of ["callback_32", "callback_40"]) assert.equal(readFileSync(join(f.directory, `${name}.c`), "utf8"), f.stub(name));
+    for (const [path, before] of preserved) assert(readFileSync(join(f.directory, path)).equals(before));
+    const manifest = readFileSync(join(f.root, f.member.source));
+    extendLibraryBacklog([f.member], f.root);
+    assert(readFileSync(join(f.root, f.member.source)).equals(manifest), "migration is idempotent");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("private split refuses real C, missing original functions and unlisted edits without partial publication", () => {
-  for (const mode of ["real-c", "missing-original", "unlisted-file"]) {
+  for (const kind of ["call-relocation", "address-relocation"] as const) for (const mode of ["real-c", "missing-original", "unlisted-file"]) {
     const f = fixture();
     try {
       f.member.functions = [{ name: "first", section: ".text", offset: 0 }, { name: "second", section: ".text", offset: 32 }] as LibraryMember["functions"];
       writeLibraryTu(f.member, f.stub("first") + f.stub("second"), f.root);
       f.member.functions.splice(1, 0, { name: "func_text_00000010", section: ".text", offset: 16, size: 16, inferredSize: true,
         discovery: { kind: "call-relocation", sites: [{ section: ".text", offset: 4 }] } });
+      f.member.functions[1]!.discovery!.kind = kind;
       if (mode === "real-c") writeFileSync(join(f.directory, "first.c"), "int first(void) { return 7; }\n");
       if (mode === "missing-original") {
         const manifest = JSON.parse(readFileSync(join(f.root, f.member.source), "utf8")); manifest.parts.pop();

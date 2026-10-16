@@ -10,13 +10,13 @@ import { libraryMembers, libraryTargetKey } from "../lib/libraryTargets.js";
 import { readRelocatableObject, objectFunctions } from "../lib/relocatableObject.js";
 import { libraryTuStatus, readLibraryTu } from "../lib/libraryTranslationUnit.js";
 import { compileSource } from "./decompToolchain.js";
-import { splitLibrary, measureLibraryFunction } from "./libraryTarget.js";
+import { splitLibrary, measureLibraryFunction, prepareLibraryFunction } from "./libraryTarget.js";
 import { preflightLibraryFunction, checkLibrarySplits } from "./libraryPreflight.js";
 import { classifyLibraryCode } from "./libraryCodeClass.js";
 
 /** Synthetic SDK-style mixed member: one size-zero export, two unnamed private
  * callees, an old BIOS veneer and data. No proprietary SDK/game bytes. */
-function fixture(t: { after: (cleanup: () => void) => void }) {
+function fixture(t: { after: (cleanup: () => void) => void }, addressTaken = false) {
   const root = mkdtempSync(join(tmpdir(), "psx-library-e2e-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const config = JSON.parse(readFileSync(join(ROOT, "toolchain.json"), "utf8"));
@@ -41,8 +41,11 @@ function fixture(t: { after: (cleanup: () => void) => void }) {
     writeFileSync(join(root, "sdk/include", path), text);
     writeFileSync(join(root, "sdk/INCLUDE", path.toUpperCase()), text);
   }
+  if (addressTaken) writeFileSync(join(root, "include/hooks.h"), "#ifndef HOOKS_H\n#define HOOKS_H\nstruct HookPair { int (*first)(void); int (*second)(void); };\nextern struct HookPair hooks;\n#endif\n");
   writeFileSync(join(root, "toolchain.json"), JSON.stringify(config));
-  const originalC = "int private_helper(unsigned int); int bios_entry(unsigned int);\nint entry(unsigned int x) { if (!x) return 0; return private_helper(x) + bios_entry(x); }\n";
+  const originalC = addressTaken
+    ? '#include "hooks.h"\nint private_helper(void); int bios_entry(void);\nint entry(unsigned int x) { hooks.first = private_helper; hooks.second = bios_entry; return x + 1; }\n'
+    : "int private_helper(unsigned int); int bios_entry(unsigned int);\nint entry(unsigned int x) { if (!x) return 0; return private_helper(x) + bios_entry(x); }\n";
   const project = { schemaVersion: 1, target: { kind: "relocatable-library", format: "elf-ar", standaloneObjects: ["original.o"] },
     headers: { reference: ["sdk/include"], owned: ["include"], context: ["common.h", "api.h"] },
     output: { sourceDir: "src/libraries", sourceLayout: "tu-directory", inputRoot: "." } };
@@ -50,7 +53,9 @@ function fixture(t: { after: (cleanup: () => void) => void }) {
     const source = join(root, "original.c"); writeFileSync(source, originalC);
     const artifacts = compileSource(source, join(root, "seed"), "original", { containerKind: "exe", assemble: false });
     const asm = readFileSync(artifacts.assembly, "utf8").replace(/^\s*move\s+([^,\n]+),([^\n#]+)/gm, "\taddu $1,$2,$0");
-    const helpers = `\n.set noreorder\n.text\n.local private_helper\nprivate_helper:\naddiu $v0,$a0,7\njr $ra\nnop\n.local bios_entry\nbios_entry:\nand $t2,$t2,$zero\nori $t2,$t2,0xb0\nand $t1,$t1,$zero\njr $t2\nori $t1,$t1,0x18\njr $ra\nnop\n.data\n.word 7\n`;
+    const helpers = addressTaken
+      ? `\n.set noreorder\n.text\n.local private_helper\nprivate_helper:\naddiu $v0,$zero,7\njr $ra\nnop\n.local bios_entry\nbios_entry:\naddiu $v0,$zero,9\njr $ra\nnop\n.data\n.globl hooks\nhooks:\n.word 0,0\n.word 7\n`
+      : `\n.set noreorder\n.text\n.local private_helper\nprivate_helper:\naddiu $v0,$a0,7\njr $ra\nnop\n.local bios_entry\nbios_entry:\nand $t2,$t2,$zero\nori $t2,$t2,0xb0\nand $t1,$t1,$zero\njr $t2\nori $t1,$t1,0x18\njr $ra\nnop\n.data\n.word 7\n`;
     writeFileSync(join(root, "original.s"), asm + helpers);
     execFileSync(config.tools.as, [...config.flags.as, join(root, "original.s"), "-o", join(root, "original.o")]);
     execFileSync(config.tools.objcopy, ["--strip-symbol=private_helper", "--strip-symbol=bios_entry", join(root, "original.o")]);
@@ -61,7 +66,8 @@ function fixture(t: { after: (cleanup: () => void) => void }) {
     const functions = objectFunctions(readRelocatableObject(bytes));
     assert.equal(functions.length, 3, JSON.stringify(functions));
     const api = "#ifndef SDK_API_H\n#define SDK_API_H\n#include \"kernel.h\"\nint entry(SdkWord);\n" +
-      functions.slice(1).map(f => `int ${f.name}(SdkWord);`).join("\n") + "\n#endif\n";
+      functions.slice(1).map(f => `int ${f.name}(${addressTaken ? "void" : "SdkWord"});`).join("\n") +
+      (addressTaken ? '\n#include "hooks.h"' : "") + "\n#endif\n";
     writeFileSync(join(root, "sdk/include/api.h"), api); writeFileSync(join(root, "sdk/INCLUDE/API.H"), api);
     writeFileSync(join(root, "project.json"), JSON.stringify(project));
     const member = libraryMembers(root)[0]!;
@@ -120,6 +126,60 @@ test("end-to-end: configured headers, relocation-aware splits, production C subs
     writeFileSync(assemblyData, beforeAssembly);
     // Re-running splitting neither expands the assignment nor overwrites C.
     splitLibrary(); assert(readFileSync(join(sourceDir, "entry.c")).equals(entryStub));
+  });
+});
+
+test("end-to-end: address-only callbacks split and migrate into individual files before one-function preparation", async t => {
+  const f = fixture(t, true);
+  await fixtureContext(f.root, async () => {
+    const { member, key, bytes, candidate } = f.create();
+    assert.deepEqual(member.functions.slice(1).map(fn => fn.discovery?.kind), ["address-relocation", "address-relocation"]);
+    splitLibrary();
+    const directory = dirname(join(f.root, member.source)), manifest = readLibraryTu(member, f.root);
+    assert.equal(manifest.parts.filter(p => p.symbol && p.symbol !== "__library_member_data").length, 3);
+    const entry = readFileSync(join(directory, "entry.c")), data = readFileSync(join(directory, "_data.c"));
+    // Reproduce an existing directory TU from the old JAL-only census. It has
+    // one initializer part; newly witnessed callbacks must subdivide backlog.
+    const callbacks = new Set(member.functions.slice(1).map(fn => fn.name));
+    for (const part of manifest.parts.filter(p => callbacks.has(p.symbol!))) rmSync(join(directory, part.path));
+    manifest.parts = manifest.parts.filter(p => !callbacks.has(p.symbol!));
+    writeFileSync(join(f.root, member.source), JSON.stringify(manifest));
+    splitLibrary();
+    assert.equal(libraryTuStatus(member, f.root)!.filter(p => p.symbol && p.symbol !== "__library_member_data").length, 3);
+    assert(readFileSync(join(directory, "entry.c")).equals(entry));
+    assert(readFileSync(join(directory, "_data.c")).equals(data));
+    for (const fn of member.functions) {
+      const listing = readFileSync(join(f.root, `build/libraries/nonmatchings/${member.id}/${fn.name}.s`), "utf8");
+      for (const other of member.functions.filter(other => other !== fn)) assert(!listing.includes(`glabel ${other.name} `));
+    }
+    assert.equal(checkLibrarySplits().status, "passed", "splitting preserves the entire original member");
+    const prepared = await preflightLibraryFunction(key);
+    assert.equal(prepared.status, "passed", JSON.stringify(prepared));
+    assert.equal(prepared.preparation!.compilation, "succeeded", JSON.stringify(prepared.preparation));
+    const latest = join(f.root, "build/preparation", key, "latest-library.json"), oldDraft = join(f.root, "obsolete.c");
+    const stale = "/* obsolete compound extent */\nint entry(unsigned int x) { return 1234; }\n";
+    writeFileSync(oldDraft, stale);
+    // A draft produced for the former compound extent must not be inherited
+    // merely because its destination and one top-level signature still match.
+    for (const generationContract of ["directory-tu-selected-related-v2", "directory-tu-selected-related-v3"]) {
+      writeFileSync(latest, JSON.stringify({ draft: "obsolete.c", destination: join(dirname(member.source), "entry.c"), generationContract, boundaryIdentity: "obsolete" }));
+      const fresh = await prepareLibraryFunction(key);
+      assert.notEqual(fresh.packet.primary!.path, "obsolete.c");
+      assert(!fresh.packet.primary!.text.includes("obsolete compound extent"));
+      assert.equal(readFileSync(oldDraft, "utf8"), stale, "stale draft evidence is preserved, not overwritten");
+    }
+    const recorded = JSON.parse(readFileSync(latest, "utf8"));
+    assert.equal(recorded.generationContract, "directory-tu-selected-related-v3");
+    assert.equal(typeof recorded.boundaryIdentity, "string");
+    assert.notEqual(recorded.boundaryIdentity, "obsolete");
+    const retained = join(f.root, "retained.c"), retainedText = readFileSync(join(f.root, recorded.draft), "utf8") + "\n/* keep this measured draft */\n";
+    writeFileSync(retained, retainedText);
+    writeFileSync(latest, JSON.stringify({ ...recorded, draft: "retained.c" }));
+    assert.equal((await prepareLibraryFunction(key)).packet.primary!.path, "retained.c", "unchanged function partitions still retain edited drafts");
+    assert.equal(readFileSync(retained, "utf8"), retainedText);
+    const source = join(f.root, "candidate.c"); writeFileSync(source, candidate);
+    assert.equal(measureLibraryFunction(key, source).comparison.verdict, "match", "initializer-only C retains callback backlog and the whole-object identity");
+    assert(readFileSync(join(f.root, "original.o")).equals(bytes));
   });
 });
 

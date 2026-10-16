@@ -133,8 +133,8 @@ export function compareRelocatableObjects(original: Buffer, candidate: Buffer): 
   }
 }
 /** Size-zero extents remain bounds, not historical function-size claims.
- * Preserve original FUNC/export labels and conservative private JAL entries;
- * never promote every local branch label or an unrelocated J field. */
+ * Preserve original FUNC/export labels and conservative private call/address
+ * entries; never promote every local branch label or an unrelocated J field. */
 export function objectFunctions(object: RelocatableObject): ObjectFunction[] {
   const code = object.symbols.filter(s => object.sections.get(s.section)?.flags! & 4 && (s.type === 2 || (s.binding !== 0 && s.type === 0)));
   const named = code.filter(s => /^[A-Za-z_]\w*$/.test(s.name)).map(s => {

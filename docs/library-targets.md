@@ -116,12 +116,24 @@ only its selected function include in that same driver. There is no isolated
 compile, post-match stitching or second acceptance environment.
 
 Private entries can also be witnessed by section-relative `R_MIPS_26` JAL
-relocations. Discovery rejects interior sized symbols, fallthrough and
-cross-boundary shared blocks; raw J fields and imports are not boundaries.
+relocations or published code addresses formed by original `HI16/LO16` pairs.
+Address discovery preserves relocation-table pairing, symbol values and signed-low
+carry, requires an unclobbered `LUI`/`ADDIU` chain and a pointer store/argument/
+return/indirect-call use (including stores in delay slots), and validates the
+candidate's independent control flow. Text loads, indexed switch addresses,
+literals, unresolved computed jumps, fallthrough, cross-boundary shared blocks
+and interiors of explicitly sized original symbols are not new functions. Raw
+fields and imports are never entry witnesses. Other address forms, including
+`R_MIPS_32`-only tables, are not promoted by this bounded recognizer.
 These bounds remain **inferred**, not recovered historical sizes. The adapter
 feeds original section/file coordinates and bounds to the disassembler before
 call discovery, avoiding ET_REL addends being mistaken for listing addresses.
 Complete original code words and boundaries are validated before publishing.
+The original entry census is rechecked before inferred bounds are passed to the
+disassembler: byte-exact reassembly alone cannot certify a one-function partition,
+because a compound assembly fragment also preserves every byte. Prepared build
+drafts are retained only while their function-partition identity is unchanged;
+stale drafts remain as evidence but are not inherited by a newly split assignment.
 Private helper names retain the established local listing spelling so already
 matched callers do not acquire fictitious imports; authoritative coordinates
 remain member/section/offset, never those numeric names as runtime addresses.
@@ -239,7 +251,8 @@ formats/relocations produce failure or `UNDETERMINED`, never `MATCH`.
 A selected function's INCLUDE_ASM/nonmatching marker produces `STUB`, even at
 100% words. Directory builds allow **exclusive original backlog files**, not
 mixed C/assembly files: each function fragment is one definition or its sole
-canonical placeholder; shared fragments cannot hide functions. Clean fragments
+canonical placeholder; nested function definitions are rejected, and shared
+fragments cannot hide functions. Clean fragments
 must pass source policy. The entire object's bytes, relocation addends, symbol
 population and neighboring storage are still checked without masks or partial
 object exemptions. Legacy monolithic member checking still requires complete C.

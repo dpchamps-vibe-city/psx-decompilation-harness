@@ -45,7 +45,7 @@ export function readLibraryTu(member: LibraryMember, root: string, options: { al
       if (part.symbol !== "__library_member_data" && part.path !== libraryFunctionFilename(member, part.symbol)) throw new Error(`Function TU part must be ${libraryFunctionFilename(member, part.symbol)}`);
     }
   }
-  if (member.functions.some(fn => !symbols.has(fn.name) && !(options.allowDiscoveredBacklog && fn.discovery?.kind === "call-relocation")) || [...symbols].some(s => s !== "__library_member_data" && !member.functions.some(fn => fn.name === s)))
+  if (member.functions.some(fn => !symbols.has(fn.name) && !(options.allowDiscoveredBacklog && fn.discovery !== undefined)) || [...symbols].some(s => s !== "__library_member_data" && !member.functions.some(fn => fn.name === s)))
     throw new Error(`TU manifest must list every original function exactly once: ${member.source}`);
   return manifest;
 }
@@ -69,6 +69,11 @@ export function inspectLibraryPart(text: string, part: LibraryTuPart): { stub: b
   }
   if (part.symbol && part.symbol !== "__library_member_data") {
     if (signatures.length !== 1 || signatures[0]!.name !== part.symbol) throw new Error(`${part.path}: must define only ${part.symbol}`);
+    const tree = parseC(text);
+    try {
+      if (tree.rootNode.descendantsOfType("function_definition").length > 1)
+        throw new Error(`${part.path}: nested function definitions are not C89 function fragments`);
+    } finally { tree.delete(); }
   } else if (signatures.length) throw new Error(`${part.path}: shared/data part cannot define functions`);
   return { stub: false };
 }

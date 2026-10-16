@@ -313,14 +313,15 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   const destination = join(root, target.source), source = existsSync(destination) ? readFileSync(destination, "utf8") : "";
   const existing = !!source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*#include[^\n]*$/gm, "").replace(/^\s*INCLUDE_ASM\([^)]*\);\s*$/gm, "").trim();
   const latest = join(root, "build/preparation", key, "latest-library.json");
+  const boundaryIdentity = stableHash(member.functions.map(f => [f.name, f.section, f.offset, f.size]));
   const syscall = biosSyscallCandidate(member, fn, root) ?? biosTailJumpCandidate(member, fn, root);
   let retained: PreparationPacket["primary"] = null;
   if (!existing && !options.alternative && !syscall) {
     try {
-      const previous = JSON.parse(readFileSync(latest, "utf8")) as { draft: string; destination?: string; generationContract?: string };
+      const previous = JSON.parse(readFileSync(latest, "utf8")) as { draft: string; destination?: string; generationContract?: string; boundaryIdentity?: string };
       const text = readFileSync(resolve(root, previous.draft), "utf8");
       if (isDirectoryTu(member)) {
-        if (previous.destination !== target.source || previous.generationContract !== "directory-tu-selected-related-v2" || inspectLibraryPart(text, { path: `${fn.name}.c`, symbol: fn.name }).stub) throw new Error("Prior draft belongs to a different source boundary");
+        if (previous.destination !== target.source || previous.generationContract !== "directory-tu-selected-related-v3" || previous.boundaryIdentity !== boundaryIdentity || inspectLibraryPart(text, { path: `${fn.name}.c`, symbol: fn.name }).stub) throw new Error("Prior draft belongs to a different source boundary");
       }
       retained = { origin: "m2c", path: previous.draft, text, sha256: digest(text), declarationsRequired: [] };
     } catch { /* No prior draft. Failed/empty generation never publishes this pointer. */ }
@@ -456,7 +457,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   packet.preparationState = "complete";
   packet.identity.fingerprint = digest(JSON.stringify({ inputs, memberships }));
   if (!options.alternative && packet.primary?.origin === "m2c" && packet.compilation.status === "succeeded")
-    writeFileSync(latest, JSON.stringify({ draft: packet.primary.path, destination: target.source, generationContract: "directory-tu-selected-related-v2" }) + "\n");
+    writeFileSync(latest, JSON.stringify({ draft: packet.primary.path, destination: target.source, generationContract: "directory-tu-selected-related-v3", boundaryIdentity }) + "\n");
   const path = relative(root, join(directory, "packet.json"));
   writeFileSync(join(root, path), JSON.stringify(packet, null, 2) + "\n");
   writeFileSync(join(directory, "handoff.md"), packetOpening(packet, path)); writeFileSync(join(directory, "evidence.md"), packetEvidence(packet)); writeFileSync(join(directory, "diagnostics.txt"), packet.compilation.diagnostics);

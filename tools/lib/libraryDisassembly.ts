@@ -3,10 +3,23 @@
  * are diagnostic coordinates only, never invented runtime addresses. The
  * pristine object remains the sole acceptance oracle. */
 import type { LibraryMember } from "./libraryTargets.js";
+import { objectFunctions } from "./relocatableObject.js";
 
+/** Byte-fidelity alone cannot certify a one-function partition: a compound
+ * assembly stub also round-trips exactly. Recheck the original entry census
+ * before supplying inferred sizes as disassembler facts or accepting a listing. */
+function validatePartition(member: LibraryMember): void {
+  const recovered = objectFunctions(member.object);
+  for (const fn of recovered) {
+    const assigned = member.functions.find(f => f.section === fn.section && f.offset === fn.offset && f.name === fn.name);
+    if (!assigned || assigned.size !== fn.size)
+      throw new Error(`${member.id}: stale/compound function partition at ${fn.section}+0x${fn.offset.toString(16)} (${fn.name}); regenerate original splits before single-function preparation`);
+  }
+}
 export function libraryDisassemblySymbols(member: LibraryMember): string {
+  validatePartition(member);
   const table = member.bytes.readUInt32LE(32), stride = member.bytes.readUInt16LE(46);
-  return "// Original symbols and conservative call-relocation bounds; not RAM.\n" + member.functions.map(fn => {
+  return "// Original symbols and conservative call/address-relocation bounds; not RAM.\n" + member.functions.map(fn => {
     const section = member.object.sections.get(fn.section)!;
     const address = member.bytes.readUInt32LE(table + section.index * stride + 12);
     const coordinate = (address || section.offset) + fn.offset, vrom = section.offset + fn.offset;
@@ -16,6 +29,7 @@ export function libraryDisassemblySymbols(member: LibraryMember): string {
 }
 /** A malformed/truncated listing must not publish a plausible-looking split. */
 export function validateLibraryDisassembly(member: LibraryMember, listing: string): void {
+  validatePartition(member);
   const blocks = [...listing.matchAll(/^\.section\s+([^\s,]+).*$/gm)];
   for (const [name, section] of member.object.sections) {
     if (!(section.flags & 4) || !section.size) continue;

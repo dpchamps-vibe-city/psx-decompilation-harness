@@ -2,14 +2,16 @@ import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import type { LibraryMember } from "./libraryTargets.js";
 import { libraryDisassemblySymbols, validateLibraryDisassembly } from "./libraryDisassembly.js";
+import { objectFunctions } from "./relocatableObject.js";
 
 /** Diagnostic metadata fixture; the production ELF/SDK/compiler route is
  * separately exercised by libraryPreflight.test.ts. */
 function fixture() {
   const bytes = Buffer.alloc(132); bytes.writeUInt32LE(52, 32); bytes.writeUInt16LE(40, 46);
   const member = { id: "synthetic", bytes, functions: [{ name: "entry", section: ".text", offset: 0, size: 16, inferredSize: true }],
-    object: { sections: new Map([[".text", { index: 1, flags: 6, offset: 0x70, size: 16,
-      data: Buffer.from("0800e003000000004e4f7072696e7466", "hex") }]]) } } as LibraryMember;
+    object: { flags: 0, symbols: [{ name: "entry", value: 0, size: 0, type: 2, binding: 1, visibility: 0, section: ".text" }], relocations: [],
+      sections: new Map([[".text", { index: 1, flags: 6, offset: 0x70, size: 16,
+      data: Buffer.from("0800e003000000004e4f7072696e7466", "hex") }]]) } } as unknown as LibraryMember;
   const listing = ".section .text\nnonmatching entry, 0x10\nglabel entry\n" +
     "/* 000070 00000070 0800E003 */ jr $ra\n/* 000074 00000074 00000000 */ nop\n" +
     "/* 000078 00000078 4E4F7072 */ .word 0x72704f4e\n/* 00007C 0000007C 696E7466 */ .word 0x66746e69\n";
@@ -45,4 +47,20 @@ test("missing, changed, duplicated, misplaced or extraneous original code words 
     listing.replace("nonmatching entry", "nonmatching other")]) {
     assert.throws(() => validateLibraryDisassembly(member, broken));
   }
+});
+
+test("a byte-exact compound fragment cannot harden stale single-function bounds", () => {
+  const { member } = fixture(), section = member.object.sections.get(".text")!;
+  const words = [0x3c020000, 0x24420018, 0xac820000, 0x03e00008, 0, 0, 0x03e00008, 0x24020001];
+  section.data = Buffer.alloc(words.length * 4); section.size = section.data.length;
+  words.forEach((w, i) => section.data.writeUInt32LE(w, i * 4));
+  member.functions[0]!.size = section.size;
+  member.object.relocations = [{ section: ".text", offset: 0, type: 5, reference: ".text@0" }, { section: ".text", offset: 4, type: 6, reference: ".text@0" }];
+  const listing = ".section .text\nnonmatching entry, 0x20\nglabel entry\n" + words.map((w, i) =>
+    `/* ${(0x70 + i * 4).toString(16)} ${(0x70 + i * 4).toString(16)} ${section.data.subarray(i * 4, i * 4 + 4).toString("hex")} */ .word 0x${w.toString(16)}\n`).join("");
+  assert.throws(() => libraryDisassemblySymbols(member), /compound function partition/);
+  assert.throws(() => validateLibraryDisassembly(member, listing), /compound function partition/);
+  member.functions = objectFunctions(member.object);
+  assert.match(libraryDisassemblySymbols(member), /entry = 0x70;.*size:0x18/);
+  assert.match(libraryDisassemblySymbols(member), /func_00000088 = 0x88;.*size:0x8/);
 });

@@ -121,7 +121,7 @@ export function extendLibraryBacklog(members: LibraryMember[], root: string): vo
     for (const fn of missing) {
       const owners = member.functions.filter(f => f.section === fn.section && present.has(f.name)).sort((a, b) => a.offset - b.offset);
       const owner = owners.findLast(f => f.offset < fn.offset) ?? owners[0];
-      if (!owner || fn.discovery?.kind !== "call-relocation") throw new Error(`Private split needs source review: ${member.id}::${fn.name}`);
+      if (!owner || !fn.discovery) throw new Error(`Private split needs source review: ${member.id}::${fn.name}`);
       const part = manifest.parts.find(p => p.symbol === owner.name)!, source = join(dirname(path), part.path), text = readFileSync(source, "utf8");
       observed.set(source, text);
       const guard = analyzeCSource(text);

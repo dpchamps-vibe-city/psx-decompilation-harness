@@ -1,12 +1,12 @@
 import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { LibraryMember } from "../lib/libraryTargets.js";
 import { planLibraryTu, writeLibraryTu, extendLibraryBacklog } from "./librarySources.js";
-import { inspectLibraryPart, libraryCompileInput, libraryTuStatus, readLibraryTu } from "../lib/libraryTranslationUnit.js";
+import { inspectLibraryPart, libraryAssemblyTu, libraryCompileInput, librarySourceFiles, libraryTuStatus, readLibraryTu } from "../lib/libraryTranslationUnit.js";
 import { libraryAssemblyParts } from "../lib/libraryAssembly.js";
 import { compareRelocatableObjects, readRelocatableObject, objectFunctions } from "../lib/relocatableObject.js";
 import { HARNESS_ROOT } from "../lib/runtimeContext.js";
@@ -211,5 +211,43 @@ test("canonical BIOS definition stays one function fragment, not generated instr
     const source = '#include "library/psx_bios_tailjump.h"\nPSX_BIOS_FUNCTION(int, first, (int arg), 0xa0, 0x39);\n' + f.stub("second");
     const plan = planLibraryTu(f.member, source);
     assert.equal(plan.files.get("first.c")!.trim(), "PSX_BIOS_FUNCTION(int, first, (int arg), 0xa0, 0x39);");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("assembly translation unit: one .s part lists every original function, is inspected for backlog markers and has no C candidates", () => {
+  const f = fixture();
+  try {
+    mkdirSync(f.directory, { recursive: true });
+    const source = `/* counter.s */\n\t.include "gte_macros.inc"\n\t.text\n\t.set\tnoreorder\n\t.globl\tfirst\nfirst:\n\tjr\t$ra\n\tnop\n\t.globl\tsecond\nsecond:\n\tjal\tfirst\n\tnop\n\tjr\t$ra\n\tnop\n`;
+    writeFileSync(join(f.directory, "counter.s"), source);
+    const manifest = { schemaVersion: 1, member: f.member.id, parts: [{ path: "counter.s", symbols: ["first", "second"] }] };
+    writeFileSync(join(f.root, f.member.source), JSON.stringify(manifest));
+    assert.deepEqual(readLibraryTu(f.member, f.root).parts, manifest.parts);
+    const tu = libraryAssemblyTu(f.member, f.root)!;
+    assert.equal(tu.source, join(f.directory, "counter.s"));
+    assert.deepEqual(tu.symbols, ["first", "second"]);
+    assert.deepEqual(libraryTuStatus(f.member, f.root)!.map(p => [p.symbol, p.stub, p.form, p.source]),
+      [["first", false, "assembly", tu.source], ["second", false, "assembly", tu.source]]);
+    assert.deepEqual(librarySourceFiles(f.member, f.root), [f.member.source, "src/lib/counter/counter.s"]);
+    assert.throws(() => libraryCompileInput(f.member, join(f.root, f.member.source), join(f.root, "build/asm"), f.root), /assembled, not preprocessed/);
+    assert.throws(() => libraryTuStatus(f.member, f.root, { symbol: "first", source: join(f.root, "x.c") }), /C candidates do not apply/);
+    for (const [mutate, reason] of [
+      [(m: any) => m.parts[0].symbols.pop(), /every original function/],
+      [(m: any) => m.parts[0].symbols.push("first"), /duplicate TU symbol/],
+      [(m: any) => m.parts.push({ path: "_data.c", symbol: "__library_member_data" }), /one \.s part/],
+      [(m: any) => m.parts[0].symbol = "first", /Invalid\/duplicate TU part/],
+    ] as Array<[(m: any) => void, RegExp]>) {
+      const broken = JSON.parse(JSON.stringify(manifest)); mutate(broken);
+      writeFileSync(join(f.root, f.member.source), JSON.stringify(broken));
+      assert.throws(() => readLibraryTu(f.member, f.root), reason);
+    }
+    writeFileSync(join(f.root, f.member.source), JSON.stringify(manifest));
+    const part = manifest.parts[0]!;
+    assert.throws(() => inspectLibraryPart(source.replace("second:\n", ""), part), /must define second/);
+    assert.throws(() => inspectLibraryPart(source + `\t.include "build/libraries/nonmatchings/${f.member.id}/first.s"\n`, part), /bare macro files/);
+    assert.throws(() => inspectLibraryPart(source + "\t.incbin \"blob.bin\"\n", part), /\.incbin is not reconstructed source/);
+    assert.throws(() => inspectLibraryPart(source + ".L__library_rel_1_0:\n\t.reloc .L__library_rel_1_0, R_MIPS_26, .text\n", part), /backlog markers|\.reloc/);
+    assert.throws(() => inspectLibraryPart(source + "nonmatching third, 8\n", part), /backlog markers/);
+    assert.equal(inspectLibraryPart(source.replace("first:\n", "glabel first\n"), part).stub, false, "macro.inc label spellings define the symbol too");
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });

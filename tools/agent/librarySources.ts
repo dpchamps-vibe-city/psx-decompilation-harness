@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { parseC, declaratorName, field } from "./residual-source-search/tree-sitter-c.js";
 import { biosFunctionProjection } from "../lib/biosFunctionMacro.js";
-import { isDirectoryTu, inspectLibraryPart, libraryFunctionFilename, readLibraryTu, type LibraryTuManifest, type LibraryTuPart } from "../lib/libraryTranslationUnit.js";
+import { isAssemblyPart, isDirectoryTu, inspectLibraryPart, libraryFunctionFilename, readLibraryTu, type LibraryTuManifest, type LibraryTuPart } from "../lib/libraryTranslationUnit.js";
 import { libraryInputFiles, type LibraryProject } from "../lib/project.js";
 import type { LibraryMember } from "../lib/libraryTargets.js";
 import { legacyLibrarySource, libraryMemberSource } from "../lib/librarySourceLayout.js";
@@ -115,8 +115,10 @@ export function extendLibraryBacklog(members: LibraryMember[], root: string): vo
   for (const member of members.filter(m => isDirectoryTu(m) && existsSync(join(root, m.source)))) {
     const path = join(root, member.source), before = readFileSync(path, "utf8"); observed.set(path, before);
     const manifest = readLibraryTu(member, root, { allowDiscoveredBacklog: true });
-    const present = new Set(manifest.parts.map(p => p.symbol)), missing = member.functions.filter(f => !present.has(f.name));
+    const present = new Set(manifest.parts.flatMap(p => p.symbols ?? (p.symbol ? [p.symbol] : []))), missing = member.functions.filter(f => !present.has(f.name));
     if (!missing.length) continue;
+    const assembly = manifest.parts.find(isAssemblyPart);
+    if (assembly) throw new Error(`Private split needs source review: ${member.id}::${missing[0]!.name} belongs to assembly TU ${assembly.path}; label it there and list it in symbols`);
     const additions = new Map<string, LibraryTuPart[]>();
     for (const fn of missing) {
       const owners = member.functions.filter(f => f.section === fn.section && present.has(f.name)).sort((a, b) => a.offset - b.offset);

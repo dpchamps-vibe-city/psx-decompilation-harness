@@ -14,7 +14,7 @@ import { compareRelocatableObjects, readRelocatableObject, type ObjectComparison
 import { libraryDisassemblySymbols, validateLibraryDisassembly } from "../lib/libraryDisassembly.js";
 import { libraryAssemblyParts, librarySourceScaffold } from "../lib/libraryAssembly.js";
 import { migrateLibrarySources, writeLibraryTu } from "./librarySources.js";
-import { isDirectoryTu, inspectLibraryPart, libraryFunctionSource, librarySourceFiles, libraryTuStatus } from "../lib/libraryTranslationUnit.js";
+import { isDirectoryTu, inspectLibraryPart, libraryAssemblyTu, libraryFunctionSource, librarySourceFiles, libraryTuStatus, type LibraryTuForm } from "../lib/libraryTranslationUnit.js";
 import { classifyLibraryCode } from "./libraryCodeClass.js";
 import { biosSyscallCandidate } from "./biosSyscall.js";
 import { biosTailJumpCandidate } from "./biosTailJump.js";
@@ -159,7 +159,8 @@ function compileMember(member: LibraryMember, source = member.source, root = pro
   return artifacts;
 }
 export function measureLibraryFunction(name: string, source?: string) {
-  const target = requireLibraryFunction(name), artifacts = compileMember(target.member, source ?? libraryFunctionSource(target.member, target.fn.name), projectRoot(), target.key);
+  const target = requireLibraryFunction(name);
+  const artifacts = compileMember(target.member, source ?? (libraryAssemblyTu(target.member, projectRoot()) ? target.member.source : libraryFunctionSource(target.member, target.fn.name)), projectRoot(), target.key);
   const comparison = compareLibraryCandidate(target.member, artifacts, target.fn.name);
   const report = join(artifacts.outputDir, "comparison.json");
   writeFileSync(report, JSON.stringify({ target: target.key, scope: "whole-member", memberHash: target.member.sha256, ...comparison }, null, 2) + "\n");
@@ -204,6 +205,7 @@ export function writeLibraryGraph(root = projectRoot()) {
 function writeLibraryGraphScoped(members: LibraryMember[], root: string) {
   const verified = verifiedLibraryMembers(members, root);
   const statuses = new Map(members.filter(m => isDirectoryTu(m) && existsSync(join(root, m.source))).map(m => [m.id, new Map(libraryTuStatus(m, root)!.map(p => [p.symbol, p.stub]))]));
+  const forms = new Map(members.map(m => [m.id, libraryMemberForm(m, root)]));
   const entries = members.flatMap(member => member.functions.map(fn => {
     const target = libraryFunctionTarget(member, fn, root);
     const assemblyClass = classifyLibraryCode(member.object, fn);
@@ -213,6 +215,7 @@ function writeLibraryGraphScoped(members: LibraryMember[], root: string) {
       vram: `symbol:${target.symbol}`, section: fn.section, sectionOffset: fn.offset, size: fn.size,
       inferredSize: fn.inferredSize, tier: 1, priority: 0, callerCount: 0, calls: [] as string[], calledBy: [] as string[], instructionCount: Math.ceil(fn.size / 4),
       decompiled: verified.get(member.id)! && (!isDirectoryTu(member) || statuses.get(member.id)?.get(fn.name) === false), handwritten: assemblyClass && !syscall ? "asm" as const : false as const, dead: false,
+      sourceForm: forms.get(member.id)!,
       ...(assemblyClass ? { assemblyClass } : {}), ...(syscall ? { platformMacro: syscall.evidence } : {}) };
   }));
   const byName = new Map(entries.map(e => [e.name, e]));
@@ -229,7 +232,8 @@ function writeLibraryGraphScoped(members: LibraryMember[], root: string) {
   for (const entry of entries) { entry.callerCount = entry.calledBy.length; entry.priority = entry.callerCount; }
   const graph = { targetKind: "relocatable-library", identityKind: "member-symbol", functions: entries,
     stats: { totalFunctions: entries.length, totalMembers: members.length, verifiedMembers: [...verified.values()].filter(Boolean).length,
-      assemblyOnlyFunctions: entries.filter(entry => entry.handwritten === "asm").length } };
+      assemblyOnlyFunctions: entries.filter(entry => entry.handwritten === "asm").length,
+      assemblySourceFunctions: entries.filter(entry => entry.sourceForm === "assembly").length } };
   mkdirSync(join(root, "build"), { recursive: true }); writeFileSync(join(root, "build/callGraph.json"), JSON.stringify(graph, null, 2) + "\n");
   return graph;
 }
@@ -258,20 +262,28 @@ export function splitLibrary(root = projectRoot()): void {
   writeLibraryGraph(root);
   console.log("Library members indexed; original objects/disassembly stay under build/libraries. Existing function bodies preserved.");
 }
+/** The source form a member is reconstructed in: its one `.s` (hand-written
+ * original) or C parts. Unsplit members count as C: that is the default form. */
+export function libraryMemberForm(member: LibraryMember, root = projectRoot()): LibraryTuForm {
+  return libraryAssemblyTu(member, root) ? "assembly" : "c";
+}
 export function libraryProgress(args: string[] = [], root = projectRoot()): void {
   const members = libraryMembers(root), verified = verifiedLibraryMembers(members, root);
-  const rows = members.map(m => ({ id: m.id, input: m.input, member: m.member, ordinal: m.ordinal, source: m.source,
+  const rows = members.map(m => ({ id: m.id, input: m.input, member: m.member, ordinal: m.ordinal, source: m.source, form: libraryMemberForm(m, root),
     functions: m.functions.map(f => libraryTargetKey(m, f.name)), completedFunctions: verified.get(m.id) ? (isDirectoryTu(m) ? libraryTuStatus(m, root)!.filter(p => p.symbol && p.symbol !== "__library_member_data" && !p.stub).map(p => libraryTargetKey(m, p.symbol!)) : m.functions.map(f => libraryTargetKey(m, f.name))) : [], complete: verified.get(m.id)! && (!isDirectoryTu(m) || libraryTuStatus(m, root)!.every(p => !p.stub)), codeBytes: [...m.object.sections.values()].filter(s => s.flags & 4).reduce((n, s) => n + s.size, 0), verified: verified.get(m.id)! }));
-  const done = rows.filter(r => r.complete), report = { targetKind: "relocatable-library", scope: "fresh whole-member bytes; only clean-C function files count as decompiled",
-    members: { verified: rows.filter(r => r.verified).length, reconstructed: done.length, total: rows.length }, functions: { verified: rows.reduce((n, r) => n + r.completedFunctions.length, 0), total: rows.reduce((n, r) => n + r.functions.length, 0) },
-    codeBytes: { verified: done.reduce((n, r) => n + r.codeBytes, 0), total: rows.reduce((n, r) => n + r.codeBytes, 0) },
+  const done = rows.filter(r => r.complete), doneC = done.filter(r => r.form === "c"), doneAssembly = done.filter(r => r.form === "assembly");
+  const completed = (form: LibraryTuForm) => rows.filter(r => r.form === form).reduce((n, r) => n + r.completedFunctions.length, 0);
+  const report = { targetKind: "relocatable-library", scope: "fresh whole-member bytes; a function counts as C when its own file is clean C, as assembly when its member is one verified .s",
+    members: { verified: rows.filter(r => r.verified).length, reconstructed: done.length, reconstructedC: doneC.length, reconstructedAssembly: doneAssembly.length, assemblyForm: rows.filter(r => r.form === "assembly").length, total: rows.length },
+    functions: { verified: rows.reduce((n, r) => n + r.completedFunctions.length, 0), verifiedC: completed("c"), verifiedAssembly: completed("assembly"), total: rows.reduce((n, r) => n + r.functions.length, 0) },
+    codeBytes: { verified: done.reduce((n, r) => n + r.codeBytes, 0), verifiedC: doneC.reduce((n, r) => n + r.codeBytes, 0), verifiedAssembly: doneAssembly.reduce((n, r) => n + r.codeBytes, 0), total: rows.reduce((n, r) => n + r.codeBytes, 0) },
     unresolvedCodeMembers: rows.filter(r => r.codeBytes > 0 && !r.functions.length).map(r => r.id), rows };
   if (args.includes("--json")) console.log(JSON.stringify(report, null, 2));
   else {
-    console.log(`Reconstructed library members: ${done.length}/${rows.length}; functions: ${report.functions.verified}/${report.functions.total}; code bytes: ${report.codeBytes.verified}/${report.codeBytes.total}`);
-    console.log("All members remain in scope, including data-only and unresolved code. SDK names are not excluded; no assembly-origin claims inferred.");
+    console.log(`Reconstructed library members: ${done.length}/${rows.length} (C ${doneC.length}, assembly ${doneAssembly.length}); functions: ${report.functions.verified}/${report.functions.total} (C ${report.functions.verifiedC}, assembly ${report.functions.verifiedAssembly}); code bytes: ${report.codeBytes.verified}/${report.codeBytes.total} (C ${report.codeBytes.verifiedC}, assembly ${report.codeBytes.verifiedAssembly})`);
+    console.log("All members remain in scope, including data-only and unresolved code. SDK names are not excluded; assembly counts only members whose one .s source is byte-verified.");
     if (args.some(a => ["--list", "--remaining", "--done", "--markdown"].includes(a))) for (const r of rows.filter(r => args.includes("--remaining") ? !r.complete : args.includes("--done") ? r.complete : true))
-      console.log(`${r.complete ? "MATCH" : "pending"}\t${r.id}\t${r.input}[${r.ordinal}] ${r.member}\t${r.source}`);
+      console.log(`${r.complete ? (r.form === "assembly" ? "MATCH-ASM" : "MATCH-C") : "pending"}\t${r.id}\t${r.input}[${r.ordinal}] ${r.member}\t${r.source}`);
   }
 }
 /** --accepted is a loop environment guard, NOT whole-library completion.
@@ -285,11 +297,17 @@ export function checkLibrary(args: string[], root = projectRoot()): void {
   const batch = libraryBuildIdentities(root), records: Array<{ member: LibraryMember; comparison: ObjectComparison; identity: string }> = [];
   withLibraryMetadata(() => { for (const member of selected) {
     const identity = batch.identity(member), artifacts = compileMember(member, undefined, root);
+    if (artifacts.form === "assembly") {
+      // The .s was inspected for backlog markers when its status rows were
+      // read during the compile; the object oracle decides everything else.
+      if (!libraryTuStatus(member, root)!.every(p => p.form === "assembly")) throw new Error(`${member.id}: assembly translation unit cannot mix C parts`);
+    } else {
     const source = isDirectoryTu(member) ? "" : readFileSync(artifacts.source, "utf8"), guard = analyzeCSource(source), signatures = extractSignaturesFromSource(source);
     const findings = isDirectoryTu(member) ? libraryTuStatus(member, root)!.flatMap(part => part.stub ? [] : sourceConstructFindings(readFileSync(part.source, "utf8"), loadConfig(root), { name: part.symbol ? libraryTargetKey(member, part.symbol) : member.id, container: member.id })) : sourceConstructFindings(source, loadConfig(root), { name: member.id, container: member.id });
     const includesGeneratedContext = /#\s*\d+\s+"[^"]*build\/libraries\/context\//.test(readFileSync(artifacts.preprocessed, "utf8"));
     if (!guard.parses || guard.includeAsm.length || includesGeneratedContext || findings.length || (!isDirectoryTu(member) && member.functions.some(f => !signatures.some(s => s.name === f.name))))
       throw new Error(`${member.id}: complete clean-C member required (${findings.map(f => f.message).join("; ")})`);
+    }
     const comparison = compareRelocatableObjects(member.bytes, readFileSync(artifacts.object!));
     console.log(`${member.id}: ${renderLibraryComparison(comparison)}`);
     if (comparison.verdict !== "match") throw new Error(`${member.id}: whole-member verdict ${comparison.verdict}`);
@@ -300,6 +318,7 @@ export function checkLibrary(args: string[], root = projectRoot()): void {
     const path = acceptedPath(root, member); mkdirSync(dirname(path), { recursive: true });
     const status = isDirectoryTu(member) ? libraryTuStatus(member, root) : undefined;
     writeFileSync(path, JSON.stringify({ ...comparison, scope: "whole-member", identityVersion: 2, identity, originalHash: member.sha256, source: member.source,
+      form: status?.every(p => p.form === "assembly") ? "assembly" : "c",
       reconstructed: status ? status.every(p => !p.stub) : true,
       completedFunctions: status ? status.filter(p => p.symbol && p.symbol !== "__library_member_data" && !p.stub).map(p => p.symbol) : member.functions.map(f => f.name) }, null, 2) + "\n");
   }
@@ -308,6 +327,8 @@ export function checkLibrary(args: string[], root = projectRoot()): void {
 export async function prepareLibraryFunction(name: string, options: { root?: string; signal?: AbortSignal; alternative?: boolean; contextFile?: string } = {}) {
   const root = options.root ?? projectRoot(), { member, fn, key } = requireLibraryFunction(name, root), p = loadLibraryProject(root)!;
   const target = libraryFunctionTarget(member, fn, root);
+  const assemblyTu = libraryAssemblyTu(member, root);
+  if (assemblyTu) throw new Error(`${key}: ${member.id} is reconstructed as an assembly translation unit (${assemblyTu.part.path}); there is no C to prepare`);
   options.signal?.throwIfAborted();
   const assembly = disassembleLibraryMember(member, root);
   const destination = join(root, target.source), source = existsSync(destination) ? readFileSync(destination, "utf8") : "";

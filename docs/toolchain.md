@@ -276,6 +276,7 @@ npm run check                             # main EXE, full payload bytes
 npm run check-all                         # every configured, resolved container
 npm run diff -- FUNCTION
 npm run progress                          # former make progress
+npm run scan-handwritten -- --output build/handwrittenAssembly/report.json
 npm run config-check                      # split-all + tracked config/header diff
 npm run clean
 npm run wipe -- --container ovl_1
@@ -288,6 +289,12 @@ The `*-all` tasks select all containers; `check-exe` names the executable check.
 and preserves durable ledger/preparation/evidence records. `wipe`
 removes generated configuration, never original target assets or recovered C.
 Do not run destructive commands merely to identify an unfamiliar project.
+
+`scan-handwritten` is an advisory original-word census for images and ELF/ar
+members, not a build or conversion step. It protects existing C and records
+confidence evidence without compiling or emitting source. See
+[handwritten-assembly heuristics](handwritten-assembly.md) for thresholds,
+installed-package invocation and limitations.
 
 The incremental build hashes configuration, executable contents, environment,
 include-directory membership, actual cpp header dependencies and INCLUDE_ASM

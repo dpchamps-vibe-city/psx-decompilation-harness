@@ -9,7 +9,9 @@ import { compareWords, disassembleBytes, symboliseWord, type OracleResult, type 
 const NAMES: Record<number, string> = { 0: "R_MIPS_NONE", 1: "R_MIPS_16", 2: "R_MIPS_32", 4: "R_MIPS_26", 5: "R_MIPS_HI16", 6: "R_MIPS_LO16", 7: "R_MIPS_GPREL16", 10: "R_MIPS_PC16" };
 const signed = (n: number) => (n & 0x8000) ? (n & 0xffff) - 0x10000 : n & 0xffff;
 function referenceText(r: ObjectRelocation): string { return r.reference.replace(/^(named|import):/, ""); }
-function addend(o: RelocatableObject, r: ObjectRelocation): number {
+/** Encoded REL addend, including paired HI16/LO16. Shared by original-word
+ * diagnostics so a low half is never mistaken for a complete address. */
+export function relocatableAddend(o: RelocatableObject, r: ObjectRelocation): number {
   const word = o.sections.get(r.section)!.data.readUInt32LE(r.offset);
   if (r.type === 4) return (word & 0x3ffffff) * 4;
   if (r.type === 2) return word;
@@ -47,7 +49,7 @@ export function relocatableFunctionWords(object: RelocatableObject, symbol: stri
       coordinate: { kind: "section", section: fn.section, offset } };
     if (rs.length) {
       word.relocations = rs.map(r => {
-        const bias = addend(object, r), local = r.reference.match(/^(.*)@(\d+)$/);
+        const bias = relocatableAddend(object, r), local = r.reference.match(/^(.*)@(\d+)$/);
         const named = object.symbols.find(s => `named:${s.name}` === r.reference);
         const section = local?.[1] ?? named?.section, value = local ? Number(local[2]) : named?.value;
         // R_MIPS_PC16 encodes (S + A - P) / 4; the machine's branch
@@ -57,7 +59,7 @@ export function relocatableFunctionWords(object: RelocatableObject, symbol: stri
           ...([4, 10].includes(r.type) && section === fn.section && targetOffset !== undefined && targetOffset >= fn.offset && targetOffset < fn.offset + size
             ? { targetOffset: start + targetOffset - fn.offset } : {}) };
       });
-      const r = rs[0]!, ref = referenceText(r), bias = addend(object, r), expr = `${ref}${bias ? `${bias < 0 ? "" : "+"}${bias}` : ""}`;
+      const r = rs[0]!, ref = referenceText(r), bias = relocatableAddend(object, r), expr = `${ref}${bias ? `${bias < 0 ? "" : "+"}${bias}` : ""}`;
       let symbolic = operands;
       if (r.type === 4) symbolic = expr;
       else if (r.type === 5) symbolic = operands.replace(/[^,]+$/, `%hi(${expr})`);

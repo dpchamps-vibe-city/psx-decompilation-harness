@@ -78,9 +78,23 @@ export function assertAssemblerSmallData(selection: AssemblerSelection, flags: r
   }
   if (threshold !== 0) throw new Error(`${TOOLCHAIN_FILE}: gas requires explicit -G0 in flags.as; nonzero/default small-data rules are unsupported`);
 }
+/* Validation is a function of the file's text alone, so text already accepted
+ * for a root is not validated again. The file is still read on every request,
+ * and each caller gets its own parsed copy. */
+const validatedToolchains = new Map<string, string>();
 export function loadToolchain(root = projectRoot()): ToolchainConfig {
+  let text: string;
+  try { text = readFileSync(join(root, TOOLCHAIN_FILE), "utf8"); }
+  catch (error) { throw new Error(`Cannot load ${join(root, TOOLCHAIN_FILE)}: ${String(error)}`); }
+  const key = resolve(root);
+  if (validatedToolchains.get(key) === text) return JSON.parse(text) as ToolchainConfig;
+  const value = validateToolchain(text, root);
+  validatedToolchains.set(key, text);
+  return value;
+}
+function validateToolchain(text: string, root: string): ToolchainConfig {
   let value: any;
-  try { value = JSON.parse(readFileSync(join(root, TOOLCHAIN_FILE), "utf8")); }
+  try { value = JSON.parse(text); }
   catch (error) { throw new Error(`Cannot load ${join(root, TOOLCHAIN_FILE)}: ${String(error)}`); }
   object(value, "config");
   if (Object.hasOwn(value, "fileFlags")) throw new Error(`${TOOLCHAIN_FILE}: fileFlags is unsupported; use configs/flag_overrides.mk`);
@@ -161,11 +175,19 @@ export function configuredCompilerSource(root = projectRoot()): string | undefin
   return source;
 }
 export interface FlagContext { id?: string | undefined; kind: "exe" | "overlay" | "library"; profile?: string }
-/** Same owner precedence as flags; a supplied assembler replaces the whole base. */
-export function configuredAssemblerConfig(container?: FlagContext, root = projectRoot()): AssemblerConfig | undefined {
-  const config = loadToolchain(root);
+function selectedProfile(config: ToolchainConfig, container?: FlagContext): string | undefined {
   const profile = container ? container.profile ?? config.containerProfiles[container.id ?? ""] ?? config.containerProfiles[container.kind] : undefined;
   if (profile && !config.profiles[profile]) throw new Error(`${TOOLCHAIN_FILE}: unknown profile ${profile}`);
+  return profile;
+}
+/** The profile a context compiles under: its own, its container's, then its
+ * kind's. Every flag and assembler selection for the context follows from it. */
+export function configuredProfile(container?: FlagContext, root = projectRoot()): string | undefined {
+  return selectedProfile(loadToolchain(root), container);
+}
+/** Same owner precedence as flags; a supplied assembler replaces the whole base. */
+export function configuredAssemblerConfig(container?: FlagContext, root = projectRoot()): AssemblerConfig | undefined {
+  const config = loadToolchain(root), profile = selectedProfile(config, container);
   return (profile ? config.profiles[profile]?.assembler : undefined) ?? config.assembler;
 }
 export function configuredAssembler(container?: FlagContext, root = projectRoot()): AssemblerSelection {
@@ -173,9 +195,7 @@ export function configuredAssembler(container?: FlagContext, root = projectRoot(
   return { kind: selection.kind, inputRewrites: selection.kind === "gas" ? [...selection.inputRewrites] : [] };
 }
 export function configuredFlags(name: FlagName, container?: FlagContext, root = projectRoot()): string[] {
-  const config = loadToolchain(root);
-  const profile = container ? container.profile ?? config.containerProfiles[container.id ?? ""] ?? config.containerProfiles[container.kind] : undefined;
-  if (profile && !config.profiles[profile]) throw new Error(`${TOOLCHAIN_FILE}: unknown profile ${profile}`);
+  const config = loadToolchain(root), profile = selectedProfile(config, container);
   const selected = profile ? config.profiles[profile] : undefined;
   const flags = [...(selected?.[name] ?? config.flags[name])];
   if (name === "cpp" || name === "as") flags.unshift(...(selected?.includeDirs ?? config.includeDirs).map(p => `-I${resolve(root, p)}`));
@@ -233,9 +253,22 @@ export function executablePath(command: string, root = projectRoot()): string | 
 export function configuredCppFrontend(root = projectRoot()): string | null {
   const cpp = executablePath(configuredTool("cpp", root), root);
   if (!cpp) return null;
-  return loadToolchain(root).compiler.family === "gcc"
-    ? executablePath(execFileSync(cpp, ["-print-prog-name=cc1"], { cwd: root, encoding: "utf8" }).trim(), root)
-    : cpp;
+  return loadToolchain(root).compiler.family === "gcc" ? executablePath(cppFrontendName(cpp, root), root) : cpp;
+}
+/* Asking the driver costs a process per compile identity. Its answer depends on
+ * the driver and the search environment, so it is re-asked whenever either
+ * changes. A driver written in the last few seconds is always re-asked: a
+ * rewrite inside one timestamp tick would otherwise leave its stat unchanged. */
+const cppFrontendNames = new Map<string, { stamp: string; name: string }>();
+function cppFrontendName(cpp: string, root: string): string {
+  const stat = statSync(cpp, { bigint: true });
+  const stamp = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  const key = [resolve(root), cpp, process.env.GCC_EXEC_PREFIX ?? "", process.env.COMPILER_PATH ?? "", process.env.PATH ?? ""].join("\0");
+  const prior = cppFrontendNames.get(key);
+  if (prior?.stamp === stamp) return prior.name;
+  const name = execFileSync(cpp, ["-print-prog-name=cc1"], { cwd: root, encoding: "utf8" }).trim();
+  if (Date.now() - Number(stat.ctimeMs) > 5_000) cppFrontendNames.set(key, { stamp, name });
+  return name;
 }
 export function toolchainDigest(root = projectRoot()): string { return createHash("sha256").update(readFileSync(join(root, TOOLCHAIN_FILE))).digest("hex"); }
 export function toolchainExecutables(root = projectRoot(), excluded: string[] = []): Record<string, { command: string; path: string | null; sha256: string | null }> {

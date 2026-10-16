@@ -7,8 +7,8 @@ import type { AutodecompConfig, GateResult } from "../../shared/types.ts";
 import { Timings } from "../../../../tools/lib/contentCache.js";
 import type { ExportResult } from "../../../../tools/agent/contextExport.js";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
-import { libraryMembers, libraryTargetKey, requireLibraryFunction } from "../../../../tools/lib/libraryTargets.js";
-import { libraryFunctionSource, librarySourceFiles } from "../../../../tools/lib/libraryTranslationUnit.js";
+import { libraryMembers, libraryTargetKey, requireLibraryFunction, withLibraryMetadata } from "../../../../tools/lib/libraryTargets.js";
+import { libraryFunctionSource, libraryMembersOwning } from "../../../../tools/lib/libraryTranslationUnit.js";
 import { compilerInputs, consumeReceipt, contextIsCompilerIndependent, publishReceipt, verificationOutputs } from "./verification-receipt.ts";
 
 /** One authoritative route. Machine work can be reused only across unchanged
@@ -29,32 +29,38 @@ export async function finalizeWorkspace(options: {
     const { libraryVerificationMembers, libraryWorkspaceIdentity } = await import("../../../../tools/agent/libraryTarget.js");
     options.signal?.throwIfAborted();
     const members = libraryMembers(options.projectRoot);
-    const sources = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), libraryFunctionSource(m, f.name)])));
-    const containers = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.id])));
-    const target = requireLibraryFunction(options.functionName, options.projectRoot);
-    const active = [...new Set([target.member.id,
-      ...members.filter(m => librarySourceFiles(m, options.projectRoot).some(s => options.changedFiles.includes(s))).map(m => m.id)])];
-    const checkedMembers = libraryVerificationMembers(active, options.projectRoot, members);
-    const identity = () => timings.measureSync("library-inputs", () => libraryWorkspaceIdentity(checkedMembers, options.projectRoot));
-    const before = identity();
-    const gate = await timings.measure("library-gate", () => runGate({ ...options, functionName: target.key, mode: "match", runBuild: true,
-      functionSources: sources, functionContainers: containers, functionContainer: target.member.id }));
-    gates.push(gate);
-    if (gate.pass && before !== identity()) { gate.pass = false; gate.failures.push("Library inputs changed during finalization; rerun the member gate"); }
-    if (!gate.pass) return done(gate);
-    const publication = await timings.measure("context-export", () => runCommand(process.execPath, installedScriptArgs("tools/agent/contextExport.ts", [options.functionName], options.projectRoot), {
-      cwd: options.projectRoot, signal: options.signal, timeoutMs: 120_000,
-    }));
-    const status = publication.stdout.split("\n").find(line => line.startsWith(CONTEXT_EXPORT_STATUS));
-    try {
-      const result = JSON.parse(status?.slice(CONTEXT_EXPORT_STATUS.length) ?? "null") as ExportResult | null;
-      if (result?.status === "published" && result.signatureMatches) contextPublication = { ...result, command: publication };
-    } catch { /* No publication outcome is not a pass. */ }
-    if (publication.code !== 0 || !contextPublication || options.signal?.aborted || before !== identity()) {
-      gate.pass = false; gate.failures.push(`Context export failed, was cancelled or inputs changed; rerun finalization.\n${publication.stdout}\n${publication.stderr}`);
-    }
-    // Relocatable verification cannot consume a linked-image receipt.
-    return done(gate);
+    /* One inventory for the whole finalization. Outside it, every member lookup
+       (the input guard makes several per checked member) re-reads and re-parses
+       every input object. */
+    return withLibraryMetadata(async () => {
+      const sources = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), libraryFunctionSource(m, f.name)])));
+      const containers = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.id])));
+      const target = requireLibraryFunction(options.functionName, options.projectRoot);
+      const active = [...new Set([target.member.id, ...libraryMembersOwning(members, options.changedFiles, options.projectRoot).map(m => m.id)])];
+      const checkedMembers = libraryVerificationMembers(active, options.projectRoot, members);
+      const identity = () => timings.measureSync("library-inputs", () => libraryWorkspaceIdentity(checkedMembers, options.projectRoot));
+      const before = identity();
+      const gate = await timings.measure("library-gate", () => runGate({ ...options, functionName: target.key, mode: "match", runBuild: true,
+        functionSources: sources, functionContainers: containers, functionContainer: target.member.id }));
+      gates.push(gate);
+      if (!gate.pass) return done(gate);
+      const publication = await timings.measure("context-export", () => runCommand(process.execPath, installedScriptArgs("tools/agent/contextExport.ts", [options.functionName], options.projectRoot), {
+        cwd: options.projectRoot, signal: options.signal, timeoutMs: 120_000,
+      }));
+      const status = publication.stdout.split("\n").find(line => line.startsWith(CONTEXT_EXPORT_STATUS));
+      try {
+        const result = JSON.parse(status?.slice(CONTEXT_EXPORT_STATUS.length) ?? "null") as ExportResult | null;
+        if (result?.status === "published" && result.signatureMatches) contextPublication = { ...result, command: publication };
+      } catch { /* No publication outcome is not a pass. */ }
+      if (publication.code !== 0 || !contextPublication || options.signal?.aborted) {
+        gate.pass = false; gate.failures.push(`Context export failed or was cancelled; rerun finalization.\n${publication.stdout}\n${publication.stderr}`);
+      } else if (before !== identity()) {
+        // One guard after publication covers the member gate too: both windows end here.
+        gate.pass = false; gate.failures.push("Library inputs changed during finalization; rerun the member gate");
+      }
+      // Relocatable verification cannot consume a linked-image receipt.
+      return done(gate);
+    }, members, options.projectRoot);
   }
   const graph = loadCallGraph(options.projectRoot);
   const entry = graph.functions.find((f) => f.name === options.functionName);

@@ -5,8 +5,8 @@ import { runCommand } from "./process.ts";
 import { checkSourcePolicy } from "./source-policy.ts";
 import { Timings } from "../../../tools/lib/contentCache.js";
 import { loadLibraryProject } from "../../../tools/lib/project.js";
-import { libraryMembers, requireLibraryFunction } from "../../../tools/lib/libraryTargets.js";
-import { librarySourceFiles } from "../../../tools/lib/libraryTranslationUnit.js";
+import { requireLibraryFunction, scopedLibraryMembers, withLibraryMetadata } from "../../../tools/lib/libraryTargets.js";
+import { libraryMembersOwning } from "../../../tools/lib/libraryTranslationUnit.js";
 
 /**
  * The oracle's summary lines.
@@ -175,7 +175,12 @@ function sourceNames(changedFiles: string[]): string[] {
     .map((file) => basename(file, ".c"));
 }
 
-export async function runGate(options: {
+export async function runGate(options: Parameters<typeof scopedGate>[0]): Promise<GateResult> {
+  /* One library inventory per gate; inside a finalization, the finalization's. */
+  return withLibraryMetadata(() => scopedGate(options), undefined, options.projectRoot);
+}
+
+async function scopedGate(options: {
   projectRoot: string;
   config: AutodecompConfig;
   mode: WorkMode;
@@ -202,13 +207,13 @@ export async function runGate(options: {
   };
   cancelled();
   const library = loadLibraryProject(options.projectRoot);
-  const members = library ? libraryMembers(options.projectRoot, library) : [];
+  const members = library ? scopedLibraryMembers(options.projectRoot) : [];
   const scanFunctions = options.mode === "project-refinement"
     ? library ? Object.entries(options.functionSources ?? {}).filter(([, path]) => options.changedFiles.includes(path)).map(([name]) => name) : sourceNames(options.changedFiles)
     : options.functionName ? [options.functionName] : [];
   const activeMembers = library ? [...new Set([
     ...(options.functionName ? [requireLibraryFunction(options.functionName, options.projectRoot).member.id] : []),
-    ...members.filter(m => librarySourceFiles(m, options.projectRoot).some(s => options.changedFiles.includes(s))).map(m => m.id),
+    ...libraryMembersOwning(members, options.changedFiles, options.projectRoot).map(m => m.id),
   ])] : [];
   const policy = timings.measureSync("policy", () => checkSourcePolicy({
     projectRoot: options.projectRoot,

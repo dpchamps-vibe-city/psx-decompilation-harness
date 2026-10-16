@@ -302,9 +302,14 @@ object exemptions. Legacy monolithic member checking still requires complete C.
 - `library check --member ID` (repeatable): check those members plus every
   previously verified member. Pi finalization uses active/changed member scope
   plus this verified set and still enforces source/scope policy. It does not
-  claim completion of the untouched backlog.
-- `library check --accepted`: only recheck previously verified members; the
-  loop's environment guard, **not** an active-target or completion gate.
+  claim completion of the untouched backlog. The named members always
+  recompile. Another verified member stands on its record only while the
+  record's build identity (target, inputs, sources, headers, tools, flags) and
+  verification key (harness implementation and source policy) are unchanged;
+  any difference recompiles it. A passing compile keeps no artifacts.
+- `library check --accepted`: recompile and recheck every previously verified
+  member; the loop's environment guard, **not** an active-target or completion
+  gate.
 - `npm run progress`: distinguish byte-verified members from reconstructed TUs.
   A function counts as C only when its own file is clean C and its owning member
   has fresh whole-member verification, and as assembly only when its member is

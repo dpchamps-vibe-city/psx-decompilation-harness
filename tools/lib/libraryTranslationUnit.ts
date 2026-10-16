@@ -93,6 +93,13 @@ export function readLibraryTu(member: LibraryMember, root: string, options: { al
 export function librarySourceFiles(member: LibraryMember, root: string): string[] {
   return isDirectoryTu(member) ? [member.source, ...readLibraryTu(member, root).parts.map(p => join(dirname(member.source), p.path))] : [member.source];
 }
+/** Members whose TU reads one of `files`. Every source of a TU sits beside its
+ * owner (parts are bare filenames), so only members in a directory holding one
+ * of the files are opened. */
+export function libraryMembersOwning(members: readonly LibraryMember[], files: readonly string[], root: string): LibraryMember[] {
+  const directories = new Set(files.map(file => dirname(file)));
+  return members.filter(m => directories.has(dirname(m.source)) && librarySourceFiles(m, root).some(s => files.includes(s)));
+}
 const escapePattern = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** An assembly part is reconstructed source, not a disassembler listing: no
  * backlog markers, explicit relocation tables, byte blobs or path includes.

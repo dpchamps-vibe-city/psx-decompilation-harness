@@ -65,13 +65,14 @@ export function loadLibraryProject(root = projectRoot()): LibraryProject | null 
 }
 export function libraryInputFiles(project: LibraryProject, root = projectRoot()): { path: string; archive: boolean }[] {
   const seen = new Set<string>(), result: { path: string; archive: boolean }[] = [];
+  const realRoot = realpathSync(root), context = contextForProject(root);
   for (const [patterns, archive] of [[project.target.archives, true], [project.target.standaloneObjects, false]] as const) {
     for (const pattern of patterns) {
       const matches = globSync(pattern, { cwd: root }).sort();
       if (!matches.length) throw new Error(`${PROJECT_FILE}: input pattern matched nothing: ${pattern}`);
       for (const path of matches) {
-        const actual = realpathSync(resolve(root, path)), rel = relative(realpathSync(root), actual);
-        assertProjectInput(path, contextForProject(root));
+        const actual = realpathSync(resolve(root, path)), rel = relative(realRoot, actual);
+        assertProjectInput(path, context);
         if (rel.startsWith(`build${sep}`) || path.startsWith("build/")) throw new Error(`Library target must be a pristine input outside build/: ${path}`);
         if (seen.has(actual)) throw new Error(`Library input selected twice: ${path}`);
         seen.add(actual); result.push({ path: path.split(sep).join("/"), archive });
@@ -80,8 +81,7 @@ export function libraryInputFiles(project: LibraryProject, root = projectRoot())
   }
   return result;
 }
-export function libraryContext(memberId: string, root = projectRoot()): { kind: "library"; id: string; profile?: string } {
-  const project = loadLibraryProject(root);
+export function libraryContext(memberId: string, root = projectRoot(), project = loadLibraryProject(root)): { kind: "library"; id: string; profile?: string } {
   if (!project) throw new Error("Not a library target");
   const profile = project.memberProfiles[memberId] ?? project.toolchainProfile;
   return { kind: "library", id: memberId, ...(profile ? { profile } : {}) };

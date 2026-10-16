@@ -89,6 +89,10 @@ function libraryIndex(root: string): LibraryIndex {
   if (prior) return prior;
   const index = indexMembers(libraryMembers(root)); store?.set(key, index); return index;
 }
+/** The inventory of the current metadata scope; a fresh one outside any scope. */
+export function scopedLibraryMembers(root = projectRoot()): LibraryMember[] {
+  return libraryIndex(root).members;
+}
 export function libraryMemberForSource(source: string, root = projectRoot()): LibraryMember | undefined {
   const index = libraryIndex(root), direct = index.sources.get(source);
   if (direct) return direct;

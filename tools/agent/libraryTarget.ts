@@ -1,13 +1,13 @@
 import { COMPONENT_CONTRACTS, compilationIdentity, stableHash } from "../lib/cacheIdentity.js";
 import { currentScriptArgs } from "../lib/installedScripts.js";
-import { projectRoot } from "../lib/runtimeContext.js";
+import { contextForProject, projectRoot } from "../lib/runtimeContext.js";
 /** Library-mode bridge for npm and the existing Pi preparation/diff/gate loop.
  * Iterations compile the owning TU; acceptance is the entire original member.
  * No original object is ever substituted for missing reconstructed C. */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { configuredCompilerAnalysis, configuredFlags, configuredTool, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredCompilerAnalysis, configuredFlags, configuredProfile, configuredTool, toolchainExecutables } from "../lib/toolchain.js";
 import { libraryContext, loadLibraryProject, libraryInputFiles } from "../lib/project.js";
 import { libraryInventory, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, withLibraryMetadata, type LibraryMember } from "../lib/libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, type ObjectComparison } from "../lib/relocatableObject.js";
@@ -55,19 +55,33 @@ export function libraryVerificationMembers(ids: string[], root = projectRoot(), 
     } catch { return false; }
   });
 }
-/** Snapshot shared targets/headers once, not once per member. Uncompiled source
- * edits still invalidate finalization; only the checked TUs need CPP dependencies. */
+const includeDirectories = (flags: string[]) => flags.flatMap((f, i) => f === "-I" ? [flags[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []);
+/** A finalization's guard: equal before and after means nothing the checked
+ * members build from changed in between. It is compared within one
+ * finalization and never stored, so it hashes whole directories instead of
+ * scanning each TU's dependencies: every source is under `src`, every header
+ * either compiler can find is under a configured include directory or header
+ * role, and flags follow from the hashed configuration files. A header outside
+ * all of those is still covered by the member check's own batch guard, just
+ * not across context publication. Tool bytes are hashed once per profile. */
 export function libraryWorkspaceIdentity(members: LibraryMember[], root = projectRoot()): string {
   return withContentMemo(() => {
-    const inputs = libraryInputFiles(loadLibraryProject(root)!, root).map(i => i.path);
-    const paths = ["src", "project.json", "toolchain.json", "configs/flag_overrides.mk", ...inputs,
-      ...members.flatMap(m => memberInputPaths(m, root, []))];
+    const project = loadLibraryProject(root)!;
+    const paths = new Set(["src", "project.json", "toolchain.json", "configs/flag_overrides.mk",
+      ...libraryInputFiles(project, root).map(i => i.path), ...project.headers.reference, ...project.headers.owned]);
+    const tools = new Map<string, Record<string, unknown>>();
     const identities = members.map(m => {
       if (fileDigest(resolve(root, m.input)) !== m.inputHash) throw new Error(`Target input changed while measuring ${m.id}; rerun inventory`);
-      return [m.id, m.sha256, m.inputHash, compilationIdentity(root, libraryContext(m.id, root), m.id)];
+      const context = libraryContext(m.id, root, project), profile = configuredProfile(context, root) ?? "";
+      if (!tools.has(profile)) {
+        tools.set(profile, compilationIdentity(root, context));
+        for (const name of ["cpp", "as"] as const) includeDirectories(configuredFlags(name, context, root)).forEach(d => paths.add(d));
+      }
+      backlogInputs(m, root).forEach(p => paths.add(p));
+      return [m.id, m.sha256, m.inputHash, profile];
     });
-    return digest(JSON.stringify({ members: identities,
-      inputs: snapshot(root, paths, f => !f.endsWith(".test.ts") && !f.includes("__pycache__")) }));
+    return digest(JSON.stringify({ members: identities, tools: [...tools],
+      inputs: snapshot(root, [...paths], f => !f.endsWith(".test.ts") && !f.includes("__pycache__")) }));
   });
 }
 export function libraryBuildIdentity(member: LibraryMember, root = projectRoot()): string {
@@ -294,16 +308,25 @@ export function checkLibrary(args: string[], root = projectRoot()): void {
   const scoped = args.includes("--accepted") || ids.length > 0;
   const selected = scoped ? libraryVerificationMembers(ids, root, members) : members;
   if (!scoped && !selected.length) throw new Error("No library members to verify");
+  const config = loadConfig(root), key = libraryVerificationKey(root, config.sourcePolicy);
+  /* The per-function gate (--member) recompiles its active members. Any other
+     accepted member stands on its record when that record matched these exact
+     inputs, tools and flags under this harness and source policy. --accepted
+     and unscoped checks recompile every member they select. */
+  const reusable = (member: LibraryMember, identity: string) => ids.length > 0 && !ids.includes(member.id) && recordedMatch(member, identity, key, root);
   const batch = libraryBuildIdentities(root), records: Array<{ member: LibraryMember; comparison: ObjectComparison; identity: string }> = [];
+  let reused = 0;
   withLibraryMetadata(() => { for (const member of selected) {
-    const identity = batch.identity(member), artifacts = compileMember(member, undefined, root);
+    const identity = batch.identity(member);
+    if (reusable(member, identity)) { reused++; console.log(`${member.id}: unchanged since its recorded whole-member match`); continue; }
+    const artifacts = compileMember(member, undefined, root);
     if (artifacts.form === "assembly") {
       // The .s was inspected for backlog markers when its status rows were
       // read during the compile; the object oracle decides everything else.
       if (!libraryTuStatus(member, root)!.every(p => p.form === "assembly")) throw new Error(`${member.id}: assembly translation unit cannot mix C parts`);
     } else {
     const source = isDirectoryTu(member) ? "" : readFileSync(artifacts.source, "utf8"), guard = analyzeCSource(source), signatures = extractSignaturesFromSource(source);
-    const findings = isDirectoryTu(member) ? libraryTuStatus(member, root)!.flatMap(part => part.stub ? [] : sourceConstructFindings(readFileSync(part.source, "utf8"), loadConfig(root), { name: part.symbol ? libraryTargetKey(member, part.symbol) : member.id, container: member.id })) : sourceConstructFindings(source, loadConfig(root), { name: member.id, container: member.id });
+    const findings = isDirectoryTu(member) ? libraryTuStatus(member, root)!.flatMap(part => part.stub ? [] : sourceConstructFindings(readFileSync(part.source, "utf8"), config, { name: part.symbol ? libraryTargetKey(member, part.symbol) : member.id, container: member.id })) : sourceConstructFindings(source, config, { name: member.id, container: member.id });
     const includesGeneratedContext = /#\s*\d+\s+"[^"]*build\/libraries\/context\//.test(readFileSync(artifacts.preprocessed, "utf8"));
     if (!guard.parses || guard.includeAsm.length || includesGeneratedContext || findings.length || (!isDirectoryTu(member) && member.functions.some(f => !signatures.some(s => s.name === f.name))))
       throw new Error(`${member.id}: complete clean-C member required (${findings.map(f => f.message).join("; ")})`);
@@ -312,17 +335,40 @@ export function checkLibrary(args: string[], root = projectRoot()): void {
     console.log(`${member.id}: ${renderLibraryComparison(comparison)}`);
     if (comparison.verdict !== "match") throw new Error(`${member.id}: whole-member verdict ${comparison.verdict}`);
     records.push({ member, comparison, identity });
+    // A match is fully described by its comparison; only failures keep their artifacts.
+    rmSync(artifacts.outputDir, { recursive: true, force: true });
   } }, members, root);
   batch.assertUnchanged();
   for (const { member, comparison, identity } of records) {
     const path = acceptedPath(root, member); mkdirSync(dirname(path), { recursive: true });
     const status = isDirectoryTu(member) ? libraryTuStatus(member, root) : undefined;
-    writeFileSync(path, JSON.stringify({ ...comparison, scope: "whole-member", identityVersion: 2, identity, originalHash: member.sha256, source: member.source,
+    writeFileSync(path, JSON.stringify({ ...comparison, scope: "whole-member", identityVersion: 2, identity, verificationKey: key, originalHash: member.sha256, source: member.source,
       form: status?.every(p => p.form === "assembly") ? "assembly" : "c",
       reconstructed: status ? status.every(p => !p.stub) : true,
       completedFunctions: status ? status.filter(p => p.symbol && p.symbol !== "__library_member_data" && !p.stub).map(p => p.symbol) : member.functions.map(f => f.name) }, null, 2) + "\n");
   }
-  console.log(scoped ? `Verified ${selected.length} active/previously accepted member(s); ${members.length - selected.length} backlog member(s) not verified.` : `All ${selected.length} configured library members are byte-exact; explicit assembly backlog is not decompiled C.`);
+  console.log(scoped ? `Verified ${selected.length} active/previously accepted member(s)${reused ? ` (${reused} unchanged since their recorded match)` : ""}; ${members.length - selected.length} backlog member(s) not verified.` : `All ${selected.length} configured library members are byte-exact; explicit assembly backlog is not decompiled C.`);
+}
+/** What a recorded match rests on besides its build identity: the harness that
+ * compiled, compared and audited the member, and the policy it was audited under. */
+function libraryVerificationKey(root: string, policy: unknown): string {
+  const harness = contextForProject(root).harnessRoot;
+  const files = [...implementationFiles(join(harness, "tools")), ...filesUnder(join(harness, "tools/vendor/tree-sitter-c")),
+    ...implementationFiles(join(harness, ".pi/extensions/shared")), join(harness, "package-lock.json")];
+  return digest(JSON.stringify({ policy, harness: files.map(f => [relative(harness, f), fileDigest(f)]) }));
+}
+function implementationFiles(directory: string): string[] {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).flatMap(entry => {
+    if (entry.isDirectory()) return ["vendor", "node_modules", "__pycache__"].includes(entry.name) ? [] : implementationFiles(join(directory, entry.name));
+    return entry.name.endsWith(".test.ts") ? [] : [join(directory, entry.name)];
+  });
+}
+function recordedMatch(member: LibraryMember, identity: string, key: string, root: string): boolean {
+  try {
+    const record = JSON.parse(readFileSync(acceptedPath(root, member), "utf8"));
+    return record.verdict === "match" && record.identityVersion === 2 && record.identity === identity && record.verificationKey === key;
+  } catch { return false; }
 }
 export async function prepareLibraryFunction(name: string, options: { root?: string; signal?: AbortSignal; alternative?: boolean; contextFile?: string } = {}) {
   const root = options.root ?? projectRoot(), { member, fn, key } = requireLibraryFunction(name, root), p = loadLibraryProject(root)!;

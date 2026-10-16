@@ -6,7 +6,30 @@ import { projectFixture } from "../testing/projectFixture.js";
 import { createRuntimeContext, inRuntimeContext } from "./runtimeContext.js";
 import { compilationIdentity, stableHash } from "./cacheIdentity.js";
 import { buildInputIdentity } from "../build/buildInputs.js";
-import { configuredCppFrontend } from "./toolchain.js";
+import { configuredCppFrontend, loadToolchain } from "./toolchain.js";
+
+test("toolchain text is validated whenever it changes, and every caller gets its own copy", t => {
+  const f = projectFixture(t);
+  const first = loadToolchain(f.root);
+  first.flags.cc1.push("-caller-local");
+  assert(!loadToolchain(f.root).flags.cc1.includes("-caller-local"), "a cached validation must not share the parsed object");
+  f.put("toolchain.json", JSON.stringify({ ...f.toolchain, unexpected: true }));
+  assert.throws(() => loadToolchain(f.root), /unknown config\.unexpected/);
+  f.put("toolchain.json", JSON.stringify(f.toolchain));
+  assert.deepEqual(loadToolchain(f.root).flags, f.toolchain.flags);
+});
+
+test("a cpp driver rewritten in place is asked for its frontend again", t => {
+  const f = projectFixture(t), driver = join(f.root, "fixture-cpp.sh");
+  const answer = (path: string) => writeFileSync(driver, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(join(f.root, path))}\n`, { mode: 0o755 });
+  f.put("frontend-a", "a"); f.put("frontend-b", "b");
+  answer("frontend-a"); f.toolchain.tools.cpp = driver; f.put("toolchain.json", JSON.stringify(f.toolchain));
+  inRuntimeContext(createRuntimeContext(f.root), () => {
+    assert.equal(configuredCppFrontend(), join(f.root, "frontend-a"));
+    answer("frontend-b"); // same size, written within the same second
+    assert.equal(configuredCppFrontend(), join(f.root, "frontend-b"));
+  });
+});
 
 test("the configured cpp frontend is independently witnessed by preparation/comparison and build identities", t => {
   const f = projectFixture(t), driver = join(f.root, "fixture-cpp.sh"), frontend = join(f.root, "fixture-frontend");

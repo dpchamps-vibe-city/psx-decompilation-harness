@@ -8,7 +8,7 @@ import { join, relative } from "node:path";
 import { projectRoot } from "../lib/runtimeContext.js";
 import { requireLibraryFunction, libraryMembers, withLibraryMetadata } from "../lib/libraryTargets.js";
 import { libraryAssemblyParts, librarySourceScaffold } from "../lib/libraryAssembly.js";
-import { librarySourceFiles, libraryTuStatus, isDirectoryTu } from "../lib/libraryTranslationUnit.js";
+import { librarySourceFiles, libraryAssemblyTu, libraryTuStatus, isDirectoryTu } from "../lib/libraryTranslationUnit.js";
 import { compareRelocatableObjects, type ObjectComparison } from "../lib/relocatableObject.js";
 import { snapshot } from "../lib/contentCache.js";
 import { loadLibraryProject } from "../lib/project.js";
@@ -91,6 +91,9 @@ export async function preflightLibraryFunction(name: string): Promise<LibraryPre
     if (report.memberComparison.verdict !== "match") throw new Error(report.memberComparison.differences.join("; "));
     report.stages.push({ name: stage, status: "passed", detail: "All original code/data bytes, symbols and relocations retained; backlog is not reconstructed C" });
     stage = "selected-function preparation";
+    const assemblyTu = libraryAssemblyTu(member, root);
+    if (assemblyTu) report.stages.push({ name: stage, status: "passed", detail: `assembly translation unit (${assemblyTu.part.path}); no C draft is prepared` });
+    else {
     // Exercise today's listing/context/toolchain, not a cached earlier draft.
     // Alternatives preserve existing source/drafts and never promote them.
     const prepared = await prepareLibraryFunction(key, { alternative: true }), packet = prepared.packet;
@@ -98,6 +101,7 @@ export async function preflightLibraryFunction(name: string): Promise<LibraryPre
       comparison: packet.comparison.status, blockers: packet.integration.blockers };
     if (!packet.primary || packet.generation.status === "failed") throw new Error(packet.integration.blockers.join("; ") || "No selected C draft");
     report.stages.push({ name: stage, status: "passed", detail: `C draft available; candidate compilation ${packet.compilation.status}, comparison ${packet.comparison.status} (separate claims)` });
+    }
     stage = "input stability";
     if (JSON.stringify(snapshot(root, paths)) !== JSON.stringify(before)) throw new Error("Project source/configuration/reference inputs changed during preflight");
     report.stages.push({ name: stage, status: "passed", detail: "No live inputs changed" });

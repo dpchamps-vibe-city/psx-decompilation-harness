@@ -9,7 +9,7 @@ import { EXE_CONTAINER_ID, containerOfSymbol, loadContainers, symbolPrefix, type
 import { loadFunctionSpans } from "./symbolIndex.js";
 import { libraryContext, loadLibraryProject } from "./project.js";
 import { libraryMemberForSource, libraryTargetKey, requireLibraryFunction, type LibraryMember } from "./libraryTargets.js";
-import { isDirectoryTu, libraryFunctionSource } from "./libraryTranslationUnit.js";
+import { isDirectoryTu, libraryAssemblyTu, libraryFunctionSource } from "./libraryTranslationUnit.js";
 
 /** Diagnostic keys may be owner-qualified; C/RTL still names the actual symbol. */
 export function functionSymbol(key: string): string {
@@ -43,7 +43,9 @@ export function imageContainerFor(name: string, root = projectRoot()): Container
 export function libraryFunctionTarget(member: LibraryMember, fn: LibraryMember["functions"][number], root = projectRoot()): FunctionTarget {
   const project = loadLibraryProject(root)!;
   const folder = `build/libraries/nonmatchings/${member.id}`;
-  return { key: libraryTargetKey(member, fn.name), symbol: fn.name, owner: { id: member.id, kind: "library" }, source: libraryFunctionSource(member, fn.name),
+  const assemblyTu = libraryAssemblyTu(member, root);
+  return { key: libraryTargetKey(member, fn.name), symbol: fn.name, owner: { id: member.id, kind: "library" },
+    source: assemblyTu ? relative(root, assemblyTu.source).replaceAll("\\", "/") : libraryFunctionSource(member, fn.name),
     assembly: { function: `${folder}/${fn.name}.s`, translationUnit: member.assembly }, includeAsm: { folder, symbol: fn.name },
     flags: libraryContext(member.id, root), coordinate: { kind: "section", section: fn.section, offset: fn.offset, size: fn.size, inferredSize: fn.inferredSize },
     translationUnit: { source: member.source, functions: member.functions.map(f => libraryTargetKey(member, f.name)) },

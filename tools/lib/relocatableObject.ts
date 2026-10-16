@@ -3,7 +3,14 @@
  * relocation masks; encoded addends and MIPS HI16/LO16 pairing remain exact.
  * ELF header flags, section alignment/entry sizes, empty sections and assembler
  * ABI bookkeeping are not emitted program content. Unsupported objects never
- * produce MATCH. Debug/file/local-symbol names are not program identity. */
+ * produce MATCH. Debug/file/local-symbol names are not program identity.
+ *
+ * One assembler-era difference is canonicalised, symmetrically, before the
+ * strict comparison: a relocation against a symbol DEFINED in this object
+ * (PSY-Q objects: section-relative patch; GNU as: global symbol plus in-place
+ * addend) is rewritten to the section symbol with the symbol value folded into
+ * the encoded addend. Both forms link to the same bytes; the symbol itself is
+ * still required to exist at the same section offset. */
 import { elf32Sections, type Elf32Section } from "./elfSections.js";
 import { discoverPrivateFunctions, type ObjectFunction } from "./relocatableCode.js";
 export interface ObjectSymbol {
@@ -73,9 +80,68 @@ export interface ObjectComparison {
   differences: string[];
 }
 const json = (v: unknown) => JSON.stringify(v);
+const signed16 = (n: number) => (n & 0x8000) ? (n & 0xffff) - 0x10000 : n & 0xffff;
+/** Fold references to symbols defined in a program section of the same object
+ * into section-relative form: the reference becomes `section@0` and the symbol
+ * value is added to the encoded in-place addend (R_MIPS_32, R_MIPS_26 and
+ * HI16/LO16 groups with the standard carry convention). Weak, COMMON, absolute
+ * and undefined symbols keep their names: those can bind elsewhere at link time.
+ * Anything this cannot fold exactly is left untouched for the strict comparison. */
+export function canonicalizeDefinedReferences(object: RelocatableObject): RelocatableObject {
+  const defined = new Map<string, ObjectSymbol>();
+  for (const s of object.symbols) {
+    const section = object.sections.get(s.section);
+    if (section && programSection(section) && s.binding === 1 && !defined.has(`named:${s.name}`)) defined.set(`named:${s.name}`, s);
+  }
+  const resolve = (r: ObjectRelocation): { section: string; value: number } | undefined => {
+    const named = defined.get(r.reference);
+    if (named) return { section: named.section, value: named.value };
+    const local = /^(.*)@(\d+)$/.exec(r.reference);
+    if (local && Number(local[2]) !== 0 && object.sections.has(local[1]!)) return { section: local[1]!, value: Number(local[2]) };
+    return undefined;
+  };
+  if (!object.relocations.some(r => resolve(r))) return object;
+  const sections = new Map([...object.sections].map(([name, s]) => [name, { ...s, data: Buffer.from(s.data) }]));
+  const relocations = object.relocations.map(r => ({ ...r }));
+  const bySection = new Map<string, ObjectRelocation[]>();
+  for (const r of relocations) { const rows = bySection.get(r.section); if (rows) rows.push(r); else bySection.set(r.section, [r]); }
+  for (const [name, rows] of bySection) {
+    const data = sections.get(name)!.data;
+    if (new Set(rows.map(r => r.offset)).size !== rows.length) continue; // overlapping fixups: strict order, no folding
+    let pending: ObjectRelocation[] = [];
+    const fold = (r: ObjectRelocation, target: { section: string; value: number }, group: ObjectRelocation[]) => {
+      const low = data.readUInt32LE(r.offset);
+      if (r.type === 2) data.writeUInt32LE((low + target.value) >>> 0, r.offset);
+      else if (r.type === 4) {
+        if (target.value % 4) return false;
+        data.writeUInt32LE(((low & 0xfc000000) | (((low & 0x3ffffff) + target.value / 4) & 0x3ffffff)) >>> 0, r.offset);
+      } else if (r.type === 6) {
+        const addend = signed16(low) + target.value, lo = addend & 0xffff;
+        data.writeUInt32LE(((low & 0xffff0000) | lo) >>> 0, r.offset);
+        for (const hi of group) {
+          const word = data.readUInt32LE(hi.offset), full = (word & 0xffff) * 0x10000 + signed16(low) + target.value;
+          data.writeUInt32LE(((word & 0xffff0000) | (((full - signed16(lo)) / 0x10000) & 0xffff)) >>> 0, hi.offset);
+        }
+      } else return false;
+      for (const row of [r, ...group]) row.reference = `${target.section}@0`;
+      return true;
+    };
+    for (const r of rows) {
+      if (r.type === 5) { pending.push(r); continue; }
+      const target = resolve(r);
+      if (r.type === 6) {
+        const group = pending; pending = [];
+        if (!target) continue;
+        if (group.some(hi => hi.reference !== r.reference)) continue; // mixed pending group: leave strict
+        fold(r, target, group);
+      } else if (target) fold(r, target, []);
+    }
+  }
+  return { flags: object.flags, sections, symbols: object.symbols, relocations };
+}
 export function compareRelocatableObjects(original: Buffer, candidate: Buffer): ObjectComparison {
   try {
-    const a = readRelocatableObject(original), b = readRelocatableObject(candidate), differences: string[] = [];
+    const a = canonicalizeDefinedReferences(readRelocatableObject(original)), b = canonicalizeDefinedReferences(readRelocatableObject(candidate)), differences: string[] = [];
     const targetSections = new Map(programSections(a)), candidateSections = new Map(programSections(b));
     const targetText = [...a.sections].filter(([, s]) => s.flags & 4);
     let totalWords = 0, matchedWords = 0, candidateWords = 0;

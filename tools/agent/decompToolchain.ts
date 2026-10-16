@@ -15,7 +15,7 @@ export { configuredTool } from "../lib/toolchain.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
 import { requireLibraryFunction, libraryMemberById } from "../lib/libraryTargets.js";
 import { extractSignaturesFromSource } from "./sdkTypes.js";
-import { isDirectoryTu, libraryFunctionSource, libraryCompileInput, libraryDependencyInput, librarySourceFiles } from "../lib/libraryTranslationUnit.js";
+import { isDirectoryTu, libraryAssemblyDependencies, libraryAssemblyTu, libraryFunctionSource, libraryCompileInput, libraryDependencyInput, librarySourceFiles, type LibraryAssemblyTu } from "../lib/libraryTranslationUnit.js";
 export function productionCompileInput(source: string, output: string, context: FlagContext, stem = "", root = projectRoot()): string {
   if (context.kind !== "library" || !context.id || source.endsWith(".h")) return source;
   const member = libraryMemberById(context.id!, root);
@@ -116,9 +116,12 @@ export const AS_FLAGS = liveFlags(configuredAsFlags);
 
 export interface CompileArtifacts {
   source: string;
+  /** For an assembly TU (`form: "assembly"`) this and `assembly` are the
+   * hand-written `.s` source: nothing is preprocessed or compiled. */
   preprocessed: string;
   assembly: string;
   object?: string;
+  form?: "c" | "assembly";
   outputDir: string;
   /** Full production assembly when assembly is a function-local diagnostic view. */
   translationUnitAssembly?: string;
@@ -418,6 +421,8 @@ export function sourceDependencyFiles(source: string, context?: FlagContext, roo
   const absoluteSource = isAbsolute(source) ? source : join(root, source);
   const flags = context ?? sourceFlagContext(absoluteSource, root);
   const member = flags?.kind === "library" ? libraryMemberById(flags.id!, root) : undefined;
+  const assemblyTu = member ? libraryAssemblyTu(member, root) : undefined;
+  if (member && assemblyTu) return [...new Set([absoluteSource, resolve(root, member.source), ...libraryAssemblyDependencies(assemblyTu, flags!, root)])];
   const input = member && isDirectoryTu(member) ? libraryDependencyInput(member, root) : absoluteSource;
   const output = runTool(configuredTool("cpp", root), [...configuredFlags("cpp", flags, root), "-MM", "-MG", input], root);
   const files: string[] = [];
@@ -493,6 +498,12 @@ export function compileSource(
   const object = join(absoluteOutput, `${stem}.c.o`);
 
   const context = compilationContext(stem, options.containerKind, options.containerId);
+  const assemblyTu = assemblyTranslationUnit(context);
+  if (assemblyTu) {
+    const planned = planAssemblyTranslationUnit(context, assemblyTu, absoluteSource, absoluteOutput, stem);
+    if (options.assemble) assemble(context, assemblyTu.source, planned.object!);
+    return planned;
+  }
   resetCompilerArtifacts(absoluteOutput, stem);
   if (options.preprocessedText !== undefined) writeFileSync(preprocessed, options.preprocessedText);
   else runTool(configuredTool("cpp"), [...configuredFlags("cpp", context), productionCompileInput(absoluteSource, absoluteOutput, context, stem), "-o", preprocessed]);
@@ -523,8 +534,21 @@ export function compileSource(
   return result;
 }
 
+/** A library member reconstructed as its one hand-written `.s`: the production
+ * assembler (with its input rewrites) is the whole pipeline. */
+function assemblyTranslationUnit(context: FlagContext): LibraryAssemblyTu | undefined {
+  return context.kind === "library" && context.id ? libraryAssemblyTu(libraryMemberById(context.id), projectRoot()) : undefined;
+}
+function planAssemblyTranslationUnit(context: FlagContext, tu: LibraryAssemblyTu, source: string, outputDir: string, stem: string): CompileArtifacts {
+  const member = libraryMemberById(context.id!);
+  if (![resolve(projectRoot(), member.source), tu.source].includes(resolve(source)))
+    throw new Error(`${member.id} is an assembly translation unit (${tu.part.path}); C candidates do not apply to it`);
+  resetCompilerArtifacts(outputDir, stem);
+  return { source, preprocessed: tu.source, assembly: tu.source, object: join(outputDir, `${stem}.c.o`), outputDir, stem, cc1Flags: [], diagnostics: "", form: "assembly" };
+}
 /** Production compile stays whole-TU; only diagnostic consumers see projections. */
 function projectDiagnosticArtifacts(artifacts: CompileArtifacts, context: FlagContext): void {
+  if (artifacts.form === "assembly") return; // no compiler output to project
   let symbol: string;
   try { symbol = resolveFunctionTarget(artifacts.stem).symbol; } catch { return; } // owner build, not a function diagnostic
   const compiledBody = new RegExp(`^\\s*\\.ent\\s+${symbol}(?:\\s|$)`, "m").test(readFileSync(artifacts.assembly, "utf8"));
@@ -553,6 +577,12 @@ export async function compileSourceAsync(
   const assembly = join(absoluteOutput, `${stem}.s`);
   const object = join(absoluteOutput, `${stem}.c.o`);
   const context = compilationContext(stem, options.containerKind, options.containerId);
+  const assemblyTu = assemblyTranslationUnit(context);
+  if (assemblyTu) {
+    const planned = planAssemblyTranslationUnit(context, assemblyTu, absoluteSource, absoluteOutput, stem);
+    if (options.assemble) await assembleAsync(context, assemblyTu.source, planned.object!, projectRoot(), options.signal);
+    return planned;
+  }
   resetCompilerArtifacts(absoluteOutput, stem);
   await runToolAsync(configuredTool("cpp"), [...configuredFlags("cpp", context), productionCompileInput(absoluteSource, absoluteOutput, context, stem), "-o", preprocessed], projectRoot(), options.signal);
   const overrides = options.useOverrides === false ? [] : (loadFlagOverrides().get(overrideKey(stem, context)) || []);

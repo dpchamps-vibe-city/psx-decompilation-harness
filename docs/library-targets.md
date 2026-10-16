@@ -109,7 +109,35 @@ src/libraries/libapi/counter/
 
 Case-distinct names receive ordinal prefixes when needed. Additional shared
 fragments preserve declarations interleaved with functions in the original
-source. The production preprocessor receives a generated ordered include driver
+source.
+
+A member whose original was hand-written assembly (GTE drivers, BIOS hooks,
+card/pad patch code) is reconstructed in the form its authors used: **one `.s`
+source**, listed as the manifest's only part with every original function it
+defines:
+
+```json
+{ "schemaVersion": 1, "member": "MEMBER_ID",
+  "parts": [{ "path": "rotsmd.s", "symbols": ["RotSMD_F3", "RotSMD_G3"] }] }
+```
+
+An assembly TU has no C neighbors and no data stub: the file carries its own
+`.data`/`.bss`/`.comm` storage. It is assembled by the configured production
+assembler for that member, with the same input rewrites compiler output receives
+(`move` to `addu` under GNU as) and the configured include directories, so bare
+`.include "macro.inc"`-style files resolve and nothing else does. The part must
+be reconstructed source, not a listing: disassembler backlog markers, `.reloc`
+tables, `.incbin` and path includes are rejected before assembly, and every
+listed symbol must be defined. Private (discovered) entries are listed by their
+established local names. Nothing is preprocessed or compiled, C candidates do
+not apply, and `prepare`/context export report the member as assembly. Verified
+records carry `form: "assembly"`; progress and the call graph count these
+functions separately from clean C (`sourceForm`), and the C loop's picker never
+selects them. Comments, `.L` label names and local data labels are not program
+identity, so a `.s` part can be annotated freely and re-verified; see the
+process in [handwritten-assembly.md](handwritten-assembly.md#from-classification-to-source-the-general-process).
+
+The production preprocessor receives a generated ordered include driver
 under `build/`: **one GCC translation unit**, with the same private globals,
 prototype scope, function order and per-member flags. Every experiment replaces
 only its selected function include in that same driver. There is no isolated
@@ -242,6 +270,14 @@ Acceptance compares the **entire owning member**:
   ordering and pairing remain exact. Overlapping fixups, mixed-symbol pending
   groups and dangling HIs retain strict table order. Individual HI/LO entries
   are never sorted independently; relocation fields are never masked away.
+- one assembler-era difference is folded, symmetrically, before that strict
+  comparison: a reference to a **global symbol defined in the same object** is
+  compared as the section symbol plus the symbol value folded into the encoded
+  addend (`R_MIPS_32`, `R_MIPS_26`, HI16/LO16 groups with the standard carry).
+  Converted PSY-Q objects patch such references section-relatively; GNU as keeps
+  the symbol. Both link to identical bytes, and the symbol must still exist at
+  the same section offset. Weak, COMMON, absolute and undefined references keep
+  their names: those can bind elsewhere at link time.
 
 This is program-content identity, not identical ELF packaging. ELF header flags,
 section alignment/entry sizes, empty sections and nonexecutable assembler ABI
@@ -270,9 +306,11 @@ object exemptions. Legacy monolithic member checking still requires complete C.
 - `library check --accepted`: only recheck previously verified members; the
   loop's environment guard, **not** an active-target or completion gate.
 - `npm run progress`: distinguish byte-verified members from reconstructed TUs.
-  A function counts only when its own file is clean C and its owning member has
-  fresh whole-member verification. Neighboring stubs never count as completed.
-  Code-byte completion requires a fully reconstructed member. Config, tool,
+  A function counts as C only when its own file is clean C and its owning member
+  has fresh whole-member verification, and as assembly only when its member is
+  one verified `.s`; the two are reported separately (`MATCH-C`/`MATCH-ASM`).
+  Neighboring stubs never count as completed. Code-byte completion requires a
+  fully reconstructed member. Config, tool,
   target, header or source changes invalidate affected records until rechecked.
 
 Library call graphs use member/symbol coordinates, never invented VRAM. Calls

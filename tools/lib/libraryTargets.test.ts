@@ -2,6 +2,7 @@ import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { HARNESS_ROOT, configuredFlags } from "./toolchain.js";
 import { loadLibraryProject, libraryContext } from "./project.js";
@@ -251,5 +252,28 @@ test("shared diagnostics isolate TU views and retain symbolic values instead of 
     const ir = buildMachineIrFrom("first", decoded).ir;
     assert(ir.values.some(v => v.op.kind === "symbol" && v.op.part === "address" && v.op.reference === "import:value"));
     assert(ir.effects.some(e => e.op.kind === "call" && e.op.targetSymbol?.reference === "import:callee" && e.op.target === undefined));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("member oracle folds references to symbols defined in the same object into section-relative form, without masking anything else", () => {
+  const root = mkdtempSync(join(tmpdir(), "psx-defined-refs-"));
+  try {
+    const body = (target: string) => `.set noreorder\n.section .text\n.globl helper\n.type helper, @function\nhelper:\njr $31\nnop\n.globl entry\n.type entry, @function\nentry:\njal ${target}\nnop\nlui $2, %hi(${target}+4)\naddiu $2, $2, %lo(${target}+4)\nlw $3, %lo(${target}+4)($2)\njr $31\nnop\n.section .data\n.globl table\ntable:\n.word ${target}+4\n.word 7\n`;
+    const assemble = (name: string, text: string) => {
+      writeFileSync(join(root, `${name}.s`), text);
+      execFileSync("mips-linux-gnu-as", ["-EL", "-G0", "-march=r3000", join(root, `${name}.s`), "-o", join(root, `${name}.o`)]);
+      return readFileSync(join(root, `${name}.o`));
+    };
+    // PSY-Q objects patch section + offset; GNU as keeps the global symbol.
+    const sectionRelative = assemble("original", body(".Lhelper").replace("helper:\n", ".Lhelper:\nhelper:\n"));
+    const symbolic = assemble("candidate", body("helper"));
+    assert.equal(readRelocatableObject(sectionRelative).relocations[0]!.reference, ".text@0");
+    assert.equal(readRelocatableObject(symbolic).relocations[0]!.reference, "named:helper");
+    assert.equal(compareRelocatableObjects(sectionRelative, symbolic).verdict, "match");
+    assert.equal(compareRelocatableObjects(symbolic, sectionRelative).verdict, "match");
+    assert.equal(compareRelocatableObjects(sectionRelative, assemble("wrong-target", body("helper+4"))).verdict, "mismatch", "a different link-time address is not hidden");
+    assert.equal(compareRelocatableObjects(sectionRelative, assemble("moved", body("helper").replace("helper:\njr $31\nnop\n", "helper:\njr $31\nnop\nnop\n"))).verdict, "mismatch", "moving the definition changes bytes and symbol values");
+    assert.equal(compareRelocatableObjects(sectionRelative, assemble("weak", body("helper").replace(".globl helper", ".weak helper"))).verdict, "mismatch", "a weak definition can bind elsewhere; its symbol stays symbolic");
+    assert.equal(compareRelocatableObjects(sectionRelative, assemble("import", body("helper").replace(".globl helper\n.type helper, @function\nhelper:\njr $31\nnop\n", "helper_private:\njr $31\nnop\n"))).verdict, "mismatch", "an undefined symbol is an import, never a local fold");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

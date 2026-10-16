@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { configuredFlags, configuredTool } from "../lib/toolchain.js";
 import { libraryMembers, requireLibraryFunction, withLibraryMetadata } from "../lib/libraryTargets.js";
-import { isDirectoryTu, libraryTuStatus } from "../lib/libraryTranslationUnit.js";
+import { isDirectoryTu, libraryAssemblyTu, libraryTuStatus } from "../lib/libraryTranslationUnit.js";
 import { libraryFunctionTarget, resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { measureLibraryFunction, libraryBuildIdentities } from "./libraryTarget.js";
 import { prepareM2c } from "../build/prepareM2c.js";
@@ -29,6 +29,7 @@ function exportRelocatableContextScoped(name: string, root: string, dryRun: bool
   const skipped = (reason: string): ExportResult => ({ status: "skipped", skipped: true, signatureMatches: false, signatures: [], localPrototypes: [], reason });
   if (!existsSync(join(root, target.source))) return skipped("file not found");
   const before = requireLibraryFunction(target.key, root).member;
+  if (libraryAssemblyTu(before, root)) return skipped("assembly translation unit; no C declarations to publish");
   const identity = batch.identity(before);
   const measured = measureLibraryFunction(target.key);
   const { member, comparison, artifacts } = measured;

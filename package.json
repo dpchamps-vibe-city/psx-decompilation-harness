@@ -51,6 +51,7 @@
     "progress": "node --import tsx tools/lib/scriptHost.ts tools/diagnostics/progress.ts",
     "macro-identity": "node --import tsx tools/lib/scriptHost.ts tools/diagnostics/macroIdentity.ts",
     "macro-evidence": "node --import tsx tools/lib/scriptHost.ts tools/diagnostics/macroEvidence.ts",
+    "scan-handwritten": "node --import tsx tools/lib/scriptHost.ts tools/diagnostics/handwrittenAssembly.ts",
     "web-partition": "node --import tsx tools/lib/scriptHost.ts tools/diagnostics/fingerprintWebPartition.ts",
     "web-partition-replay": "node --import tsx tools/lib/scriptHost.ts tools/diagnostics/webPartitionReplay.ts",
     "extract-assets": "node --import tsx tools/lib/scriptHost.ts tools/agent/resourceExtract.ts",

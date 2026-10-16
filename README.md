@@ -102,6 +102,13 @@ unchanged-production byte verification. Exceptional definitions use the automati
 helpers need no manifest. See [evidence-backed macros](docs/macro-evidence.md)
 for the proof requirements, fingerprint command and verification workflow.
 
+The read-only [handwritten-assembly scanner](docs/handwritten-assembly.md) ranks
+original-word ABI/context evidence across images and library members. It reports
+advisory candidates with configurable thresholds, protects existing C and emits
+no assembly or policy exemptions. A member the oracle then verifies from one
+`.s` source is an assembly translation unit; the same document describes the
+process from classification to annotated source.
+
 ## Validation and references
 
 `npm test` passes without BTN assets using [isolated fixtures](test-fixtures/harness/README.md)
@@ -113,6 +120,7 @@ The locally provisioned compiler is an ignored artifact, not a distribution.
 - [Install and bootstrap a project](docs/bootstrap.md)
 - [Toolchain configuration and npm tasks](docs/toolchain.md)
 - [Library targets and verification scope](docs/library-targets.md)
+- [Handwritten-assembly heuristics](docs/handwritten-assembly.md)
 - [Migration inventory, pins and measured validation](docs/migration.md)
 - [Remaining generalization work](docs/game-agnosticity.md)
 - [Agent instructions](AGENTS.md)

@@ -1,12 +1,13 @@
 /** Ordered source fragments are ONE production compiler TU, never isolated
  * objects joined after matching. The manifest contains no compiler flags. */
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import type { LibraryMember } from "./libraryTargets.js";
 import { configuredFlags, type FlagContext } from "./toolchain.js";
 import { analyzeCSource } from "../agent/cSourceAnalysis.js";
 import { extractSignaturesFromSource } from "../agent/sdkTypes.js";
 import { parseC } from "../agent/residual-source-search/tree-sitter-c.js";
+import { invocationMemo, writeIfChanged } from "./contentCache.js";
 
 /** A C part defines one function (`symbol`) or shared declarations/data. An
  * assembly part is the member's ONE `.s` source and lists every original
@@ -62,16 +63,22 @@ export function libraryFunctionSource(member: LibraryMember, symbol: string): st
   return isDirectoryTu(member) ? join(dirname(member.source), libraryFunctionFilename(member, symbol)).replaceAll("\\", "/") : member.source;
 }
 export function readLibraryTu(member: LibraryMember, root: string, options: { allowDiscoveredBacklog?: boolean } = {}): LibraryTuManifest {
-  const manifest = JSON.parse(readFileSync(resolve(root, member.source), "utf8")) as LibraryTuManifest;
+  const text = readFileSync(resolve(root, member.source), "utf8");
+  // The same text for the same member validates the same way: once per invocation.
+  invocationMemo(`library-tu\0${resolve(root)}\0${member.id}\0${member.sha256}\0${options.allowDiscoveredBacklog === true}\0${text}`,
+    () => validateLibraryTu(JSON.parse(text) as LibraryTuManifest, member, root, options));
+  return JSON.parse(text) as LibraryTuManifest;
+}
+function validateLibraryTu(manifest: LibraryTuManifest, member: LibraryMember, root: string, options: { allowDiscoveredBacklog?: boolean }): true {
   if (manifest.schemaVersion !== 1 || manifest.member !== member.id || !Array.isArray(manifest.parts) || !manifest.parts.length ||
       Object.keys(manifest).some(k => !["schemaVersion", "member", "parts"].includes(k))) throw new Error(`Invalid TU manifest: ${member.source}`);
   const paths = new Set<string>(), symbols = new Set<string>();
+  const directory = realpathSync.native(resolve(root, dirname(member.source)));
   for (const part of manifest.parts) {
     if (!part || typeof part.path !== "string" || !/^[A-Za-z_0-9][A-Za-z_0-9.-]*\.[chs]$/.test(part.path) || paths.has(part.path.toLowerCase()) ||
         Object.keys(part).some(k => !["path", isAssemblyPart(part) ? "symbols" : "symbol"].includes(k))) throw new Error(`Invalid/duplicate TU part: ${member.source}`);
     paths.add(part.path.toLowerCase());
-    const directory = realpathSync(resolve(root, dirname(member.source)));
-    if (dirname(realpathSync(resolve(directory, part.path))) !== directory) throw new Error(`TU part escapes its directory: ${part.path}`);
+    if (dirname(realpathSync.native(resolve(directory, part.path))) !== directory) throw new Error(`TU part escapes its directory: ${part.path}`);
     if (isAssemblyPart(part)) {
       // One original object, one hand-written source: no C neighbors, no data stub.
       if (manifest.parts.length !== 1 || !Array.isArray(part.symbols) || !part.symbols.length) throw new Error(`An assembly TU is one .s part listing every original function: ${member.source}`);
@@ -88,7 +95,7 @@ export function readLibraryTu(member: LibraryMember, root: string, options: { al
   }
   if (member.functions.some(fn => !symbols.has(fn.name) && !(options.allowDiscoveredBacklog && fn.discovery !== undefined)) || [...symbols].some(s => s !== "__library_member_data" && !member.functions.some(fn => fn.name === s)))
     throw new Error(`TU manifest must list every original function exactly once: ${member.source}`);
-  return manifest;
+  return true;
 }
 export function librarySourceFiles(member: LibraryMember, root: string): string[] {
   return isDirectoryTu(member) ? [member.source, ...readLibraryTu(member, root).parts.map(p => join(dirname(member.source), p.path))] : [member.source];
@@ -122,6 +129,10 @@ function inspectAssemblyPart(text: string, part: LibraryTuPart): { stub: boolean
 /** Strict file boundary: a function file is either its sole canonical stub or
  * one definition; shared files cannot hide functions or assembly placeholders. */
 export function inspectLibraryPart(text: string, part: LibraryTuPart): { stub: boolean } {
+  // A pure function of the part and its text: parsed once per invocation.
+  return invocationMemo(`library-part\0${JSON.stringify(part)}\0${text}`, () => inspectPart(text, part));
+}
+function inspectPart(text: string, part: LibraryTuPart): { stub: boolean } {
   if (isAssemblyPart(part)) return inspectAssemblyPart(text, part);
   const guard = analyzeCSource(text);
   if (!guard.parses) throw new Error(`${part.path}: invalid C: ${guard.reasons.join("; ")}`);
@@ -173,7 +184,8 @@ export function libraryCompileInput(member: LibraryMember, source: string, outpu
   const status = libraryTuStatus(member, root, absolute === owner ? undefined : { symbol: selected!, source: absolute })!;
   mkdirSync(outputDir, { recursive: true });
   const driver = join(outputDir, "translation-unit.c");
-  writeFileSync(driver, `/* Generated production TU: ${member.id}. Do not edit. */\n` + status.map(p => `#include ${JSON.stringify(p.source)}\n`).join(""));
+  // Rewritten only when it changes: readers in other processes never see it half-written.
+  writeIfChanged(driver, `/* Generated production TU: ${member.id}. Do not edit. */\n` + status.map(p => `#include ${JSON.stringify(p.source)}\n`).join(""));
   return driver;
 }
 /** Deterministic driver for dependency scanning; generated files themselves are

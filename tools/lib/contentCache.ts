@@ -8,6 +8,18 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 export const digest = (value: string | Buffer): string => createHash("sha256").update(value).digest("hex");
 const contentMemo = new AsyncLocalStorage<Map<string, { stamp: string; hash: string }>>();
 export function withContentMemo<T>(task: () => T): T { return contentMemo.getStore() ? task() : contentMemo.run(new Map(), task); }
+const invocationValues = new WeakMap<object, Map<string, unknown>>();
+/** A pure result computed once per content-memo scope (one invocation). The key
+ * must carry everything the result depends on, including the text it read.
+ * Outside a scope, and after a throw, it is simply computed again. */
+export function invocationMemo<T>(key: string, compute: () => T): T {
+  const store = contentMemo.getStore();
+  if (!store) return compute();
+  let values = invocationValues.get(store);
+  if (!values) invocationValues.set(store, values = new Map());
+  if (values.has(key)) return values.get(key) as T;
+  const value = compute(); values.set(key, value); return value;
+}
 export function fileDigest(path: string): string {
   if (!existsSync(path)) return "absent";
   const memo = contentMemo.getStore();

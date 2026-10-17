@@ -28,15 +28,19 @@ export function assemblerRules(kind: AssemblerKind): AssemblerRules {
 }
 const REGISTER = "\\$(?:[0-9]|[12][0-9]|3[01]|zero|at|v[01]|a[0-3]|t[0-9]|s[0-8]|k[01]|gp|sp|fp|ra)";
 const MOVE = new RegExp(`^(\\s*)move([ \\t]+)(${REGISTER})[ \\t]*,[ \\t]*(${REGISTER})([ \\t]*(?:#[^\\r\\n]*)?)(\\r?)$`);
-/** Closed rewrite set; no labels, include targets or #APP handwritten regions. */
+const RDATA = /^([ \t]*)\.rdata([ \t]*(?:#[^\r\n]*)?)(\r?)$/;
+/** Closed compiler-input rewrites: move encoding and explicit allocated .rdata
+ * storage. No labels, include targets or #APP handwritten regions are changed. */
 export function rewriteAssemblerInput(text: string, rewrites: readonly string[]): string {
-  for (const id of rewrites) if (id !== "move-addu") throw new Error(`Unknown assembler input rewrite: ${id}`);
+  for (const id of rewrites) if (id !== "move-addu" && id !== "rdata-section") throw new Error(`Unknown assembler input rewrite: ${id}`);
   let handwritten = false;
   return text.split("\n").map(line => {
     if (/^\s*#APP\s*$/.test(line)) handwritten = true;
     if (/^\s*#NO_APP\s*$/.test(line)) { handwritten = false; return line; }
-    if (handwritten || !rewrites.includes("move-addu")) return line;
-    return line.replace(MOVE, (_all, indent, gap, dest, source, tail, cr) => `${indent}addu${gap}${dest},${source},$0${tail}${cr}`);
+    if (handwritten) return line;
+    if (rewrites.includes("move-addu")) line = line.replace(MOVE, (_all, indent, gap, dest, source, tail, cr) => `${indent}addu${gap}${dest},${source},$0${tail}${cr}`);
+    if (rewrites.includes("rdata-section")) line = line.replace(RDATA, '$1.section .rdata,"a",@progbits$2$3');
+    return line;
   }).join("\n");
 }
 export interface AssemblerInvocation { command: string; args: string[]; cwd: string; assemblerInput: string }

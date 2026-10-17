@@ -6,7 +6,7 @@ import { projectFixture } from "../testing/projectFixture.js";
 import { assemble, assembleAsync, assemblerInvocation, captureAssemblerExpansion, rewriteAssemblerInput } from "./assembler.js";
 import { configuredAssembler, configuredFlags, configuredTool, loadToolchain } from "./toolchain.js";
 import { compilationIdentity } from "./cacheIdentity.js";
-import { readRelocatableObject } from "./relocatableObject.js";
+import { compareRelocatableObjects, readRelocatableObject } from "./relocatableObject.js";
 
 const gas = { kind: "gas" as const, inputRewrites: ["move-addu"] };
 test("assembler configuration validates closed selections and profile replacement", t => {
@@ -14,6 +14,10 @@ test("assembler configuration validates closed selections and profile replacemen
   const put = (config: unknown) => f.put("toolchain.json", JSON.stringify(config));
   for (const selection of [{ kind: "unknown" }, { kind: "gas" }, { kind: "maspsx", inputRewrites: [] }, { kind: "gas", inputRewrites: ["unknown"] }]) {
     put({ ...original, assembler: selection }); assert.throws(() => loadToolchain(f.root));
+  }
+  for (const selection of [gas, { kind: "gas", inputRewrites: ["rdata-section"] }, { kind: "gas", inputRewrites: ["move-addu", "rdata-section"] }]) {
+    put({ ...original, assembler: selection, flags: { ...original.flags, as: ["-EL", "-G0"] } });
+    assert.deepEqual(configuredAssembler(undefined, f.root), selection);
   }
   const config = { ...original, assembler: gas, flags: { ...original.flags, as: ["-EL", "-G0"] }, profiles: { native: { assembler: { kind: "maspsx" } }, empty: { assembler: { kind: "gas", inputRewrites: [] } } }, containerProfiles: { overlay: "native", exact: "empty" } };
   put(config);
@@ -24,17 +28,17 @@ test("assembler configuration validates closed selections and profile replacemen
   for (const as of [["-G8"], ["-G", "4"], ["--gpsize=8"], []]) { put({ ...config, flags: { ...config.flags, as } }); assert.throws(() => loadToolchain(f.root), /small-data/); }
 });
 
-test("single builder preserves legacy argv/identity and applies GAS rewrites only to instruction lines", t => {
+test("single builder preserves legacy argv/identity and applies GAS rewrites only to compiler lines", t => {
   const f = projectFixture(t), input = join(f.root, "probe.s"), object = join(f.root, "probe.o");
-  const text = "\tmove $2,$0 # period encoding\r\n# move $2,$0\nlabel: move $2,$0\n.include \"move.s\"\n.word move\nmove: nop\nmove $32,$0\n#APP\nmove $2,$0\n#NO_APP\n";
+  const text = "\tmove $2,$0 # period encoding\r\n# move $2,$0\nlabel: move $2,$0\n.include \"move.s\"\n.word move\nmove: nop\nmove $32,$0\n\t.rdata # comment\r\nrdata:\n.word rdata\n.rdata 2\n# .rdata\n.data\n.text\n.sdata\n#APP\nmove $2,$0\n.rdata\n#NO_APP\n";
   f.put("probe.s", text);
   const legacy = assemblerInvocation(undefined, input, object, f.root);
   assert.deepEqual(legacy, { command: configuredTool("python", f.root), args: [configuredTool("maspsx", f.root), ...configuredFlags("maspsx", undefined, f.root), "--gnu-as-path", configuredTool("as", f.root), "-o", object, ...configuredFlags("as", undefined, f.root), input], cwd: f.root, assemblerInput: input });
   const before = compilationIdentity(f.root);
   assert.equal("assembler" in before, false, "legacy v1 key is unchanged");
-  f.put("toolchain.json", JSON.stringify({ ...f.toolchain, assembler: gas, flags: { ...f.toolchain.flags, as: ["-EL", "-G0"] } }));
+  f.put("toolchain.json", JSON.stringify({ ...f.toolchain, assembler: { ...gas, inputRewrites: ["move-addu", "rdata-section"] }, flags: { ...f.toolchain.flags, as: ["-EL", "-G0"] } }));
   const invocation = assemblerInvocation(undefined, input, object, f.root), rewritten = readFileSync(invocation.assemblerInput, "utf8");
-  assert.equal(rewritten, text.replace("\tmove $2,$0", "\taddu $2,$0,$0"));
+  assert.equal(rewritten, text.replace("\tmove $2,$0", "\taddu $2,$0,$0").replace("\t.rdata # comment\r\n", '\t.section .rdata,"a",@progbits # comment\r\n'));
   assert.equal(rewritten.split("\n").length, text.split("\n").length);
   assert.equal(rewriteAssemblerInput(text, []), text);
   assert.deepEqual(invocation.args, [...configuredFlags("as", undefined, f.root), object + ".as-input.s", "-o", object]);
@@ -42,6 +46,50 @@ test("single builder preserves legacy argv/identity and applies GAS rewrites onl
   assert.notDeepEqual(compilationIdentity(f.root), before);
   assert.equal("maspsx" in (compilationIdentity(f.root).tools as object), false);
   assert.equal(assemblerInvocation(undefined, input, object, f.root, { handwritten: true }).assemblerInput, input);
+  const withRdata = compilationIdentity(f.root);
+  f.put("toolchain.json", JSON.stringify({ ...f.toolchain, assembler: gas, flags: { ...f.toolchain.flags, as: ["-EL", "-G0"] } }));
+  assert.notDeepEqual(compilationIdentity(f.root), withRdata, "rdata selection alone invalidates compilation receipts");
+});
+
+test("rdata rewrite preserves whitespace, comments and line endings without matching other syntax", () => {
+  for (const indent of ["", "\t", "  "]) for (const tail of ["", "\t ", " # comment .rdata", "#comment"]) for (const end of ["", "\n", "\r\n"]) {
+    const text = `${indent}.rdata${tail}${end}`;
+    assert.equal(rewriteAssemblerInput(text, ["rdata-section"]), `${indent}.section .rdata,"a",@progbits${tail}${end}`);
+    assert.equal(rewriteAssemblerInput(text, ["move-addu"]), text);
+    assert.equal(rewriteAssemblerInput(text, []), text);
+  }
+  const untouched = 'label: .rdata\n.rdata 2\n.rdata,2\n.rdatafoo\n.rdata; .word 1\nrdata:\n.word rdata\n.section .rdata,"a",@progbits\n\t#APP\r\n.rdata\nmove $2,$0\n\t#NO_APP\r\n';
+  assert.equal(rewriteAssemblerInput(untouched, ["move-addu", "rdata-section"]), untouched);
+  assert.equal(rewriteAssemblerInput("#APP\n.rdata\n#NO_APP\n.rdata", ["rdata-section"]), '#APP\n.rdata\n#NO_APP\n.section .rdata,"a",@progbits');
+  assert.throws(() => rewriteAssemblerInput("", ["unknown"]), /Unknown assembler input rewrite/);
+});
+
+test("rdata rewrite produces allocated PROGBITS and section-relative relocations through production assembly", async t => {
+  const f = projectFixture(t), config = { ...f.toolchain, flags: { ...f.toolchain.flags, as: ["-march=r3000", "-mtune=r3000", "-EL", "-G0"] } };
+  const input = join(f.root, "rdata.s");
+  f.put("rdata.s", ".text\nlabel:\n nop\n.rdata\n.align 2\n.word label\n");
+  for (const enabled of [false, true]) {
+    f.put("toolchain.json", JSON.stringify({ ...config, assembler: { ...gas, inputRewrites: enabled ? ["rdata-section"] : [] } }));
+    const object = join(f.root, enabled ? "rewritten.o" : "unmodified.o");
+    const receipt = await assembleAsync(undefined, input, object, f.root);
+    assert.deepEqual(receipt.inputRewrites, enabled ? ["rdata-section"] : []);
+    const parsed = readRelocatableObject(readFileSync(object)), name = enabled ? ".rdata" : ".rodata";
+    assert.equal(parsed.sections.has(enabled ? ".rodata" : ".rdata"), false);
+    assert.equal(parsed.sections.get(name)!.type, 1, "SHT_PROGBITS");
+    assert.equal(parsed.sections.get(name)!.flags, 2, "SHF_ALLOC, not writable/executable");
+    assert.equal(parsed.sections.get(name)!.data.readUInt32LE(0), 0);
+    assert.deepEqual(parsed.relocations.filter(r => r.section === name), [{ section: name, offset: 0, type: 2, reference: ".text@0" }]);
+  }
+  const handwritten = join(f.root, "handwritten.o");
+  assemble(undefined, input, handwritten, f.root, { handwritten: true });
+  assert.ok(readRelocatableObject(readFileSync(handwritten)).sections.has(".rodata"), "handwritten TUs bypass the rewrite");
+  // The disassembler's explicit section spelling must merge with compiler
+  // .rdata, including INCLUDE_ASM data left in an #APP region.
+  f.put("merged.s", readFileSync(input, "utf8") + '#APP\n.section .rdata,"a",@progbits\n.word label\n#NO_APP\n');
+  assemble(undefined, join(f.root, "merged.s"), join(f.root, "merged.o"), f.root);
+  f.put("reference.s", '.text\nlabel:\n nop\n.section .rdata,"a",@progbits\n.align 2\n.word label,label\n');
+  assemble(undefined, join(f.root, "reference.s"), join(f.root, "reference.o"), f.root, { handwritten: true });
+  assert.equal(compareRelocatableObjects(readFileSync(join(f.root, "reference.o")), readFileSync(join(f.root, "merged.o"))).verdict, "match");
 });
 
 test("synthetic backend words, default GAS swap and byte-identical listing receipts", async t => {

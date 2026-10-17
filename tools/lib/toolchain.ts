@@ -19,7 +19,7 @@ export const FLAG_NAMES = ["cpp", "cc1", "as", "ld", "maspsx", "m2c", "spimdisas
 export type FlagName = typeof FLAG_NAMES[number];
 export type ConfiguredPath = string | OwnedPath;
 export type AssemblerKind = "maspsx" | "gas";
-export const ASSEMBLER_REWRITES = ["move-addu"] as const;
+export const ASSEMBLER_REWRITES = ["move-addu", "rdata-section"] as const;
 export type AssemblerConfig = { kind: "maspsx" } | { kind: "gas"; inputRewrites: string[] };
 export interface AssemblerSelection { kind: AssemblerKind; inputRewrites: string[] }
 export interface ToolchainConfig {

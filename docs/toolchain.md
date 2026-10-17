@@ -86,6 +86,21 @@ directives, comments, included stubs and handwritten `#APP` regions are unchange
 A new rewrite requires original-word evidence and a focused regression fixture;
 rewrites are not an unrestricted text filter or a means to patch target words.
 
+`rdata-section` rewrites a bare compiler directive `.rdata` to
+`.section .rdata,"a",@progbits`, preserving whitespace, trailing `#` comments
+and line endings. Modern ELF GAS maps the `.rdata` pseudo-op to `.rodata`;
+the explicit directive retains the original allocated, read-only PROGBITS
+section name. The adopting PSY-Q library project's census found nonempty
+`.rdata` in 154 of 2,224 original members (40 with switch tables); its LNK-to-ELF
+converter and `tools/lib/libraryAssembly.ts` both retain `.rdata`. The compiler
+emits `.rdata`, so only assembly was changing its name. Arguments, labels and
+`#APP` regions are not rewritten; inputs marked `handwritten` bypass all rewrites.
+Opt in per project via `assembler.inputRewrites`; library compiler data then
+shares the same section as included reference data. Convert the member's
+`_data.c` in the same change to avoid duplicate contents. Executable projects
+should retain their current selection unless their linker scripts also collect
+`.rdata` (the image oracle already aliases `.rdata`/`.rodata`).
+
 `tools/lib/assembler.ts` owns every assembler command. Direct GAS writes
 `<object>.as-input.s`, then invokes `tools.as` with `flags.as` from the project
 root, so relative `.include`s still resolve. MASPSX forces GAS `-G0` unless

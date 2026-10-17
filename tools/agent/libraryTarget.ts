@@ -7,7 +7,7 @@ import { contextForProject, projectRoot } from "../lib/runtimeContext.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { configuredCompilerAnalysis, configuredFlags, configuredProfile, configuredTool, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredCompilerAnalysis, configuredFileFlags, configuredFlags, configuredProfile, configuredTool, toolchainExecutables, type FlagContext } from "../lib/toolchain.js";
 import { libraryContext, loadLibraryProject, libraryInputFiles } from "../lib/project.js";
 import { libraryInventory, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, withLibraryMetadata, type LibraryMember } from "../lib/libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, renderObjectResidual, type ObjectComparison } from "../lib/relocatableObject.js";
@@ -104,9 +104,17 @@ export function libraryBuildIdentities(root = projectRoot()) {
   const includes = new Map<string, string>(), includeInputs = new Map<string, Record<string, string>>();
   const locals = new Map<string, Record<string, string>>();
   const observedPaths = new Set([...commonPaths, ...guardPaths]);
+  /* A member's context contributes only its profile and its own file flags to
+     the compiler identity; the batch guard catches tool or flag-file changes. */
+  const compilers = new Map<string, Record<string, unknown>>();
+  const compiler = (context: FlagContext, stem: string) => {
+    const key = JSON.stringify([configuredProfile(context, root) ?? null, configuredFileFlags(stem, root)]);
+    if (!compilers.has(key)) compilers.set(key, compilationIdentity(root, context, stem));
+    return compilers.get(key)!;
+  };
   const identity = (member: LibraryMember): string => {
     if (fileDigest(resolve(root, member.input)) !== member.inputHash) throw new Error(`Target input changed while measuring ${member.id}; rerun inventory`);
-    const context = libraryContext(member.id, root), cpp = configuredFlags("cpp", context, root);
+    const context = libraryContext(member.id, root, project), cpp = configuredFlags("cpp", context, root);
     const dirs = cpp.flatMap((f, i) => f === "-I" ? [cpp[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []);
     const key = JSON.stringify(dirs);
     if (!includes.has(key)) {
@@ -126,7 +134,7 @@ export function libraryBuildIdentities(root = projectRoot()) {
     }
     paths.forEach(p => observedPaths.add(p));
     return digest(JSON.stringify({ version: 2, target: member.sha256, input: member.inputHash, common: commonHash,
-      includes: includes.get(key), tools: compilationIdentity(root, context, member.id), local }));
+      includes: includes.get(key), tools: compiler(context, member.id), local }));
   };
   const assertUnchanged = () => {
     const after = snapshot(root, [...observedPaths], filter);
@@ -136,11 +144,11 @@ export function libraryBuildIdentities(root = projectRoot()) {
   };
   const legacyIdentity = (member: LibraryMember): string => {
     identity(member);
-    const cpp = configuredFlags("cpp", libraryContext(member.id, root), root);
+    const context = libraryContext(member.id, root, project), cpp = configuredFlags("cpp", context, root);
     const dirs = cpp.flatMap((f, i) => f === "-I" ? [cpp[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []);
     const input = { ...common, ...includeInputs.get(JSON.stringify(dirs)), ...locals.get(member.id) };
     return digest(JSON.stringify({ target: member.sha256, input: member.inputHash,
-      tools: compilationIdentity(root, libraryContext(member.id, root), member.id),
+      tools: compiler(context, member.id),
       inputs: Object.fromEntries(Object.entries(input).sort(([a], [b]) => a.localeCompare(b))) }));
   };
   return { identity, legacyIdentity, assertUnchanged };

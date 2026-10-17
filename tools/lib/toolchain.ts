@@ -79,18 +79,23 @@ export function assertAssemblerSmallData(selection: AssemblerSelection, flags: r
   if (threshold !== 0) throw new Error(`${TOOLCHAIN_FILE}: gas requires explicit -G0 in flags.as; nonzero/default small-data rules are unsupported`);
 }
 /* Validation is a function of the file's text alone, so text already accepted
- * for a root is not validated again. The file is still read on every request,
- * and each caller gets its own parsed copy. */
-const validatedToolchains = new Map<string, string>();
+ * for a root is neither validated nor parsed again. The file is still read on
+ * every request. Callers share one deep-frozen configuration per text: any
+ * attempt to change it throws instead of leaking into the next caller. */
+const loadedToolchains = new Map<string, { text: string; config: ToolchainConfig }>();
+const deepFreeze = <T>(value: T): T => {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.freeze(value); Object.values(value).forEach(deepFreeze); }
+  return value;
+};
 export function loadToolchain(root = projectRoot()): ToolchainConfig {
   let text: string;
   try { text = readFileSync(join(root, TOOLCHAIN_FILE), "utf8"); }
   catch (error) { throw new Error(`Cannot load ${join(root, TOOLCHAIN_FILE)}: ${String(error)}`); }
-  const key = resolve(root);
-  if (validatedToolchains.get(key) === text) return JSON.parse(text) as ToolchainConfig;
-  const value = validateToolchain(text, root);
-  validatedToolchains.set(key, text);
-  return value;
+  const key = resolve(root), prior = loadedToolchains.get(key);
+  if (prior?.text === text) return prior.config;
+  const config = deepFreeze(validateToolchain(text, root));
+  loadedToolchains.set(key, { text, config });
+  return config;
 }
 function validateToolchain(text: string, root: string): ToolchainConfig {
   let value: any;

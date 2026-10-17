@@ -3,7 +3,7 @@ import { assemble, assembleAsync, assemblerIdentity, captureAssemblerExpansion a
 export type { AssemblerExpansion } from "../lib/assembler.js";
 import { execFileSync, spawn, spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
 import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import type { Container } from "../lib/container.js";
@@ -28,6 +28,8 @@ export function productionCompileInput(source: string, output: string, context: 
 import { compilerAssemblyOrigin, objectFunctionView, projectCompilerArtifacts, resetCompilerArtifacts, writeObjectFunctionView } from "../lib/compilerArtifacts.js";
 import type { FlagContext } from "../lib/toolchain.js";
 import { readFlagOverrides } from "../lib/flagOverrides.js";
+import { digest, filesUnder, readCache, sameSnapshot, snapshot, writeCache } from "../lib/contentCache.js";
+import { includeMembership, includeSearch, preprocessingTools } from "./preprocessedCache.js";
 function compilationContext(stem: string, kind?: FlagContext["kind"], id?: string): FlagContext {
   if (kind === "library") return libraryContext(id ?? "");
   if (kind) return { kind, ...(id ? { id } : {}) };
@@ -424,17 +426,40 @@ export function sourceDependencyFiles(source: string, context?: FlagContext, roo
   const assemblyTu = member ? libraryAssemblyTu(member, root) : undefined;
   if (member && assemblyTu) return [...new Set([absoluteSource, resolve(root, member.source), ...libraryAssemblyDependencies(assemblyTu, flags!, root)])];
   const input = member && isDirectoryTu(member) ? libraryDependencyInput(member, root) : absoluteSource;
-  const output = runTool(configuredTool("cpp", root), [...configuredFlags("cpp", flags, root), "-MM", "-MG", input], root);
-  const files: string[] = [];
-  const text = output.replace(/\\\n/g, " ");
-  const colon = text.indexOf(":");
-  if (colon < 0) return [absoluteSource];
-  for (const token of text.slice(colon + 1).trim().split(/\s+/)) {
-    if (!token) continue;
-    files.push(isAbsolute(token) ? token : join(root, token));
-  }
+  const files = cppDependencies(input, configuredFlags("cpp", flags, root), root, member && isDirectoryTu(member) ? [resolve(root, dirname(member.source))] : []);
+  if (!files) return [absoluteSource];
   if (!files.includes(absoluteSource)) files.unshift(absoluteSource);
   return member && isDirectoryTu(member) ? [...new Set([...librarySourceFiles(member, root).map(p => resolve(root, p)), ...files.filter(p => p !== input)])] : files;
+}
+
+/**
+ * The `-MM -MG` answer for one input, reused while it cannot have changed: the
+ * same command, tools, environment and input text, the same content in every
+ * other file it lists, and the same header candidates in every directory the
+ * preprocessor searches, so a newly shadowing or newly available header still
+ * counts. Nothing is recorded when a listed file or searched directory changed
+ * around the run. `undefined` is a run that listed no rule.
+ */
+function cppDependencies(input: string, flags: string[], root: string, includedFrom: string[]): string[] | undefined {
+  const argv = [...flags, "-MM", "-MG", input];
+  const preprocessing = preprocessingTools(root), { tools, environment } = preprocessing;
+  const search = [...new Set([dirname(input), ...includedFrom, ...includeSearch(flags, root, preprocessing).dirs])];
+  const key = digest(JSON.stringify({ contract: "source-dependencies-v1", argv, tools, environment, search, text: readFileSync(input, "utf8") }));
+  const path = join(root, "build/cache/dependencies", `${digest(input)}.json`);
+  const listed = (files: string[] | null) => (files ?? []).filter(file => file !== input);
+  const membership = (files: string[] | null) => digest(JSON.stringify(includeMembership(search, listed(files).map(file => basename(file)))));
+  type Recorded = { files: string[] | null; inputs: Record<string, string>; membership: string };
+  const prior = readCache<Recorded>(path, key);
+  if (prior && sameSnapshot(prior.inputs, snapshot(root, listed(prior.files))) && prior.membership === membership(prior.files))
+    return prior.files ? [...prior.files] : undefined;
+  const started = Date.now(), before = JSON.stringify(search.map(dir => filesUnder(dir)));
+  const text = runTool(configuredTool("cpp", root), argv, root).replace(/\\\n/g, " ");
+  const colon = text.indexOf(":");
+  const files = colon < 0 ? null : text.slice(colon + 1).trim().split(/\s+/).filter(Boolean).map(token => isAbsolute(token) ? token : join(root, token));
+  const settled = listed(files).every(file => !existsSync(file) || statSync(file).ctimeMs < started - 2_000) &&
+    before === JSON.stringify(search.map(dir => filesUnder(dir)));
+  if (settled) writeCache(path, key, { files, inputs: snapshot(root, listed(files)), membership: membership(files) } satisfies Recorded);
+  return files ?? undefined;
 }
 
 /**

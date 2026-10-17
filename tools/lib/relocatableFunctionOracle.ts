@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { requireLibraryFunction } from "./libraryTargets.js";
 import { isDirectoryTu } from "./libraryTranslationUnit.js";
-import { objectFunctions, readRelocatableObject, compareRelocatableObjects, type RelocatableObject, type ObjectRelocation } from "./relocatableObject.js";
+import { objectFunctions, readRelocatableObject, compareRelocatableObjects, canonicalizeDefinedReferences, type RelocatableObject, type ObjectRelocation } from "./relocatableObject.js";
 import { compareWords, disassembleBytes, symboliseWord, type OracleResult, type RenderedWord } from "./functionOracle.js";
 const NAMES: Record<number, string> = { 0: "R_MIPS_NONE", 1: "R_MIPS_16", 2: "R_MIPS_32", 4: "R_MIPS_26", 5: "R_MIPS_HI16", 6: "R_MIPS_LO16", 7: "R_MIPS_GPREL16", 10: "R_MIPS_PC16" };
 const signed = (n: number) => (n & 0x8000) ? (n & 0xffff) - 0x10000 : n & 0xffff;
@@ -82,12 +82,24 @@ export function compareRelocatableFunction(name: string, objectPath: string): Or
   // symbol positions license comparing that same span; metadata must not turn
   // already-identical assembly into a function-local mismatch.
   const extent = fn.inferredSize && memberComparison.verdict === "match" ? fn.size : undefined;
-  const targetWords = relocatableFunctionWords(member.object, fn.name), candidateWords = relocatableFunctionWords(object, fn.name, fn.offset, extent);
-  const comparison = compareWords(targetWords, candidateWords);
+  const { targetWords, candidateWords, rawTargetWords, rawCandidateWords, ...comparison } =
+    compareRelocatableFunctionObjects(member.object, object, fn.name, extent);
   if (object.symbols.some(s => s.name === `${fn.name}.NON_MATCHING`)) comparison.verdict = "stub";
   const memberStub = !isDirectoryTu(member) && object.symbols.some(s => s.name.endsWith(".NON_MATCHING"));
-  return { ...comparison, functionName: key, vram: fn.offset, objectPath, targetWords, candidateWords,
-    verification: { scope: "translation-unit", verdict: memberStub ? "stub" : memberComparison.verdict, differences: memberComparison.differences },
+  return { ...comparison, functionName: key, vram: fn.offset, objectPath, targetWords, candidateWords, rawTargetWords, rawCandidateWords,
+    verification: { ...memberComparison, scope: "translation-unit", verdict: memberStub ? "stub" : memberComparison.verdict },
     notes: [`Diagnostic coordinates are ${fn.section} offsets, not RAM; ${fn.inferredSize ? "original symbol extent is inferred" : "original function extent is recorded"}.`,
+      "Function comparison uses the member oracle's defined-reference canonicalization; raw words/references are retained separately.",
       `Function-local diagnostics do not certify the owning TU; whole-member verdict: ${memberStub ? "STUB" : memberComparison.verdict.toUpperCase()}.`] };
+}
+/** The exact same proven relocation equivalence as whole-member acceptance.
+ * Original-word readers above stay raw; only this comparison view is folded. */
+export function compareRelocatableFunctionObjects(original: RelocatableObject, candidate: RelocatableObject, symbol: string, extent?: number) {
+  const fn = objectFunctions(original).find(f => f.name === symbol);
+  if (!fn) throw new Error(`Object does not define ${symbol}`);
+  const rawTargetWords = relocatableFunctionWords(original, symbol);
+  const rawCandidateWords = relocatableFunctionWords(candidate, symbol, fn.offset, extent);
+  const targetWords = relocatableFunctionWords(canonicalizeDefinedReferences(original), symbol);
+  const candidateWords = relocatableFunctionWords(canonicalizeDefinedReferences(candidate), symbol, fn.offset, extent);
+  return { ...compareWords(targetWords, candidateWords), targetWords, candidateWords, rawTargetWords, rawCandidateWords };
 }

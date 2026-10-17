@@ -10,7 +10,8 @@ import { dirname, join, relative, resolve } from "node:path";
 import { configuredCompilerAnalysis, configuredFlags, configuredProfile, configuredTool, toolchainExecutables } from "../lib/toolchain.js";
 import { libraryContext, loadLibraryProject, libraryInputFiles } from "../lib/project.js";
 import { libraryInventory, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, withLibraryMetadata, type LibraryMember } from "../lib/libraryTargets.js";
-import { compareRelocatableObjects, readRelocatableObject, type ObjectComparison } from "../lib/relocatableObject.js";
+import { compareRelocatableObjects, readRelocatableObject, renderObjectResidual, type ObjectComparison } from "../lib/relocatableObject.js";
+import { compareRelocatableFunction } from "../lib/relocatableFunctionOracle.js";
 import { libraryDisassemblySymbols, validateLibraryDisassembly } from "../lib/libraryDisassembly.js";
 import { libraryAssemblyParts, librarySourceScaffold } from "../lib/libraryAssembly.js";
 import { migrateLibrarySources, writeLibraryTu } from "./librarySources.js";
@@ -176,9 +177,11 @@ export function measureLibraryFunction(name: string, source?: string) {
   const target = requireLibraryFunction(name);
   const artifacts = compileMember(target.member, source ?? (libraryAssemblyTu(target.member, projectRoot()) ? target.member.source : libraryFunctionSource(target.member, target.fn.name)), projectRoot(), target.key);
   const comparison = compareLibraryCandidate(target.member, artifacts, target.fn.name);
+  const local = compareRelocatableFunction(target.key, artifacts.object!);
+  const functionComparison = { symbol: target.fn.name, verdict: local.verdict, matchedWords: local.same, totalWords: local.targetWords.length };
   const report = join(artifacts.outputDir, "comparison.json");
-  writeFileSync(report, JSON.stringify({ target: target.key, scope: "whole-member", memberHash: target.member.sha256, ...comparison }, null, 2) + "\n");
-  return { ...target, artifacts, comparison, report };
+  writeFileSync(report, JSON.stringify({ target: target.key, scope: "whole-member", memberHash: target.member.sha256, ...comparison, functionComparison }, null, 2) + "\n");
+  return { ...target, artifacts, comparison, functionComparison, report };
 }
 function compareLibraryCandidate(member: LibraryMember, artifacts: ReturnType<typeof compileSource>, symbol?: string): ObjectComparison {
   const object = readFileSync(artifacts.object!), comparison = compareRelocatableObjects(member.bytes, object);
@@ -193,11 +196,13 @@ function compareLibraryCandidate(member: LibraryMember, artifacts: ReturnType<ty
     differences: ["Member still contains INCLUDE_ASM/assembly-backed data; reference assembly is not reconstructed C", ...comparison.differences] };
   return comparison;
 }
-export function renderLibraryComparison(comparison: ObjectComparison): string {
+export function renderLibraryComparison(comparison: ObjectComparison, selected?: { symbol: string; verdict: string; matchedWords: number; totalWords: number }): string {
   const percent = comparison.totalWords ? (comparison.matchedWords / comparison.totalWords * 100).toFixed(2) : "0.00";
   return [`target: ${comparison.totalWords} instrs, candidate: ${comparison.candidateWords} instrs`,
     `Match: ${comparison.matchedWords}/${comparison.totalWords} words (${percent}%)`,
     `VERDICT: ${comparison.verdict.toUpperCase()}`, "Scope: whole relocatable member (sections, bytes, symbols and symbolic relocations)",
+    ...(selected ? [`Selected function: ${selected.symbol}: ${selected.verdict.toUpperCase()} (${selected.matchedWords}/${selected.totalWords} words)`] : []),
+    ...renderObjectResidual(comparison),
     ...comparison.differences.map(d => `  ${d}`)].join("\n");
 }
 export function disassembleLibraryMember(member: LibraryMember, root = projectRoot()): string {

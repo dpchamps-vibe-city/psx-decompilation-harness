@@ -211,7 +211,8 @@ export interface ReversalReport {
   functionName: string;
   /** Whether the candidate object already reproduces the target bytes. */
   exact: boolean;
-  verification?: { scope: "translation-unit"; verdict: string; differences: string[] };
+  functionVerdict?: import("../../lib/functionOracle.js").Verdict;
+  verification?: import("../../lib/functionOracle.js").OracleResult["verification"];
   matchedWords: number;
   totalWords: number;
   /** Confidence in the reconstructed pass interpretation, not byte identity. */

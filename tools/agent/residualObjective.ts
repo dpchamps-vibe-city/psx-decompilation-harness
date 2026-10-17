@@ -38,7 +38,7 @@ import { requireFunctionLocation } from "../lib/symbolIndex.js";
 import { allocationDominant, fingerprintWebPartition } from "../diagnostics/fingerprintWebPartition.js";
 import { addressedWebFacts, renderWebDiff, type PartitionDiff } from "../diagnostics/webPartitionDiff.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
-import { readRelocatableObject, relocatableOutputIdentity } from "../lib/relocatableObject.js";
+import { readRelocatableObject, relocatableOutputIdentity, renderObjectResidual } from "../lib/relocatableObject.js";
 import { createMeasurementRun, snapshotMeasurementSource, assertMeasurementSourceUnchanged } from "./pipeline-reversal/measurement.js";
 
 export interface Entry {
@@ -52,6 +52,8 @@ export interface Entry {
   objective: ResidualObjective;
   assemblerExpansion?: import("./decompToolchain.js").AssemblerExpansion;
   residualOwner?: string;
+  functionVerdict?: import("../lib/functionOracle.js").Verdict;
+  verification?: import("./pipeline-reversal/types.js").ReversalReport["verification"];
   rawDifferences?: import("./pipeline-reversal/types.js").ReversalReport["rawDifferences"];
   analysis?: import("./pipeline-reversal/types.js").ReversalReport["analysis"];
   matchedWords: number;
@@ -170,6 +172,8 @@ function score(functionName: string, label: string, directory: string, source?: 
     objective: artifacts.report.objective,
     assemblerExpansion: artifacts.report.assemblerExpansion,
     residualOwner: artifacts.report.residualOwner,
+    functionVerdict: artifacts.report.functionVerdict,
+    verification: artifacts.report.verification,
     rawDifferences: artifacts.report.rawDifferences,
     analysis: artifacts.report.analysis,
     matchedWords: artifacts.report.matchedWords,
@@ -272,10 +276,14 @@ export function residualReportJson(functionName: string, entries: Entry[], block
       label: entry.label, source: entry.source, measurement: entry.measurement, stub: Boolean(entry.stub),
       matchedWords: entry.matchedWords, totalWords: entry.totalWords, objective: entry.objective,
       residualOwner: entry.residualOwner ?? (entry.stub ? "not applicable — no C candidate" : "not established"),
+      functionVerdict: entry.functionVerdict ?? null,
+      verification: entry.verification ?? null,
       rawDifferences: entry.rawDifferences ?? null,
       assemblerExpansion: entry.assemblerExpansion ?? null,
       interpretation: {
         status: entry.stub ? "stub" : entry.objective.exact ? "byte-exact" :
+          entry.functionVerdict === "match" && entry.verification && entry.verification.verdict !== "match"
+            ? entry.verification.scaffoldBlockers?.length ? "scaffold-blocker" : "owning-tu-mismatch" :
           entry.objective.undetermined > 0 ? "undetermined" :
           entry.objective.allocationCoverage?.complete === false ? "incomplete-value-comparison" :
           entry.objective.key.every(term => term === 0) ? "unexplained-byte-residual" : "modeled-residual",
@@ -366,7 +374,14 @@ export function renderResidualReport(functionName: string, entries: Entry[], blo
   }
 
   const work = rankBlocks(best.objective);
-  if (work.length === 0) {
+  if (best.functionVerdict === "match" && best.verification && best.verification.verdict !== "match") {
+    lines.push(`Selected function: MATCH (${best.matchedWords}/${best.totalWords} words; canonical relocations agree)`,
+      ...renderObjectResidual(best.verification),
+      best.verification.scaffoldBlockers?.length
+        ? "NEXT: witnessed generated-scaffold blocker. Preserve the matching C; repair/regenerate the harness stubs before finalization."
+        : "NEXT: the selected function matches; inspect the owning-TU differences before changing this function.",
+      ...best.verification.differences.map(detail => `  ${detail}`));
+  } else if (work.length === 0) {
     if (best.objective.blindBlocks.length > 0) {
       lines.push("NEXT: nothing readable — every open block holds an undetermined word.");
     } else if (!best.objective.exact) {

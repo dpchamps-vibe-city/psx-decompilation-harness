@@ -42,7 +42,7 @@ export async function main(args: string[]): Promise<void> {
       console.log(rest.includes("--json") ? JSON.stringify(result) : `Prepared packet: ${result.path}`);
     } else {
       const i = rest.indexOf("--src"), result = measureLibraryFunction(positional[0]!, i >= 0 ? rest[i + 1] : undefined);
-      console.log(renderLibraryComparison(result.comparison));
+      console.log(renderLibraryComparison(result.comparison, result.functionComparison));
       if (result.comparison.verdict !== "match") process.exitCode = 1;
     }
     return;

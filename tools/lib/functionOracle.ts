@@ -530,9 +530,13 @@ export interface OracleResult extends OracleComparison {
   objectPath: string;
   targetWords: RenderedWord[];
   candidateWords: RenderedWord[];
+  /** ET_REL comparison views may fold defined references; original evidence is
+   * retained here rather than passed off as the original instruction encoding. */
+  rawTargetWords?: RenderedWord[];
+  rawCandidateWords?: RenderedWord[];
   /** Conditions the reader has to know about; never a substitute for a row. */
   notes: string[];
-  verification?: { scope: "translation-unit"; verdict: Verdict; differences: string[] };
+  verification?: { scope: "translation-unit" } & import("./relocatableObject.js").ObjectComparison;
 }
 
 export interface OracleOptions {

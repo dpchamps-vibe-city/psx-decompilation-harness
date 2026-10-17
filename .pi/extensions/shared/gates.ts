@@ -28,6 +28,16 @@ export function parseFunctionDiffSummary(output: string): Pick<DiffResult, "matc
   };
 }
 
+/** Keep the authoritative whole-member failure and its bounded site evidence
+ * visible to the worker; a local match is not permission to pass the gate. */
+export function functionDiffFailure(diff: Pick<DiffResult, "verdict" | "matchedInstructions" | "totalInstructions" | "output">): string {
+  const member = /^Scope: whole relocatable member/m.test(diff.output);
+  const detail = member ? diff.output.split("\n").filter(line => /^(Selected function:|Owning TU:|Scaffold blocker:|Member residual:)/.test(line)) : [];
+  const bounded = detail.slice(0, 16).join("\n").slice(0, 4000);
+  return `${member ? "Whole-member" : "Function"} oracle verdict is ${diff.verdict.toUpperCase()}, not MATCH (${diff.matchedInstructions}/${diff.totalInstructions} words)` +
+    (bounded ? `\n${bounded}${detail.join("\n").length > bounded.length ? "\n[Additional details in diff report]" : ""}` : "");
+}
+
 export async function runFunctionDiff(
   projectRoot: string,
   functionName: string,
@@ -234,12 +244,12 @@ async function scopedGate(options: {
   let diff: DiffResult | undefined = options.machineVerification?.diff;
   if (proceed() && !options.machineVerification && options.functionName && options.mode !== "project-refinement") {
     diff = await timings.measure("function-diff", () => runFunctionDiff(options.projectRoot, options.functionName!, 60_000, options.signal, options.functionContainer));
-    if (!diff.exact) failures.push(`Function oracle verdict is ${diff.verdict.toUpperCase()}, not MATCH (${diff.matchedInstructions}/${diff.totalInstructions} words)`);
+    if (!diff.exact) failures.push(functionDiffFailure(diff));
   } else if (proceed() && options.mode === "project-refinement") {
     for (const name of scanFunctions) {
       if (!proceed()) break;
       const touched = await runFunctionDiff(options.projectRoot, name, 60_000, options.signal, options.functionContainers?.[name]);
-      if (!touched.exact) failures.push(`${name}: function oracle verdict is ${touched.verdict.toUpperCase()}, not MATCH (${touched.matchedInstructions}/${touched.totalInstructions} words)`);
+      if (!touched.exact) failures.push(`${name}: ${functionDiffFailure(touched)}`);
     }
   }
 

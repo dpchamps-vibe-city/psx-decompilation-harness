@@ -42,16 +42,16 @@ export function withPreprocessorMetadata<T>(task: () => T): T {
     validate(); return result;
   });
 }
-function cppConfiguration(): string { return stableHash({ cpp: configuredTool("cpp"), family: loadToolchain().compiler.family }); }
-function toolConfiguration(): { cpp: string; frontend: string; hashes: string[]; config: string } {
+function cppConfiguration(root = projectRoot()): string { return stableHash({ cpp: configuredTool("cpp", root), family: loadToolchain(root).compiler.family }); }
+function toolConfiguration(root = projectRoot()): { cpp: string; frontend: string; hashes: string[]; config: string } {
   const state = metadata.getStore();
   if (state?.tools) return state.tools;
-  const command = configuredTool("cpp");
-  const cpp = executablePath(command);
+  const command = configuredTool("cpp", root);
+  const cpp = executablePath(command, root);
   if (!cpp) throw new Error(`Configured preprocessor not found: ${command}`);
-  const frontend = configuredCppFrontend();
+  const frontend = configuredCppFrontend(root);
   if (!frontend) throw new Error(`Configured preprocessor frontend not found: ${command}`);
-  const tools = { cpp, frontend, hashes: [fileDigest(cpp), fileDigest(frontend)], config: cppConfiguration() };
+  const tools = { cpp, frontend, hashes: [fileDigest(cpp), fileDigest(frontend)], config: cppConfiguration(root) };
   if (state) state.tools = tools;
   return tools;
 }
@@ -61,31 +61,25 @@ function searchMembers(dir: string): string[] {
   if (!state.members.has(dir)) state.members.set(dir, filesUnder(dir));
   return state.members.get(dir)!;
 }
-export function preprocessingTools(): { tools: ReturnType<typeof toolConfiguration>; environment: Record<string, string | null> } {
-  return { tools: toolConfiguration(), environment: Object.fromEntries(["CPATH", "C_INCLUDE_PATH", "GCC_EXEC_PREFIX", "COMPILER_PATH", "SOURCE_DATE_EPOCH"]
+export function preprocessingTools(root = projectRoot()): { tools: ReturnType<typeof toolConfiguration>; environment: Record<string, string | null> } {
+  return { tools: toolConfiguration(root), environment: Object.fromEntries(["CPATH", "C_INCLUDE_PATH", "GCC_EXEC_PREFIX", "COMPILER_PATH", "SOURCE_DATE_EPOCH"]
     .map((p) => [p, process.env[p] ?? null])) };
 }
-export interface ProcessedBundle { text: string; dependencies: string[]; inputs: Record<string, string>; cache: "hit" | "miss" }
-export function cachedPreprocess(source: string, root = projectRoot(), flags?: string[], name?: string): ProcessedBundle {
-  source = resolve(root, source);
-  const context = name ? resolveFunctionTarget(name, root).flags : sourceFlagContext(source, root);
-  flags ??= configuredFlags("cpp", context, root);
-  const member = context?.kind === "library" && !source.endsWith(".h") ? (name ? requireLibraryFunction(name, root).member : libraryMemberForSource(source.slice(root.length + 1), root)) : undefined;
-  const composition = member && isDirectoryTu(member) ? snapshot(root, librarySourceFiles(member, root)) : undefined;
-  const input = member && isDirectoryTu(member) ? libraryCompileInput(member, source, join(root, "build/cache/preprocessed/inputs", digest(source)), root, name ? resolveFunctionTarget(name, root).symbol : undefined) : source;
-  const { tools, environment } = preprocessingTools();
-  const { cpp } = tools;
-  const searchKey = digest(JSON.stringify([root, flags, tools, environment]));
-  let search = searchMemo.get(searchKey);
+/** cpp's own include search under `flags`, after the including file's own
+ * directory (the caller's to prepend). `key` identifies the search for cache
+ * identities; the listing itself is asked once per process. */
+export function includeSearch(flags: string[], root = projectRoot(), { tools, environment } = preprocessingTools()): { key: string; dirs: string[] } {
+  const key = digest(JSON.stringify([root, flags, tools, environment]));
+  let search = searchMemo.get(key);
   if (!search) {
     /* Ask cpp itself: preserves -I/-iquote/-isystem order, environment paths,
        and default system directories, including extensionless headers. */
-    const probe = spawnSync(cpp, [...flags, "-E", "-v", "-"], { cwd: root, input: "", encoding: "utf8" });
+    const probe = spawnSync(tools.cpp, [...flags, "-E", "-v", "-"], { cwd: root, input: "", encoding: "utf8" });
     if (probe.status !== 0) throw new Error(`cpp search discovery failed: ${probe.stderr}`);
     const listing = probe.stderr.match(/#include "\.\.\." search starts here:\n([\s\S]*?)End of search list\./)?.[1];
     if (listing === undefined) throw new Error("cpp search discovery did not report include directories");
     search = [...new Set(listing.split("\n").filter((p) => /^\s+\S/.test(p)).map((p) => resolve(root, p.trim())))];
-    searchMemo.set(searchKey, search);
+    searchMemo.set(key, search);
   }
   const requested: string[] = [];
   for (let i = 0; i < flags.length; i++) {
@@ -95,11 +89,26 @@ export function cachedPreprocess(source: string, root = projectRoot(), flags?: s
   }
   for (const variable of ["CPATH", "C_INCLUDE_PATH"]) if (process.env[variable])
     requested.push(...process.env[variable]!.split(":").map((p) => resolve(root, p || ".")));
-  search = [...new Set([dirname(source), ...search, ...requested])];
-  const membershipOf = (names: string[]) => {
-    const set = new Set(names); for (const name of set) metadata.getStore()?.names.add(name);
-    return search.map((dir): [string, string[]] => [dir, searchMembers(dir).filter((p) => includeCandidate(p, set))]);
-  };
+  return { key, dirs: [...new Set([...search, ...requested])] };
+}
+/** The header candidates in each search directory: every header, plus files
+ * with other extensions only when a request named them. */
+export function includeMembership(dirs: string[], names: Iterable<string>): Array<[string, string[]]> {
+  const set = new Set(names); for (const name of set) metadata.getStore()?.names.add(name);
+  return dirs.map((dir): [string, string[]] => [dir, searchMembers(dir).filter((p) => includeCandidate(p, set))]);
+}
+export interface ProcessedBundle { text: string; dependencies: string[]; inputs: Record<string, string>; cache: "hit" | "miss" }
+export function cachedPreprocess(source: string, root = projectRoot(), flags?: string[], name?: string): ProcessedBundle {
+  source = resolve(root, source);
+  const context = name ? resolveFunctionTarget(name, root).flags : sourceFlagContext(source, root);
+  flags ??= configuredFlags("cpp", context, root);
+  const member = context?.kind === "library" && !source.endsWith(".h") ? (name ? requireLibraryFunction(name, root).member : libraryMemberForSource(source.slice(root.length + 1), root)) : undefined;
+  const composition = member && isDirectoryTu(member) ? snapshot(root, librarySourceFiles(member, root)) : undefined;
+  const input = member && isDirectoryTu(member) ? libraryCompileInput(member, source, join(root, "build/cache/preprocessed/inputs", digest(source)), root, name ? resolveFunctionTarget(name, root).symbol : undefined) : source;
+  const preprocessing = preprocessingTools(), { cpp } = preprocessing.tools;
+  const { key: searchKey, dirs } = includeSearch(flags, root, preprocessing);
+  const search = [...new Set([dirname(source), ...dirs])];
+  const membershipOf = (names: string[]) => includeMembership(search, names);
   const identity = { source, sourceHash: fileDigest(source), composition, flags, cpp: searchKey,
     compatibility: COMPONENT_CONTRACTS.preprocess };
   const key = digest(JSON.stringify(identity));

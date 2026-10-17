@@ -8,11 +8,11 @@ import { compilationIdentity, stableHash } from "./cacheIdentity.js";
 import { buildInputIdentity } from "../build/buildInputs.js";
 import { configuredCppFrontend, loadToolchain } from "./toolchain.js";
 
-test("toolchain text is validated whenever it changes, and every caller gets its own copy", t => {
+test("toolchain text is validated whenever it changes, and callers share one immutable configuration", t => {
   const f = projectFixture(t);
   const first = loadToolchain(f.root);
-  first.flags.cc1.push("-caller-local");
-  assert(!loadToolchain(f.root).flags.cc1.includes("-caller-local"), "a cached validation must not share the parsed object");
+  assert.equal(loadToolchain(f.root), first, "unchanged text is neither validated nor parsed again");
+  assert.throws(() => first.flags.cc1.push("-caller-local"), TypeError, "no caller can change what the next one reads");
   f.put("toolchain.json", JSON.stringify({ ...f.toolchain, unexpected: true }));
   assert.throws(() => loadToolchain(f.root), /unknown config\.unexpected/);
   f.put("toolchain.json", JSON.stringify(f.toolchain));

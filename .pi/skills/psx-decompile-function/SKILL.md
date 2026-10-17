@@ -9,6 +9,13 @@ Work on exactly the target named in the invocation. Derive every game,
 compiler, assembler, SDK, build, and layout fact from the current project, not
 from memory. Do not commit or create a worktree unless asked.
 
+**No internet research.** Do not search the web or fetch online reference
+material/source code, even when matching stalls. This includes web/browser
+skills, `web_fetch`, Brave Search, GitHub/grep.app APIs and `curl`/`wget`.
+Use only local project artifacts, vendored sources, SDK headers, matched code
+and compiler/byte evidence. Missing local evidence is a gap to report, not
+permission to browse. See the harness [agent guide](../../../AGENTS.md).
+
 A project builds more than one binary. The target's **container** — which binary
 holds it — decides its source path, its original assembly, its compiler flags
 and its symbol map, and every tool here derives that from the function's name.

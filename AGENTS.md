@@ -76,6 +76,14 @@ this template's defaults, not universal game facts.
 
 ## Repository-wide rules
 
+- **No internet research.** Do not search the internet, browse external sites,
+  or fetch online reference material or source code. This applies to every
+  agent and worker, including when matching stalls. Do not use web-search or
+  browser skills, `web_fetch`, Brave Search, GitHub/grep.app APIs, or shell
+  commands such as `curl`/`wget` as a workaround. Use local project artifacts,
+  vendored sources, SDK headers, matched code and compiler/byte evidence only.
+  If required evidence is missing locally, report that gap; it is not permission
+  to search online.
 - Never commit unless the user explicitly asks. Never commit generated or
   extracted binary artifacts.
 - Tooling is TypeScript and runs through `npx tsx`. Do not check in Python

@@ -74,10 +74,29 @@ export function relocatableOutputIdentity(object: RelocatableObject): string {
     relocations: [...new Set(object.relocations.map(r => r.section))].sort().map(section => object.relocations.filter(r => r.section === section)) });
 }
 
+export interface ObjectDifferenceSite {
+  section: string; offset: number; owner?: string;
+  target?: number; candidate?: number;
+  targetRelocations: ObjectRelocation[]; candidateRelocations: ObjectRelocation[];
+}
 export interface ObjectComparison {
   verdict: "match" | "mismatch" | "undetermined" | "stub";
   matchedWords: number; totalWords: number; candidateWords: number;
   differences: string[];
+  /** Bounded explanatory evidence; never substitutes for the complete comparison. */
+  wordDifferences?: ObjectDifferenceSite[];
+  scaffoldBlockers?: string[];
+}
+/** Shared by diff, residual and finalization reporting; acceptance stays strict. */
+export function renderObjectResidual(comparison: Pick<ObjectComparison, "verdict" | "wordDifferences" | "scaffoldBlockers">): string[] {
+  return [`Owning TU: ${comparison.verdict.toUpperCase()}`,
+    ...(comparison.scaffoldBlockers ?? []).map(message => `Scaffold blocker: ${message}`),
+    ...(comparison.wordDifferences ?? []).map(site => {
+      const refs = (rows: ObjectRelocation[]) => rows.map(r => `${r.type}:${r.reference}`).join(", ") || "none";
+      const word = (value?: number) => value === undefined ? "missing" : `0x${value.toString(16).padStart(8, "0")}`;
+      return `Member residual: ${site.section}+0x${site.offset.toString(16).toUpperCase()}${site.owner ? ` (${site.owner})` : ""}: ` +
+        `target ${word(site.target)} [${refs(site.targetRelocations)}]; candidate ${word(site.candidate)} [${refs(site.candidateRelocations)}]`;
+    })];
 }
 const json = (v: unknown) => JSON.stringify(v);
 const signed16 = (n: number) => (n & 0x8000) ? (n & 0xffff) - 0x10000 : n & 0xffff;
@@ -145,12 +164,28 @@ export function compareRelocatableObjects(original: Buffer, candidate: Buffer): 
     const targetSections = new Map(programSections(a)), candidateSections = new Map(programSections(b));
     const targetText = [...a.sections].filter(([, s]) => s.flags & 4);
     let totalWords = 0, matchedWords = 0, candidateWords = 0;
+    const wordDifferences: ObjectDifferenceSite[] = [];
+    // Ownership is diagnostic only. An uncertain function partition must not
+    // change the whole-member verdict or turn a supported object into a refusal.
+    let functions: ReturnType<typeof objectFunctions> = [];
+    try { functions = objectFunctions(a); } catch { /* retain section coordinates */ }
+    const scaffoldBlockers = b.symbols.filter(s => s.section === "UND" && /^\.L__library_section_(?:ref|end)_/.test(s.name) &&
+      !a.symbols.some(t => t.section === "UND" && t.name === s.name)).slice(0, 12)
+      .map(s => `unresolved generated assembly reference ${s.name}; regenerate reference stubs, not the selected C function`);
     for (const [name, s] of targetText) {
       const c = b.sections.get(name); totalWords += Math.ceil(s.size / 4);
       for (let off = 0; off < s.size; off += 4) {
-        if (c && s.data.subarray(off, off + 4).equals(c.data.subarray(off, off + 4)) &&
-          json(a.relocations.filter(r => r.section === name && r.offset >= off && r.offset < off + 4)) ===
-          json(b.relocations.filter(r => r.section === name && r.offset >= off && r.offset < off + 4))) matchedWords++;
+        const targetRelocations = a.relocations.filter(r => r.section === name && r.offset >= off && r.offset < off + 4);
+        const candidateRelocations = b.relocations.filter(r => r.section === name && r.offset >= off && r.offset < off + 4);
+        if (c && s.data.subarray(off, off + 4).equals(c.data.subarray(off, off + 4)) && json(targetRelocations) === json(candidateRelocations)) matchedWords++;
+        else if (wordDifferences.length < 12) {
+          const fn = functions.find(f => f.section === name && off >= f.offset && off < f.offset + f.size);
+          wordDifferences.push({ section: name, offset: off,
+            ...(fn ? { owner: `${fn.name}+0x${(off - fn.offset).toString(16).toUpperCase()}` } : {}),
+            ...(off + 4 <= s.size ? { target: s.data.readUInt32LE(off) } : {}),
+            ...(c && off + 4 <= c.size ? { candidate: c.data.readUInt32LE(off) } : {}),
+            targetRelocations, candidateRelocations });
+        }
       }
     }
     for (const s of b.sections.values()) if (s.flags & 4) candidateWords += Math.ceil(s.size / 4);
@@ -193,7 +228,7 @@ export function compareRelocatableObjects(original: Buffer, candidate: Buffer): 
       if (s.name !== c.name || s.section !== c.section || s.value !== c.value || s.binding !== c.binding || s.visibility !== c.visibility ||
         (s.type !== 0 && s.type !== c.type) || ((s.size > 0 || s.section === "COMMON") && s.size !== c.size)) differences.push(`Linker-visible symbol differs: ${s.name}`);
     }
-    return { verdict: differences.length ? "mismatch" : "match", matchedWords, totalWords, candidateWords, differences };
+    return { verdict: differences.length ? "mismatch" : "match", matchedWords, totalWords, candidateWords, differences, wordDifferences, scaffoldBlockers };
   } catch (error) {
     return { verdict: "undetermined", matchedWords: 0, totalWords: 0, candidateWords: 0, differences: [String(error)] };
   }

@@ -10,9 +10,10 @@ export function librarySourceScaffold(member: LibraryMember, headers: string[], 
     parts.map(part => `INCLUDE_ASM("${folder}", ${part.symbol});\n`).join("");
 }
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** A named export may also be the destination of a section-relative reference.
- * Keep the export, but use a local alias only at sites whose original relocation
- * references the section. Otherwise GAS changes that reference to the export. */
+/** A strong export can be referenced by name: the object oracle folds it to
+ * section + value, and the reference survives replacing its stub with C.
+ * Non-strong exports still need exact section-relative aliases; they cannot
+ * borrow the strong-definition equivalence (e.g. a weak symbol can rebind). */
 function preserveSectionReferences(member: LibraryMember, assembly: string): string {
   const exports = member.object.symbols.filter(s => s.binding !== 0 && member.object.sections.has(s.section));
   const aliases = new Map<string, string>();
@@ -51,7 +52,9 @@ function preserveSectionReferences(member: LibraryMember, assembly: string): str
         line = line.replace(new RegExp(`(?<![\\w.$])${escape(name)}(?![\\w.$])`, "g"), target.label);
     }
     for (const symbol of exports) {
-      if (references[0]!.reference !== `${symbol.section}@0`) continue;
+      // Never make a strong export's callers depend on a label defined only
+      // in its replaceable INCLUDE_ASM fragment.
+      if (symbol.binding === 1 || references[0]!.reference !== `${symbol.section}@0`) continue;
       const operand = new RegExp(`(?<![\\w.$])${escape(symbol.name)}(?![\\w.$])`, "g");
       const alias = `.L__library_section_ref_${symbol.name}`;
       const rewritten = line.replace(operand, alias);

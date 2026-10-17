@@ -192,7 +192,7 @@ if (loadLibraryProject()) {
     const measured = measureLibraryFunction(positional[0]!, srcOverride);
     console.log(`target: ${measured.key} (${measured.member.input}[${measured.member.ordinal}])`);
     console.log(`source: ${measured.artifacts.source}`);
-    console.log(renderLibraryComparison(measured.comparison));
+    console.log(renderLibraryComparison(measured.comparison, measured.functionComparison));
     console.log(`Report: ${measured.report}`);
     process.exit(measured.comparison.verdict === "match" ? 0 : 1);
   } catch (error) { console.error(String(error)); process.exit(1); }

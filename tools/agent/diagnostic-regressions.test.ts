@@ -222,6 +222,32 @@ test("incomplete value comparison is explicit and candidate assembler excerpts a
   assert.doesNotMatch(text, /EXPAND_AT_SENTINEL/);
 });
 
+test("a local match with a TU/scaffold failure preserves exactness boundaries and does not prescribe a compiler experiment", () => {
+  const candidate = entry("draft", 0);
+  candidate.functionVerdict = "match";
+  candidate.verification = { scope: "translation-unit", verdict: "mismatch", matchedWords: 150, totalWords: 152, candidateWords: 152,
+    differences: ["Symbolic relocations differ"], scaffoldBlockers: ["unresolved generated assembly reference .L__library_section_ref_first"],
+    wordDifferences: [{ section: ".text", offset: 0x164, owner: "second+0x2C", target: 0x0c000000, candidate: 0x0c000000,
+      targetRelocations: [{ section: ".text", offset: 0x164, type: 4, reference: ".text@0" }],
+      candidateRelocations: [{ section: ".text", offset: 0x164, type: 4, reference: "import:.L__library_section_ref_first" }] }] };
+  const entries = [entry("live", 0, true), candidate];
+  const report = residualReportJson("f", entries);
+  assert.equal(report.entries[1]!.interpretation.status, "scaffold-blocker");
+  assert.equal(report.entries[1]!.functionVerdict, "match");
+  assert.deepEqual(report.entries[1]!.verification, candidate.verification);
+  assert.equal(report.entries[1]!.objective.exact, false, "local success cannot grant whole-member acceptance");
+  const text = renderResidualReport("f", entries);
+  assert.match(text, /Selected function: MATCH/);
+  assert.match(text, /Owning TU: MISMATCH/);
+  assert.match(text, /Scaffold blocker:/);
+  assert.match(text, /Member residual: \.text\+0x164 \(second\+0x2C\)/);
+  assert.match(text, /Preserve the matching C/);
+  assert.doesNotMatch(text, /Use psx_compiler_trace/);
+  candidate.verification.scaffoldBlockers = [];
+  assert.equal(residualReportJson("f", entries).entries[1]!.interpretation.status, "owning-tu-mismatch");
+  assert.match(renderResidualReport("f", entries), /inspect the owning-TU differences/);
+});
+
 test("stub diagnostics name the real object marker for both bare and owner-qualified function keys", () => {
   for (const key of ["StopRCnt", "lib_0123456789abcdef_0::StopRCnt"]) {
     const error = new StubSourceError(key, "candidate.o");

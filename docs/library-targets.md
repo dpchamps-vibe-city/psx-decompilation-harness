@@ -188,8 +188,13 @@ Assembly-backed member data uses a separate `__library_member_data` include.
 Replace it with real C definitions in its own data fragment; do not omit its
 private binding, data/BSS/COMMON or count it as reconstructed C. Reference
 scaffolds retain original private bindings; diagnostic nonmatching markers are
-local, so neither manufactures exports or changes encoded relocation addends. Splitting regenerates assembly
-but **never overwrites existing source**. There is no original-object fallback
+local, so neither manufactures exports or changes encoded relocation addends.
+Calls to strong exports use their actual symbols, not aliases defined only in
+replaceable assembly fragments: an assembly caller must keep working when its
+callee becomes C. The member oracle folds these defined references as described
+below; weak/imported references do not gain that equivalence. After updating a
+stub generator, regenerate the reference assembly with `split-all`; this
+**never overwrites existing source**. There is no original-object fallback
 that lets missing C pass verification, nor are empty C bodies valid scaffolds.
 
 Use `MEMBER_ID::Symbol` from inventory as the target name. A bare symbol works
@@ -340,6 +345,13 @@ Instruction views retain symbolic relocations and section coordinates. Inferred
 NOTYPE/size-zero extents remain explicitly uncertain. Function-local agreement,
 or zero staged terms, cannot certify neighboring code/data or object layout:
 residual reports retain the whole-member verdict and finalization checks the TU.
+Function-local comparison uses the same defined-reference canonicalization as
+the member oracle, retaining raw words/references separately as evidence.
+Diff/finalization reports distinguish selected-function agreement from member
+failure and locate bounded code differences by section offset and owning
+function. An unresolved generated section-reference alias is a scaffold blocker,
+not an allocator/scheduler residual or permission to add assembly to matching C.
+Neither local agreement nor a scaffold diagnosis grants whole-member acceptance.
 
 Preparation includes the experiment ledger and configured diagnostic availability.
 A `build/` draft is explicitly not integrated; source existence, compilation,

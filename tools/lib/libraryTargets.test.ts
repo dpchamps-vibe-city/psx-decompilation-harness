@@ -9,6 +9,7 @@ import { loadLibraryProject, libraryContext } from "./project.js";
 import { libraryMembers, requireLibraryFunction, type LibraryMember } from "./libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, objectFunctions, relocatableOutputIdentity } from "./relocatableObject.js";
 import { libraryAssemblyParts } from "./libraryAssembly.js";
+import { compareRelocatableFunctionObjects } from "./relocatableFunctionOracle.js";
 import { libraryMemberSource, librarySourceInputRoot, legacyLibrarySource } from "./librarySourceLayout.js";
 import type { LibraryProject } from "./project.js";
 import { resolveFunctionTarget, sourceFlagContext, functionSymbol } from "./targetAdapter.js";
@@ -271,6 +272,20 @@ test("member oracle folds references to symbols defined in the same object into 
     assert.equal(readRelocatableObject(symbolic).relocations[0]!.reference, "named:helper");
     assert.equal(compareRelocatableObjects(sectionRelative, symbolic).verdict, "match");
     assert.equal(compareRelocatableObjects(symbolic, sectionRelative).verdict, "match");
+    const local = (bytes: Buffer) => compareRelocatableFunctionObjects(readRelocatableObject(sectionRelative), readRelocatableObject(bytes), "entry");
+    const compared = local(symbolic);
+    assert.equal(compared.verdict, "match", "function diagnostics use the same equivalence as member acceptance");
+    assert.equal(compared.rawTargetWords[0]!.relocations![0]!.reference, ".text@0");
+    assert.equal(compared.rawCandidateWords[0]!.relocations![0]!.reference, "named:helper", "raw reference evidence survives");
+    assert.equal(local(assemble("wrong-target-local", body("helper+4"))).verdict, "mismatch");
+    assert.equal(local(assemble("weak-local", body("helper").replace(".globl helper", ".weak helper"))).verdict, "mismatch");
+    assert.equal(local(assemble("import-local", body("other_import"))).verdict, "mismatch");
+    // Nonzero definition values must be folded into BOTH the instruction and
+    // its relocation addend, not erased by a symbol-name normalization.
+    const prefix = (text: string) => text.replace(".section .text\n", ".section .text\n.space 16\n");
+    const offsetOriginal = assemble("offset-original", prefix(body(".Lhelper").replace("helper:\n", ".Lhelper:\nhelper:\n")));
+    const offsetCandidate = assemble("offset-candidate", prefix(body("helper")));
+    assert.equal(compareRelocatableFunctionObjects(readRelocatableObject(offsetOriginal), readRelocatableObject(offsetCandidate), "entry").verdict, "match");
     assert.equal(compareRelocatableObjects(sectionRelative, assemble("wrong-target", body("helper+4"))).verdict, "mismatch", "a different link-time address is not hidden");
     assert.equal(compareRelocatableObjects(sectionRelative, assemble("moved", body("helper").replace("helper:\njr $31\nnop\n", "helper:\njr $31\nnop\nnop\n"))).verdict, "mismatch", "moving the definition changes bytes and symbol values");
     assert.equal(compareRelocatableObjects(sectionRelative, assemble("weak", body("helper").replace(".globl helper", ".weak helper"))).verdict, "mismatch", "a weak definition can bind elsewhere; its symbol stays symbolic");

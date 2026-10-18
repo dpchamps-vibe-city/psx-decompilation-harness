@@ -105,6 +105,17 @@ export const UNEXPOSED_CLIS: Record<string, string> = {
 };
 
 export const TOOL_SPECS: ToolSpec[] = [
+  {
+    name: "psx_analysis_support", label: "PSX Analysis Support", script: "analysisSupport.ts",
+    description: "Report configured compiler diagnostic support, or explicitly bootstrap its selected provider with small diagnostic-only probes. Bootstrap writes project evidence under build/; it does not change the production toolchain, flags or source. Optional functionName selects the owning TU's flags for the probes.",
+    parameters: Type.Object({
+      command: Type.String({ enum: ["status", "bootstrap"], description: "Report support or explicitly measure the configured provider" }),
+      functionName: Type.Optional(FUNCTION("Exact function symbol whose production flags the probes should use")),
+      json: JSON_FLAG,
+    }),
+    argv: p => [p.command as string, ...(p.functionName ? ["--function", p.functionName as string] : []), ...(p.json ? ["--json"] : [])],
+    timeout: 120_000,
+  },
   /* ---- pre-flight: run before authoring source ---- */
   functionTool(
     "psx_triage", "PSX Triage", "triage.ts",

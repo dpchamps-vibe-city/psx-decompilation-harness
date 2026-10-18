@@ -37,6 +37,7 @@ import {
   EXE_CONTAINER_ID,
   containerPath,
   containerTargetPath,
+  containerOfSymbol,
   requireContainer,
   vramToRom,
   type Container,
@@ -359,7 +360,7 @@ export function targetWordsOf(functionName: string, options: { container?: Conta
   const container =
     typeof options.container === "string"
       ? requireContainer(options.container)
-      : options.container ?? requireContainer(EXE_CONTAINER_ID);
+      : options.container ?? containerOfSymbol(functionName) ?? requireContainer(EXE_CONTAINER_ID);
   const span = loadFunctionSpans(container).find((entry) => entry.name === functionName);
   if (!span) throw new Error(`${functionName} has no subsegment in ${container.paths.splat}`);
   const image = readFileSync(containerTargetPath(container));
@@ -642,7 +643,7 @@ export function compareFunction(functionName: string, options: OracleOptions = {
   const container =
     typeof options.container === "string"
       ? requireContainer(options.container)
-      : options.container ?? requireContainer(EXE_CONTAINER_ID);
+      : options.container ?? containerOfSymbol(functionName) ?? requireContainer(EXE_CONTAINER_ID);
   const index = options.index ?? loadSymbolIndex(container);
   const objectPath = options.objectPath ?? join(containerPath(container, "objDir"), `${functionName}.c.o`);
   const notes: string[] = [];

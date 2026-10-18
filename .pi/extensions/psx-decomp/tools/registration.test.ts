@@ -68,6 +68,14 @@ test("tool names and backing scripts are unique", () => {
   for (const name of names) assert.match(name, /^psx_[a-z0-9_]+$/, `${name} is not a psx_ tool name`);
 });
 
+test("analysis support exposes status and bootstrap through the same configured CLI", () => {
+  const spec = TOOL_SPECS.find(s => s.script === "analysisSupport.ts")!;
+  assert.equal(spec.name, "psx_analysis_support");
+  assert.deepEqual(spec.argv({ command: "status", json: true }), ["status", "--json"]);
+  assert.deepEqual(spec.argv({ command: "bootstrap", functionName: "member::f", json: true }),
+    ["bootstrap", "--function", "member::f", "--json"]);
+});
+
 test("a tool's subcommands stay parameters of that tool", () => {
   /* One CLI, one tool. compilerSource has eight commands and is one tool; if
    * that ever becomes eight tools this fails, which is the intent. */

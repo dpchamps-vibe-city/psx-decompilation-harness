@@ -1,11 +1,10 @@
 import { test } from "./runtimeTestContext.js";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { HARNESS_ROOT } from "../lib/runtimeContext.js";
-import { assertInstructionBytes, descriptionSpans, inspectInstructionReferences, readInstructionLedger } from "./instructionContracts.js";
+import { assertInstructionBytes, assertInstructionSnapshot, captureInstructionSnapshot, descriptionSpans, inspectInstructionReferences, readInstructionSnapshot } from "./instructionContracts.js";
 import ts from "typescript";
 import { filesUnder } from "../lib/contentCache.js";
 import matching from "../../.pi/extensions/psx-decomp/index.js";
@@ -21,13 +20,18 @@ function registrations() {
   matching(api); resources(api); bootstrap(api);
   return tools;
 }
-const baseline = JSON.parse(readFileSync(join(HARNESS_ROOT, "test-fixtures/installed-runtime/instruction-baseline.json"), "utf8"));
-test("active instruction bytes differ only by the exact recorded I1/I2 patch", () => {
-  const edits = readInstructionLedger(HARNESS_ROOT);
-  for (const row of baseline.rows) assertInstructionBytes(row.file, row.text, readFileSync(join(HARNESS_ROOT, row.file), "utf8"), edits, row.descriptionsOnly);
-  assert.equal(createHash("sha256").update(readFileSync(join(HARNESS_ROOT, "AGENTS.md"))).digest("hex"), baseline.agentsUnchangedHash);
+const baseline = readInstructionSnapshot(HARNESS_ROOT);
+test("active instruction bytes and coverage match the reviewed current snapshot", () => {
+  assertInstructionSnapshot(HARNESS_ROOT, baseline);
   assert.equal(existsSync(join(HARNESS_ROOT, "prompts/legacy")), false);
   assert.throws(() => assertInstructionBytes("fixture.md", "unchanged prose\n", "unchanged  prose\n", []), /unrecorded/);
+});
+test("instruction snapshots reject changed bytes and added or removed instruction files", () => {
+  const current = captureInstructionSnapshot(HARNESS_ROOT);
+  const changed = structuredClone(current); changed.rows[0]!.sha256 = "0".repeat(64);
+  const missing = structuredClone(current); missing.rows.pop();
+  const added = structuredClone(current); added.rows.push({ file: "unexpected.md", descriptionsOnly: false, sha256: "0".repeat(64) });
+  for (const snapshot of [changed, missing, added]) assert.throws(() => assertInstructionSnapshot(HARNESS_ROOT, snapshot), /Unrecorded instruction/);
 });
 test("installed instruction links and provided parameters resolve in a prepared consumer without copied tools", async t => {
   const root = mkdtempSync(join(tmpdir(), "installed-instructions-")); t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -38,6 +42,7 @@ test("installed instruction links and provided parameters resolve in a prepared 
   assert.equal(existsSync(join(root, ".pi/skills")), false);
   const tools = registrations();
   for (const row of baseline.rows) {
+    if (row.file === "AGENTS.md") continue; /* Project guidance is not installed into consumers. */
     const current = readFileSync(join(HARNESS_ROOT, row.file), "utf8");
     const text = row.descriptionsOnly ? descriptionSpans(current).join("\n") : current;
     inspectInstructionReferences(text, join(HARNESS_ROOT, row.file), root, tools);

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { HARNESS_ROOT } from "../lib/runtimeContext.js";
 import { snapshot } from "../lib/contentCache.js";
-import { assertInstructionBytes, descriptionSpans, inspectInstructionReferences, readInstructionLedger } from "./instructionContracts.js";
+import { assertInstructionSnapshot, descriptionSpans, inspectInstructionReferences, readInstructionSnapshot } from "./instructionContracts.js";
 
 const host = process.env.PSX_PI_085_HOST, pkg = process.env.PSX_PRODUCTION_PACKAGE;
 const options = { skip: !host || !pkg ? "Run with the production-only package and Pi 0.85.1 host" : false };
@@ -66,10 +66,11 @@ export const FIXTURE: AssetParser = { id: "fixture-v1", format: "Fixture", versi
  variants: () => [{}],decode: (b,_v,m) => {if(b.length>m)throw new Error("budget");return [{kind:"raw",extension:"bin",stage:"export",bytes:b,metadata:{}}];} };
 `);
   // Validate resources against their actual installed locations, not the checkout.
-  const edits = readInstructionLedger(HARNESS_ROOT), baseline = JSON.parse(readFileSync(join(HARNESS_ROOT, "test-fixtures/installed-runtime/instruction-baseline.json"), "utf8"));
+  const baseline = readInstructionSnapshot(HARNESS_ROOT);
+  assertInstructionSnapshot(pkg!, baseline, { projectGuide: false });
   for (const row of baseline.rows) {
+    if (row.file === "AGENTS.md") continue; /* Not copied into consumers. */
     const file = join(pkg!, row.file), text = readFileSync(file, "utf8");
-    assertInstructionBytes(row.file, row.text, text, edits, row.descriptionsOnly);
     inspectInstructionReferences(row.descriptionsOnly ? descriptionSpans(text).join("\n") : text, file, f.root, f.tools);
   }
   for (const skill of f.loader.getSkills().skills) assert.ok(skill.filePath.startsWith(resolve(pkg!) + "/"));

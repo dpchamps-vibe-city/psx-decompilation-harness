@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "../testing/runtimeTestContext.js";
 import { UNEXPOSED_CLIS } from "../../.pi/extensions/psx-decomp/tools/diagnostics.ts";
+import ts from "typescript";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
@@ -88,13 +89,49 @@ test("no tool reads the object only `make` writes", () => {
     "rather than reading build/src, which only `make` writes:\n" + hits.join("\n"));
 });
 
+/** Timestamps may invalidate a fingerprint cache; they must never rank inputs.
+ * Inspect expressions (including multiline comparisons and local aliases),
+ * rather than rejecting an innocent stat tuple used as a cache key. */
+function timestampSelections(text: string): number[] {
+  const source = ts.createSourceFile("agent.ts", text, ts.ScriptTarget.Latest, true);
+  const aliases = new Set<string>(), nodes: ts.Node[] = [];
+  const visit = (node: ts.Node): void => { nodes.push(node); ts.forEachChild(node, visit); };
+  visit(source);
+  const containsTime = (node: ts.Node): boolean => {
+    if (ts.isPropertyAccessExpression(node) && /^(?:mtime|birthtime)(?:Ms|Ns)?$/.test(node.name.text)) return true;
+    if (ts.isIdentifier(node) && aliases.has(node.text)) return true;
+    return ts.forEachChild(node, containsTime) === true;
+  };
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of nodes) if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+      !aliases.has(node.name.text) && containsTime(node.initializer)) { aliases.add(node.name.text); changed = true; }
+  }
+  const ordering = new Set([ts.SyntaxKind.MinusToken, ts.SyntaxKind.LessThanToken, ts.SyntaxKind.GreaterThanToken,
+    ts.SyntaxKind.LessThanEqualsToken, ts.SyntaxKind.GreaterThanEqualsToken]);
+  return [...new Set(nodes.filter(node =>
+    (ts.isBinaryExpression(node) && ordering.has(node.operatorToken.kind) && containsTime(node)) ||
+    (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+      ["sort", "toSorted", "max", "min"].includes(node.expression.name.text) && containsTime(node)))
+    .map(node => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1))];
+}
+
 test("no tool picks an input by modification time", () => {
-  /* mtime ordering answers "which ran last", never "which describes this
-   * source". Select by fingerprint; `ensureArtifact` does it for you. */
-  const hits = findings((line) => /mtimeMs|\.mtime\b|birthtime/.test(line));
+  /* Equality against a stat fingerprint means 'changed', not 'newest'. */
+  const hits = SOURCES.flatMap(file => timestampSelections(file.text).map(line => `${file.relative}:${line}`));
   assert.deepEqual(hits, [],
     "select an artifact by provenance fingerprint, not by mtime — see tools/agent/provenance.ts:\n" +
     hits.join("\n"));
+});
+
+test("timestamp selection guard rejects ranking but permits cache invalidation metadata", () => {
+  for (const text of ["files.sort((a, b) => b.mtimeMs - a.mtimeMs)",
+    "if (stat.mtime > previous.mtime) choose(file)", "Math.max(a.birthtimeMs, b.birthtimeMs)",
+    "const time = stat.mtimeMs;\nconst alias = time;\nif (alias > newest) choose(file)",
+    "files.toSorted((a, b) =>\n Number(b.mtimeMs) -\n Number(a.mtimeMs))"])
+    assert.ok(timestampSelections(text).length, text);
+  assert.deepEqual(timestampSelections("const stamp = JSON.stringify([path, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs]);\nif (stamp !== cached.stamp) invalidate();"), []);
 });
 
 test("no tool tells its caller to run another tool first", () => {

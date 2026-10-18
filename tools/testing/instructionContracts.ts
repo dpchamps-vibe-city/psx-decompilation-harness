@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { dirname, join, relative, resolve } from "node:path";
+import { filesUnder } from "../lib/contentCache.js";
 import ts from "typescript";
 import { Value } from "typebox/value";
 
@@ -13,6 +15,37 @@ export function descriptionSpans(source: string): string[] {
   }
   visit(file); return spans;
 }
+export interface InstructionFingerprint { file: string; descriptionsOnly: boolean; sha256: string }
+export interface InstructionSnapshot { schemaVersion: 1; rows: InstructionFingerprint[] }
+/** Current instruction coverage is discovered, not inherited from the one-off
+ * installed-runtime migration's historical file list. Implementation-only edits
+ * around registered descriptions do not change their fingerprints. */
+export function captureInstructionSnapshot(root: string, options: { projectGuide?: boolean } = {}): InstructionSnapshot {
+  const wholeFiles = [...(options.projectGuide === false ? [] : ["AGENTS.md"]), ".pi/extensions/psx-decomp/autoloop/prompts.ts",
+    ...filesUnder(join(root, ".pi/skills")).filter(p => p.endsWith("/SKILL.md")).map(p => relative(root, p)),
+    ...filesUnder(join(root, "prompts/reference")).filter(p => p.endsWith(".md")).map(p => relative(root, p))];
+  const descriptions = filesUnder(join(root, ".pi/extensions")).filter(p => p.endsWith(".ts") && !p.endsWith(".test.ts"))
+    .map(p => relative(root, p)).filter(p => !wholeFiles.includes(p) && descriptionSpans(readFileSync(join(root, p), "utf8")).length > 0);
+  return { schemaVersion: 1, rows: [...wholeFiles, ...descriptions].sort().map(file => {
+    const text = readFileSync(join(root, file), "utf8"), descriptionsOnly = !wholeFiles.includes(file);
+    const content = descriptionsOnly ? JSON.stringify(descriptionSpans(text)) : text;
+    return { file, descriptionsOnly, sha256: createHash("sha256").update(content).digest("hex") };
+  }) };
+}
+export function readInstructionSnapshot(root: string): InstructionSnapshot {
+  return JSON.parse(readFileSync(join(root, "test-fixtures/installed-runtime/instruction-current.json"), "utf8"));
+}
+export function assertInstructionSnapshot(root: string, expected: InstructionSnapshot, options: { projectGuide?: boolean } = {}): void {
+  const current = captureInstructionSnapshot(root, options);
+  if (options.projectGuide === false) expected = { ...expected, rows: expected.rows.filter(row => row.file !== "AGENTS.md") };
+  if (JSON.stringify(expected) !== JSON.stringify(current)) {
+    const old = new Map(expected.rows.map(row => [row.file, row]));
+    const now = new Map(current.rows.map(row => [row.file, row]));
+    const changed = [...new Set([...old.keys(), ...now.keys()])].filter(file => JSON.stringify(old.get(file)) !== JSON.stringify(now.get(file)));
+    throw new Error(`Unrecorded instruction bytes or inventory: ${changed.join(", ")}. Review the diff before running npm run test:update-instructions.`);
+  }
+}
+
 export interface InstructionEdit { file: string; kind: string; baselineText: string; newText: string; occurrence?: number }
 export function applyRecordedEdits(file: string, source: string, edits: InstructionEdit[]): string {
   for (const edit of edits.filter(e => e.file === file)) {

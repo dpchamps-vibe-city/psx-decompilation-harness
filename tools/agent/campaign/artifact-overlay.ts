@@ -32,6 +32,8 @@ import { projectRoot } from "../../lib/runtimeContext.js";
  */
 
 import { createHash } from "node:crypto";
+import { checkCandidateContainer } from "../../lib/containerAcceptance.js";
+import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { compileSource, rejectionFromDiagnostics } from "../decompToolchain.js";
@@ -186,11 +188,13 @@ export function publishRecovered(
   const rejection = rejectionFromDiagnostics(compiled.diagnostics);
   if (rejection) return { refused: `${functionName}: invalid C accepted by the front end — ${rejection}` };
 
-  const oracle = compareFunction(functionName, { objectPath: compiled.object!, container: location.container });
+  const oracle = compareFunction(functionName, { objectPath: compiled.object!, candidateSource: compiled.source, container: location.container });
   if (oracle.verdict !== "match") {
     return { refused: `${functionName}: the oracle says ${oracle.verdict} (${oracle.same}/${oracle.targetWords.length}); only a match is published` };
   }
 
+  try { checkCandidateContainer(functionName, [{ path: resolveFunctionTarget(functionName).source, after: source }]); }
+  catch (error) { return { refused: String(error) }; }
   const sourcesDir = join(overlayRoot(), "sources");
   mkdirSync(sourcesDir, { recursive: true });
   const published = join(sourcesDir, `${functionName}.c`);

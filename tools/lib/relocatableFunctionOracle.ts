@@ -1,17 +1,22 @@
 /** Function-local diagnostic oracle for ET_REL. Encoded words AND symbolic
  * relocation identities are retained. No linking to invented RAM addresses.
  * Whole-member acceptance remains a separate, stricter scope. */
-import { readFileSync } from "node:fs";
-import { requireLibraryFunction } from "./libraryTargets.js";
-import { isDirectoryTu } from "./libraryTranslationUnit.js";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { compareLibraryObjects, requireLibraryFunction } from "./libraryTargets.js";
+import { isDirectoryTu, libraryTuStatus } from "./libraryTranslationUnit.js";
+import { projectRoot } from "./runtimeContext.js";
+import { analyzeCSource } from "../agent/cSourceAnalysis.js";
 import { objectFunctions, readRelocatableObject, compareRelocatableObjects, canonicalizeDefinedReferences, type RelocatableObject, type ObjectRelocation } from "./relocatableObject.js";
 import { compareWords, disassembleBytes, symboliseWord, type OracleResult, type RenderedWord } from "./functionOracle.js";
-const NAMES: Record<number, string> = { 0: "R_MIPS_NONE", 1: "R_MIPS_16", 2: "R_MIPS_32", 4: "R_MIPS_26", 5: "R_MIPS_HI16", 6: "R_MIPS_LO16", 7: "R_MIPS_GPREL16", 10: "R_MIPS_PC16" };
+const NAMES: Record<number, string> = { 0: "R_MIPS_NONE", 1: "R_MIPS_16", 2: "R_MIPS_32", 4: "R_MIPS_26", 5: "R_MIPS_HI16", 6: "R_MIPS_LO16", 7: "R_MIPS_GPREL16", 8: "R_MIPS_LITERAL", 10: "R_MIPS_PC16" };
 const signed = (n: number) => (n & 0x8000) ? (n & 0xffff) - 0x10000 : n & 0xffff;
 function referenceText(r: ObjectRelocation): string { return r.reference.replace(/^(named|import):/, ""); }
-/** Encoded REL addend, including paired HI16/LO16. Shared by original-word
- * diagnostics so a low half is never mistaken for a complete address. */
+/** Native decoded operand or ELF REL addend. A paired low instruction may
+ * recover the full address from its matching register's high instruction. */
 export function relocatableAddend(o: RelocatableObject, r: ObjectRelocation): number {
+  if (r.addend === null) throw new Error(`Native relocation operand unavailable: ${r.section}+${r.offset} ${r.reference}`);
+  if (r.addend !== undefined && r.type !== 6) return r.addend;
   const word = o.sections.get(r.section)!.data.readUInt32LE(r.offset);
   if (r.type === 4) return (word & 0x3ffffff) * 4;
   if (r.type === 2) return word;
@@ -22,8 +27,12 @@ export function relocatableAddend(o: RelocatableObject, r: ObjectRelocation): nu
     const baseRegister = (word >>> 21) & 31;
     const hi = before.slice(lastLow + 1).findLast(h => h.type === 5 && h.section === r.section && h.reference === r.reference &&
       ((o.sections.get(h.section)!.data.readUInt32LE(h.offset) >>> 16) & 31) === baseRegister);
-    if (hi) return (o.sections.get(hi.section)!.data.readUInt32LE(hi.offset) & 0xffff) * 0x10000 + signed(word);
+    if (hi) {
+      if (r.addend === undefined) return (o.sections.get(hi.section)!.data.readUInt32LE(hi.offset) & 0xffff) * 0x10000 + signed(word);
+      if (hi.addend != null && signed(hi.addend) === r.addend) return hi.addend;
+    }
   }
+  if (r.addend !== undefined) return r.addend;
   if (r.type === 5) {
     const at = o.relocations.indexOf(r), low = o.relocations.slice(at + 1).find(l => l.section === r.section && l.reference === r.reference && l.type === 6);
     return (word & 0xffff) * 0x10000 + (low ? signed(o.sections.get(low.section)!.data.readUInt32LE(low.offset)) : 0);
@@ -47,6 +56,11 @@ export function relocatableFunctionWords(object: RelocatableObject, symbol: stri
     const rs = object.relocations.filter(r => r.section === fn.section && r.offset === offset && r.type !== 0);
     const word: RenderedWord = { vram: start + i * 4, raw, text: rendered.text, key: rendered.key,
       coordinate: { kind: "section", section: fn.section, offset } };
+    if (rs.some(r => r.addend === null)) {
+      word.undetermined = `Native relocation operand unavailable: ${rs.filter(r => r.addend === null).map(r => r.reference).join(", ")}`;
+      word.text = word.key = `${mnemonic} <undetermined>`;
+      return word;
+    }
     if (rs.length) {
       word.relocations = rs.map(r => {
         const bias = relocatableAddend(object, r), local = r.reference.match(/^(.*)@(\d+)$/);
@@ -74,9 +88,15 @@ export function targetRelocatableWords(name: string): RenderedWord[] {
   const { member, fn } = requireLibraryFunction(name);
   return relocatableFunctionWords(member.object, fn.name);
 }
-export function compareRelocatableFunction(name: string, objectPath: string): OracleResult {
+export function compareRelocatableFunction(name: string, objectPath: string, candidateSource?: string): OracleResult {
   const { member, fn, key } = requireLibraryFunction(name), candidateBytes = readFileSync(objectPath), object = readRelocatableObject(candidateBytes);
-  const memberComparison = compareRelocatableObjects(member.bytes, candidateBytes);
+  const memberComparison = compareLibraryObjects(member, candidateBytes);
+  // Candidate ECOFF retains static function names which LNK does not serialize.
+  // Bounds come from the candidate even when its member is not yet identical.
+  if (object.native && existsSync(`${objectPath}.ecoff`)) {
+    const ecoff = readRelocatableObject(readFileSync(`${objectPath}.ecoff`));
+    for (const symbol of ecoff.symbols.filter(s => s.type === 2 && !object.symbols.some(o => o.name === s.name))) object.symbols.push(symbol);
+  }
   // A size-zero original symbol's inferred span may include alignment padding
   // outside the compiler's FUNC-size annotation. Exact whole-member bytes and
   // symbol positions license comparing that same span; metadata must not turn
@@ -84,12 +104,13 @@ export function compareRelocatableFunction(name: string, objectPath: string): Or
   const extent = fn.inferredSize && memberComparison.verdict === "match" ? fn.size : undefined;
   const { targetWords, candidateWords, rawTargetWords, rawCandidateWords, ...comparison } =
     compareRelocatableFunctionObjects(member.object, object, fn.name, extent);
-  if (object.symbols.some(s => s.name === `${fn.name}.NON_MATCHING`)) comparison.verdict = "stub";
-  const memberStub = !isDirectoryTu(member) && object.symbols.some(s => s.name.endsWith(".NON_MATCHING"));
+  const status = libraryTuStatus(member, projectRoot(), candidateSource && resolve(projectRoot(), candidateSource) !== resolve(projectRoot(), member.source) ? { symbol: fn.name, source: candidateSource } : undefined);
+  const memberStub = !status && analyzeCSource(readFileSync(resolve(projectRoot(), candidateSource ?? member.source), "utf8")).includeAsm.length > 0;
+  if (status?.some(s => s.symbol === fn.name && s.stub) || !status && memberStub) comparison.verdict = "stub";
   return { ...comparison, functionName: key, vram: fn.offset, objectPath, targetWords, candidateWords, rawTargetWords, rawCandidateWords,
     verification: { ...memberComparison, scope: "translation-unit", verdict: memberStub ? "stub" : memberComparison.verdict },
     notes: [`Diagnostic coordinates are ${fn.section} offsets, not RAM; ${fn.inferredSize ? "original symbol extent is inferred" : "original function extent is recorded"}.`,
-      "Function comparison uses the member oracle's defined-reference canonicalization; raw words/references are retained separately.",
+      member.originalObject ? "Function diagnostics retain native bytes and relocation targets without defined-reference folding." : "Legacy ELF function comparison uses defined-reference canonicalization; raw words/references are retained separately.",
       `Function-local diagnostics do not certify the owning TU; whole-member verdict: ${memberStub ? "STUB" : memberComparison.verdict.toUpperCase()}.`] };
 }
 /** The exact same proven relocation equivalence as whole-member acceptance.
@@ -99,7 +120,8 @@ export function compareRelocatableFunctionObjects(original: RelocatableObject, c
   if (!fn) throw new Error(`Object does not define ${symbol}`);
   const rawTargetWords = relocatableFunctionWords(original, symbol);
   const rawCandidateWords = relocatableFunctionWords(candidate, symbol, fn.offset, extent);
-  const targetWords = relocatableFunctionWords(canonicalizeDefinedReferences(original), symbol);
-  const candidateWords = relocatableFunctionWords(canonicalizeDefinedReferences(candidate), symbol, fn.offset, extent);
+  const native = !!(original.native || candidate.native);
+  const targetWords = relocatableFunctionWords(native ? original : canonicalizeDefinedReferences(original), symbol);
+  const candidateWords = relocatableFunctionWords(native ? candidate : canonicalizeDefinedReferences(candidate), symbol, fn.offset, extent);
   return { ...compareWords(targetWords, candidateWords), targetWords, candidateWords, rawTargetWords, rawCandidateWords };
 }

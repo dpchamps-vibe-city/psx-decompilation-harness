@@ -1,5 +1,10 @@
 import { prepareAttempt, attemptStaticFinalization, buildInputs, documentCompletion, sameInputs, inputIdentity, type Completion, type PreparedAttempt } from "../tools/prepared-attempt.ts";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { loadLibraryProject } from "../../../../tools/lib/project.js";
+import { requireLibraryFunction } from "../../../../tools/lib/libraryTargets.js";
+import { isAssemblyPart, libraryAssemblyTu, librarySourceFiles, inspectLibraryPart } from "../../../../tools/lib/libraryTranslationUnit.js";
+import { analyzeCSource } from "../../../../tools/agent/cSourceAnalysis.js";
 import { PREP_TOOLS, prepHandoffMessage, prepMessage, prepNudge, prepStatus, setPrepHandoffToolActive, type PrepSink } from "./prep.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runFunctionDiff, runResidualObjective } from "../../shared/gates.ts";
@@ -26,6 +31,8 @@ import {
   buildApprovalNote,
   buildApprovedExemptionNote,
   committedSource,
+  composeParkedSource,
+  stripPreviousPark,
   noteRelativePath,
   planPark,
   readSource,
@@ -93,6 +100,8 @@ export interface LoopDeps {
   flag: AbortFlag;
   /** Workspace dirt that pre-dates the loop and is never charged to it. */
   baseline: Set<string>;
+  /** Before this function's ladder: preserve pre-existing TU edits on park. */
+  libraryPartBases?: Map<string, string | null>;
 }
 
 function notify(deps: LoopDeps, message: string, level: "info" | "warning" | "error" = "info"): void {
@@ -478,13 +487,33 @@ async function park(
     runtimeDir: deps.config.runtimeDir,
     functionName,
     attemptSource: attempt,
-    committedSource: await committedSource(deps.projectRoot, sourcePath),
+    committedSource: deps.libraryPartBases?.get(sourcePath) ?? await committedSource(deps.projectRoot, sourcePath),
     reason,
     reachedTier,
     notePath,
     parkedAt: record.parkedAt,
   });
 
+  if (deps.libraryPartBases) {
+    const { member } = requireLibraryFunction(functionName, deps.projectRoot);
+    const before = deps.libraryPartBases.get(member.source);
+    if (!before) throw new Error("Library park has no pre-attempt manifest");
+    const manifest = JSON.parse(before);
+    if (readFileSync(resolve(deps.projectRoot, member.source), "utf8") !== before) throw new Error("Library attempt changed its TU manifest; stop for review before parking");
+    for (const part of manifest.parts) {
+      if (isAssemblyPart(part)) throw new Error("Assembly is never reconstructed or parked by the C autoloop");
+      const file = join(dirname(member.source), part.path), base = deps.libraryPartBases.get(file);
+      if (file === sourcePath || base === null || base === undefined) continue;
+      const attempt = readFileSync(resolve(deps.projectRoot, file), "utf8");
+      if (attempt === base) continue;
+      const archivedPart = archiveSource(deps.config.runtimeDir, `${functionName}.${part.path}`, attempt, "parked", record.parkedAt);
+      const guard = analyzeCSource(attempt);
+      const composed = composeParkedSource({ functionName, base: stripPreviousPark(base), attemptSource: attempt, preserveAttempt: guard.embeddable, reason, reachedTier, notePath, parkedAt });
+      inspectLibraryPart(composed, part);
+      writeFileSync(resolve(deps.projectRoot, file), composed);
+      plan.reasons.push(`${file}: pre-attempt source restored; attempt archived at ${archivedPart}`);
+    }
+  }
   writeSource(deps.projectRoot, functionName, plan.source);
   writeNote(deps.projectRoot, deps.config, `${functionName}.md`, buildApprovalNote(record, attempt, plan.reasons));
 
@@ -523,6 +552,11 @@ async function remeasure(deps: LoopDeps, functionName: string): Promise<string |
  * — full build included — passes.
  */
 export async function runFunction(deps: LoopDeps, state: LoopState, functionName: string): Promise<{ state: LoopState; outcome: FunctionOutcome }> {
+  if (loadLibraryProject(deps.projectRoot)) {
+    const { member } = requireLibraryFunction(functionName, deps.projectRoot);
+    if (libraryAssemblyTu(member, deps.projectRoot)) throw new Error("The C autoloop never reconstructs assembly");
+    deps = { ...deps, libraryPartBases: snapshotFiles(deps.projectRoot, librarySourceFiles(member, deps.projectRoot)) };
+  }
   const abort = new AbortController();
   const poll = setInterval(() => { if (deps.flag.aborted) abort.abort(); }, 100);
   if (deps.flag.aborted) abort.abort();

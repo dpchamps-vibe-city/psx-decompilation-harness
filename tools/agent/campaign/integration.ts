@@ -28,6 +28,7 @@ import { projectRoot } from "../../lib/runtimeContext.js";
  *     nothing downstream can reason about.
  */
 
+import { checkCandidateContainer } from "../../lib/containerAcceptance.js";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { compileSource, preprocessOnly, sourcePathFor } from "../decompToolchain.js";
@@ -278,6 +279,8 @@ export function applyTransaction(
   if ("refused" in staged) return { status: "refused", reason: staged.refused, ...(staged.detail ? { detail: staged.detail } : {}) };
 
   if (!options.write) {
+    try { checkCandidateContainer(transaction.functionName, transaction.patches); }
+    catch (error) { return { status: "refused", reason: String(error) }; }
     return { status: "would-apply", transaction, verified: staged.verified };
   }
 
@@ -299,6 +302,7 @@ export function applyTransaction(
       rollback(snapshots);
       return { status: "refused", reason: confirmed.refused, ...(confirmed.detail ? { detail: confirmed.detail } : {}) };
     }
+    checkCandidateContainer(transaction.functionName);
     return { status: "applied", transaction, verified: confirmed.verified };
   } catch (error) {
     rollback(snapshots);
@@ -330,7 +334,7 @@ function stageAndVerify(transaction: Transaction): { verified: string[] } | { re
       assemble: true,
       containerKind: location.container.kind,
     });
-    const oracle = compareFunction(transaction.functionName, { objectPath: artifacts.object!, container: location.container });
+    const oracle = compareFunction(transaction.functionName, { objectPath: artifacts.object!, candidateSource: artifacts.source, container: location.container });
     if (oracle.verdict !== "match") {
       return { refused: `the rewritten source is ${oracle.verdict}`, detail: `${oracle.same}/${oracle.targetWords.length} words` };
     }
@@ -356,7 +360,7 @@ function verifyInTree(transaction: Transaction): { verified: string[] } | { refu
         assemble: true,
         containerKind: location.container.kind,
       });
-      const oracle = compareFunction(functionName, { objectPath: artifacts.object!, container: location.container });
+      const oracle = compareFunction(functionName, { objectPath: artifacts.object!, candidateSource: artifacts.source, container: location.container });
       if (oracle.verdict !== "match") {
         return {
           refused: `${functionName} is ${oracle.verdict} after the change`,

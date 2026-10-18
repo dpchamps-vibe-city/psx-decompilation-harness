@@ -31,6 +31,8 @@ export interface CallGraphEntry {
   calledBy: string[];
   instructionCount: number;
   decompiled: boolean;
+  /** Library C targets are exactly manifest-backed stub parts. */
+  libraryStub?: boolean | undefined;
   handwritten: HandwrittenKind;
   dead: boolean;
 }
@@ -191,6 +193,7 @@ export interface FunctionState {
   priority: number;
   tier: number;
   graphDecompiled: boolean;
+  libraryStub?: boolean | undefined;
   dead: boolean;
   handwritten: HandwrittenKind;
   attempts: string[];

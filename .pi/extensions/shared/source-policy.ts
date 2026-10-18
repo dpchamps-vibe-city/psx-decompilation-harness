@@ -1,3 +1,4 @@
+import { assemblySourceFindings } from "../../../tools/lib/assemblyPolicy.js";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import type { AutodecompConfig, PolicyFinding, SourcePolicyResult } from "./types.ts";
@@ -5,7 +6,9 @@ import { analyzeCSource, capturePrevRetSites, matchingConstructs, walkActiveC } 
 import { parseC, field, namedChildren } from "../../../tools/agent/residual-source-search/tree-sitter-c.ts";
 import { BIOS_SYSCALL_HEADER, BIOS_SYSCALL_MACRO, isBiosSyscallHeader, BIOS_TAILJUMP_HEADER, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_LOAD_MACRO, BIOS_TAILJUMP_END_MACRO, isBiosTailJumpHeader } from "../../../tools/lib/biosSyscallMacro.js";
 import { BIOS_FUNCTION_MACRO, biosFunctionProjection } from "../../../tools/lib/biosFunctionMacro.js";
-import { loadLibraryProject } from "../../../tools/lib/project.js";
+import { libraryContext, loadLibraryProject } from "../../../tools/lib/project.js";
+import { configuredAssembler } from "../../../tools/lib/toolchain.js";
+import { resolveFunctionTarget } from "../../../tools/lib/targetAdapter.js";
 import { libraryMemberForSource, withLibraryMetadata } from "../../../tools/lib/libraryTargets.js";
 import { evaluateMacroEvidence, opaqueMacroControlHazard, opaqueMacroHazard } from "../../../tools/lib/macroEvidence.js";
 
@@ -412,6 +415,16 @@ function scanSourceFile(options: PolicyOptions, file: string, findings: PolicyFi
   const path = resolve(options.projectRoot, file);
   if (!existsSync(path)) return;
   const source = readFileSync(path, "utf8");
+  if (/\.(?:s|ASM)$/.test(file)) {
+    const scope = patchScope(options, file);
+    let sdkPlaceholders = false;
+    try {
+      const context = loadLibraryProject(options.projectRoot) && scope.container ? libraryContext(scope.container, options.projectRoot) : scope.name ? resolveFunctionTarget(scope.name, options.projectRoot).flags : undefined;
+      sdkPlaceholders = !!context && configuredAssembler(context, options.projectRoot).postAssembly.includes("psyq-dmpsx");
+    } catch { /* An unresolved production context cannot authorize raw placeholders. */ }
+    findings.push(...assemblySourceFindings(source, { cpp: file.endsWith(".ASM"), sdkPlaceholders }).map(f => ({ ...f, kind: "raw-assembly-encoding", file })));
+    return;
+  }
   const fileEvidence = options.evidenceMacros?.get(normalizedPath(file));
   if (((options.config.sourcePolicy.allowBiosSyscallMacro || fileEvidence?.has(BIOS_SYSCALL_MACRO)) && isBiosSyscallHeader(options.projectRoot, file)) ||
       ((options.config.sourcePolicy.allowBiosTailJumpMacro || fileEvidence?.has(BIOS_TAILJUMP_MACRO) || fileEvidence?.has(BIOS_TAILJUMP_LOAD_MACRO)) && isBiosTailJumpHeader(options.projectRoot, file))) return;
@@ -437,7 +450,7 @@ function scanSourceFile(options: PolicyOptions, file: string, findings: PolicyFi
  */
 function policesConstructs(file: string): boolean {
   const path = normalizedPath(file);
-  return /^src\/.*\.c$/.test(path) || /^include\/.*\.h$/.test(path);
+  return /^src\/.*\.(?:c|s|ASM)$/.test(path) || /^include\/.*\.h$/.test(path);
 }
 
 /**

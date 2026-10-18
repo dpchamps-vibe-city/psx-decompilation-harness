@@ -92,8 +92,13 @@ function originalFunctions(): { functions: HandwrittenFunction[]; findings: Cens
     if (!library) return fn;
     const { object } = libraryMemberById(fn.container), references = new Map<number, { reference: string; addend: number }>();
     const start = fn.coordinate!.offset, end = start + fn.bytes.length;
-    for (const r of object.relocations) if (r.section === fn.coordinate!.section && r.offset >= start && r.offset < end && [5, 6, 7].includes(r.type))
+    for (const r of object.relocations) if (r.section === fn.coordinate!.section && r.offset >= start && r.offset < end && [5, 6, 7].includes(r.type)) {
+      if (r.addend === null) {
+        loaded.findings.push({ container: fn.container, function: fn.name, reason: `Native relocation operand unavailable at ${r.section}+${r.offset}` });
+        continue;
+      }
       references.set((r.offset - start) / 4, normalizeStorage(r.reference, relocatableAddend(object, r), object));
+    }
     return { ...fn, storageReferences: references };
   });
   return { functions, findings: loaded.findings, ownerCounts };

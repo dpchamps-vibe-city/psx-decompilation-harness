@@ -30,8 +30,9 @@ function crossedByBranch(object: RelocatableObject, section: string, boundary: n
     if (op === 2) {
       const relocation = object.relocations.find(r => r.section === section && r.offset === at && r.type === 4);
       const local = relocation && localReference(relocation);
+      if (relocation?.addend === null) return true; // Unknown branch destinations cannot license a partition.
       if (relocation && (!local || local[1] !== section)) continue;
-      target = (local ? Number(local[2]) : 0) + (word & 0x3ffffff) * 4;
+      target = (local ? Number(local[2]) : 0) + (relocation?.addend ?? (word & 0x3ffffff) * 4);
       // A tail transfer to another witnessed entry is allowed; jumping into
       // its interior is a shared-block edge, not an independent function.
       if (entries.has(target)) continue;
@@ -101,11 +102,11 @@ function independentAddressEntry(object: RelocatableObject, section: string, sta
       exits = true;
     } else if (i.op === "j") {
       const r = object.relocations.find(r => r.section === section && r.offset === at && r.type === 4);
-      if (!r) return false; // An unrelocated J field is not a section coordinate.
+      if (!r || r.addend === null) return false; // An unrelocated/unknown J field is not a section coordinate.
       if (r.reference.startsWith("import:")) { exits = true; continue; }
       const local = localReference(r), named = object.symbols.find(s => `named:${s.name}` === r.reference && s.binding === 1);
       const targetSection = local?.[1] ?? named?.section;
-      const target = Number(local?.[2] ?? named?.value) + (i.word & 0x3ffffff) * 4;
+      const target = Number(local?.[2] ?? named?.value) + (r.addend ?? (i.word & 0x3ffffff) * 4);
       if (targetSection === section && target >= start && target < end) pending.push(target);
       else if (targetSection && object.sections.get(targetSection)?.flags! & 4 &&
         (targetSection === section ? entries.has(target) : object.symbols.some(s => s.section === targetSection && s.value === target && s.type === 2))) exits = true;
@@ -136,9 +137,9 @@ export function discoverPrivateFunctions(object: RelocatableObject, named: Objec
     const caller = object.sections.get(relocation.section);
     if (relocation.type !== 4 || !(caller?.flags! & 4) || relocation.offset % 4) continue;
     const word = caller!.data.readUInt32LE(relocation.offset);
-    if (word >>> 26 !== 3) continue; // J is a branch/tail transfer, NOT an entry witness.
+    if (word >>> 26 !== 3 || relocation.addend === null) continue; // J is a branch/tail transfer, NOT an entry witness.
     const local = localReference(relocation);
-    if (local) add(local[1]!, Number(local[2]) + (word & 0x3ffffff) * 4, "call-relocation", [{ section: relocation.section, offset: relocation.offset }]);
+    if (local) add(local[1]!, Number(local[2]) + (relocation.addend ?? (word & 0x3ffffff) * 4), "call-relocation", [{ section: relocation.section, offset: relocation.offset }]);
   }
   // REL HI16(s) bind to their following LO16, in table order. Do not pair by
   // instruction adjacency, sort relocations, or guess through mixed/overlapping
@@ -164,7 +165,13 @@ export function discoverPrivateFunctions(object: RelocatableObject, named: Objec
           const i = decodeWord(code.data.readUInt32LE(at), at), written = definedRegister(i);
           if (control(i) || written === "unknown" || written === high.rt) { clobbered = true; break; }
         }
-        if (!clobbered) add(local[1]!, Number(local[2]) + high.uimm * 0x10000 + low.simm, "address-relocation",
+        if (h.addend === null || r.addend === null) continue;
+        // Native HI already contains the signed-low pair and section-VMA
+        // adjustment. Do not add either encoded half again. Require its low
+        // projection to agree before treating the pair as a full address.
+        if (h.addend !== undefined && (r.addend === undefined || (h.addend << 16 >> 16) !== r.addend)) continue;
+        const addend = h.addend ?? high.uimm * 0x10000 + low.simm;
+        if (!clobbered) add(local[1]!, Number(local[2]) + addend, "address-relocation",
           [{ section, offset: h.offset }, { section, offset: r.offset }]);
       }
     }

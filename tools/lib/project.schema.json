@@ -19,7 +19,7 @@
           "required": ["kind", "format"],
           "properties": {
             "kind": { "const": "relocatable-library" },
-            "format": { "const": "elf-ar" },
+            "format": { "enum": ["elf-ar", "psyq-lib"] },
             "archives": { "$ref": "#/$defs/paths" },
             "standaloneObjects": { "$ref": "#/$defs/paths" }
           },
@@ -44,7 +44,23 @@
     },
     "verification": {
       "type": "object", "additionalProperties": false, "required": ["mode"],
-      "properties": { "mode": { "const": "relocatable-object" } }
+      "properties": {
+        "mode": { "enum": ["relocatable-object", "original-object"] },
+        "originals": {
+          "type": "object", "additionalProperties": false, "required": ["format", "map"],
+          "properties": {
+            "format": { "const": "psyq-lnk" }, "archives": { "$ref": "#/$defs/paths" }, "objects": { "$ref": "#/$defs/paths" },
+            "map": { "type": "object", "additionalProperties": { "oneOf": [
+              { "type": "object", "additionalProperties": false, "required": ["archive", "ordinal"], "properties": { "archive": { "$ref": "#/$defs/path" }, "ordinal": { "type": "integer", "minimum": 0 } } },
+              { "type": "object", "additionalProperties": false, "required": ["object"], "properties": { "object": { "$ref": "#/$defs/path" } } }
+            ] } }
+          }
+        }
+      }
+    },
+    "views": {
+      "type": "object", "additionalProperties": false, "required": ["elf"],
+      "properties": { "elf": { "type": "object", "additionalProperties": { "$ref": "#/$defs/path" } } }
     },
     "output": {
       "type": "object", "additionalProperties": false, "required": ["sourceDir"],

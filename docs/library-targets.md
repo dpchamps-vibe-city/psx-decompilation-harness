@@ -1,6 +1,6 @@
 # Relocatable library targets
 
-The ELF/ar adapter supplies the same function/TU contract as the linked-image
+The Sony LIB/LNK and ELF/ar adapter supplies the same function/TU contract as the linked-image
 adapter: source ownership, original assembly, INCLUDE_ASM, flags, coordinates and
 verification scope. Existing tools and skills consume that contract; no alternate
 agent workflow is needed. No EXE or artificial RAM layout is required.
@@ -14,12 +14,16 @@ Alternatively, copy `examples/library/project.json` to a cloned harness root and
 change `$schema` to `./tools/lib/project.schema.json`. Select the authoritative
 inputs and headers:
 
-- `target.archives`: root-relative globs for ar archives of ELF objects.
-- `target.standaloneObjects`: root-relative globs for individual ELF objects.
+- `target.archives`: root-relative globs for Sony LIB archives (`psyq-lib`) or
+  ar archives of ELF objects (`elf-ar`).
+- `target.standaloneObjects`: root-relative globs for Sony OBJ or ELF objects.
   Do not also select an archive's extracted member copies. Each glob must match;
   duplicate input paths are rejected. Original inputs must stay inside the
   project, outside `build/`.
 - `headers.reference`: immutable reference directories, e.g. `include/psyq`.
+  Production include flags point to a content-addressed LF-only copy under
+  `build/headers/reference/`; the SDK inputs are never rewritten or vendored
+  into owned includes to work around CRLF continuations.
 - `headers.owned`: editable project declaration/type directories, e.g.
   `include/library`. They must not overlap reference directories. Create headers
   here as evidence warrants, not by copying the entire SDK declaration set.
@@ -39,12 +43,49 @@ inputs and headers:
 - `verification.mode: "relocatable-object"`: compare the original member, not a
   linked image at an invented address.
 
-The current parser supports **ELF32 little-endian MIPS ET_REL**, standalone or in
-ar. Original PSY-Q `.LIB`/LNK files need a conversion adapter first. Retain the
-original hashes, converter/version and member mapping as provenance: a converted
-object match is a claim about that object, not independently about its original
-LNK encoding. Image SDK integration's `patchLibBss`/placement/signature machinery
-is not run on library targets.
+Two inventories are supported: `target.format: "elf-ar"` selects ELF32
+little-endian MIPS ET_REL objects/archives; `"psyq-lib"` selects original PSY-Q
+LIB archives and standalone LNK v2 objects. Never select a converted object as
+both an acceptance target and an original-object view.
+
+### Original-object verification
+
+`verification.mode: "original-object"` requires
+`sha256(rebuilt .OBJ) == sha256(original .OBJ)`. The production chain assembles
+ECOFF, optionally finalizes GTE commands with `psyq-dmpsx`, then writes Sony
+LNK v2 through the final `psyq-lnk` stage. The converter never opens an original.
+Its `lnkLayout` is `standard` (default) or the original-witnessed `early` layout;
+see [toolchain configuration](toolchain.md#assembler-backends).
+
+The hash covers every byte, including record order, IDs, empty sections and
+encoded addends. Mismatches print the first differing .OBJ record. Accepted
+records store both hashes and the executed tool pins, implementation hashes and
+layout receipts. Cross-format/relocation equivalence is diagnostic only and
+cannot accept a member. LNK expressions retain their right-first wire order
+and complete semantic tree in diagnostic readers.
+
+For a transitional `elf-ar` inventory, configure
+`verification.originals: { format: "psyq-lnk", archives: [...], objects: [...],
+map: { MEMBER_ID: { archive: "inputs/runtime.LIB", ordinal: 0 } } }` (or
+`{ object: "inputs/start.OBJ" }`). Every member needs a unique, content-checked
+pairing. The converted view must agree in storage, unrelocated bytes, relocation
+sites/kinds/targets and external identities. This correspondence check is input
+validation only; it never supplies acceptance bytes.
+
+For `psyq-lib`, the originals are the inventory, so remove the transitional
+mapping. IDs are lowercase `<archive-stem>_<ordinal>` and standalone object
+stems; collisions are errors. `views.elf: { MEMBER_ID: "views/member.o" }`
+is mandatory for disassembly/m2c and is content-checked. Keep `output.inputRoot`
+pointing at the view tree to preserve TU directories.
+
+`npm run library -- migrate-member-ids [--json]` dry-runs the complete mechanical
+migration from a transitional inventory. `--write` builds every member before
+and after the rename and requires the same per-member result, including known
+mismatches. A build failure or changed result rolls the transaction back. It
+rewrites project files and owned autoloop state/attempt paths, changes the
+inventory/configuration together, and invalidates disposable build products. Unknown old IDs, collisions, unsafe paths and unmapped
+members fail before writes. Stop workers first; re-run `check-all` before resuming
+them. There is no second runtime identity scheme or implicit historical alias.
 
 Keep compiler executables, candidate version, flags, defines and include search
 paths in `toolchain.json`. On a case-sensitive host, DOS-uppercase SDK filenames
@@ -53,7 +94,7 @@ case-normalized reference tree; do not repair immutable originals or let host
 Linux headers satisfy SDK includes. With a self-contained SDK, `flags.cpp`
 should include `-nostdinc`; verify the complete reference-header set below.
 This remains cpp → cc1 → configured assembler
-(MASPSX → GAS, or direct GAS with named compatibility rewrites);
+(MASPSX → GAS, or direct GAS with unchanged input and explicitly declared stages);
 config does not identify the historical compiler or implement a new driver.
 Named profiles can replace any flag array, `assembler` and `includeDirs`. Omitted values
 inherit base; supplied arrays replace rather than append. A project's
@@ -80,7 +121,7 @@ may mix ASPSX-built and GNU-built members: use an explicit member profile, not a
 single SDK-wide assumption. The configured backend alone is the acceptance
 path; alternatives are diagnostic. Selection changes invalidate verification
 identities and require rechecking the affected members. See
-[assembler backends](toolchain.md#assembler-backends) for rewrite, `-G0` and
+[assembler backends](toolchain.md#assembler-backends) for provenance, `-G0` and
 reorder-mode restrictions.
 
 `identify` reports ELF sections, symbols, relocations and member provenance;
@@ -111,10 +152,11 @@ Case-distinct names receive ordinal prefixes when needed. Additional shared
 fragments preserve declarations interleaved with functions in the original
 source.
 
-A member whose original was hand-written assembly (GTE drivers, BIOS hooks,
-card/pad patch code) is reconstructed in the form its authors used: **one `.s`
-source**, listed as the manifest's only part with every original function it
-defines:
+Existing assembly-origin sources (GTE drivers, BIOS hooks, card/pad patches)
+can be represented as **one `.s` or cpp-preprocessed `.ASM` source**, listed as
+the manifest's only part with every original function it defines. This is not
+permission for a C worker to reconstruct or repair assembly, translate compiler
+output into source, or fit source spellings to a target:
 
 ```json
 { "schemaVersion": 1, "member": "MEMBER_ID",
@@ -123,21 +165,60 @@ defines:
 
 An assembly TU has no C neighbors and no data stub: the file carries its own
 `.data`/`.bss`/`.comm` storage. It is assembled by the configured production
-assembler for that member, with the same input rewrites compiler output receives
-(`move` to `addu` under GNU as) and the configured include directories, so bare
-`.include "macro.inc"`-style files resolve and nothing else does. The part must
+assembler for that member, without rewriting assembler input. A `.ASM` source
+first runs through production cpp with assembly-language defines and the configured
+include directories; it bypasses cc1, then uses the same assembler and declared
+stages as C. Plain `.s` remains assembler-only. The part must
 be reconstructed source, not a listing: disassembler backlog markers, `.reloc`
-tables, `.incbin` and path includes are rejected before assembly, and every
-listed symbol must be defined. Private (discovered) entries are listed by their
-established local names. Nothing is preprocessed or compiled, C candidates do
-not apply, and `prepare`/context export report the member as assembly. Verified
+tables, `.incbin`, raw instruction words in executable storage and path includes
+are rejected before assembly, and every
+listed symbol must be defined. Both the original `.ASM` (including local defines)
+and its cpp expansion are audited, so included headers cannot hide raw encodings.
+Executable data directives, including symbolic words and invalid instruction
+encodings, are forbidden. Only known DMPSX placeholders (with the stage declared),
+printable `.ascii`/`.asciz` text and zero-filled `.space` are permitted. Private (discovered) entries are listed by their
+established local names. C candidates do not apply, and `prepare`/context export report the member as assembly. Verified
 records carry `form: "assembly"`; progress and the call graph count these
 functions separately from clean C (`sourceForm`), and the C loop's picker never
-selects them. Comments, `.L` label names and local data labels are not program
-identity, so a `.s` part can be annotated freely and re-verified; see the
+selects them. Comments can be annotated freely; in original-object mode, label
+birth order can affect symbol IDs and must still pass the hash check. See the
 process in [handwritten-assembly.md](handwritten-assembly.md#from-classification-to-source-the-general-process).
 
-The production preprocessor receives a generated ordered include driver
+ID migration walks the configured autoloop runtime directory as well as project
+files; it refuses an active/stale `active.json` lock, symlinks, unmapped IDs and
+file/directory collisions. The generated project profile is regenerated, not
+text-patched, inside the transaction; failures restore source/profile bytes and
+renamed paths. Library outputs/receipts, preparation packets and the old call
+graph are invalidated. Run `split` to regenerate fragments/graph, then `check-all`
+under the new IDs before resuming. The loop creates its lock while running and removes
+it on shutdown. Stop it before migration; do not remove a live loop's lock.
+
+Reference stubs are original-derived extraction artifacts, never reconstructed
+source or compiler-output repairs. All listings stay under `build/`. ECOFF
+extraction preserves symbolic patch operands; no `.reloc` tables, tail repairs
+or synthetic storage exports are emitted. SDK register/GTE operations are
+preprocessed with receipts binding source/header hashes, flags and cpp. Ordinary
+spimdisasm instructions are not decoded and re-rendered by another instruction
+writer; literal words in generated listings are not subject to source audits.
+
+The generated `__library_member_symbols` part comes first: original XDEF/XREF/XBSS
+names in wire-ID order, with local `__lnk_hidden_<id>` labels for omitted IDs.
+IDs start after cc1's two markers in a C TU, or at 1 in an assembly TU. All other
+generated labels use `$L…`, except names referenced by existing TU parts.
+Original patch order can witness assembler-filled delay slots; only those
+extracted regions are emitted in reorder-mode source order. Unpatched data
+words remain numeric; a patched word keeps its symbolic operand. OR moves are
+spelled OR rather than the ADDU-producing `move` pseudo. These rules operate
+only on extraction, never on reconstructed source or production compiler output.
+
+An assembly backlog tracks just the generated `.include`s and any disabled
+attempt, with `backlog: true`. C backlogs use one-line INCLUDE_ASM parts,
+including the symbol part. Neither form emits `.NON_MATCHING` symbols. Every
+generated part prevents TU completion; none is an autoloop target. `check-splits`
+checks fresh extraction in an isolated diagnostic directory, not existing stubs.
+Unknown extraction cases fail closed; they do not authorize source rewriting.
+
+For C members, the production preprocessor receives a generated ordered include driver
 under `build/`: **one GCC translation unit**, with the same private globals,
 prototype scope, function order and per-member flags. Every experiment replaces
 only its selected function include in that same driver. There is no isolated
@@ -263,7 +344,9 @@ queued as ordinary C or granted new assembly-policy exceptions.
 
 ## Oracle, gates and progress
 
-Acceptance compares the **entire owning member**:
+Acceptance compares the **entire owning member**. Native `original-object`
+mode uses the exact contract above. The following legacy ELF-only contract is
+retained for `relocatable-object` projects without native originals:
 
 - nonempty allocated program sections: code/data and initialized/zero-fill
   storage kind, size and exact initialized bytes (including encoded relocation
@@ -289,7 +372,7 @@ section alignment/entry sizes, empty sections and nonexecutable assembler ABI
 bookkeeping are excluded. Debug/file/local-label naming is not program identity. Converted NOTYPE/size-zero
 annotations are treated as unknown, not zero-length definitions. Unsupported
 formats/relocations produce failure or `UNDETERMINED`, never `MATCH`.
-A selected function's INCLUDE_ASM/nonmatching marker produces `STUB`, even at
+A selected function's manifest-backed INCLUDE_ASM/backlog produces `STUB`, even at
 100% words. Directory builds allow **exclusive original backlog files**, not
 mixed C/assembly files: each function fragment is one definition or its sole
 canonical placeholder; nested function definitions are rejected, and shared
@@ -311,22 +394,33 @@ object exemptions. Legacy monolithic member checking still requires complete C.
   recompile. Another verified member stands on its record only while the
   record's build identity (target, inputs, sources, headers, tools, flags) and
   verification key (harness implementation and source policy) are unchanged;
-  any difference recompiles it. A passing compile keeps no artifacts.
+  any difference recompiles it. Passing checks retain plaintext tool provenance
+  and assembler receipts, but remove temporary candidate objects.
 - `library check --accepted`: recompile and recheck every previously verified
   member; the loop's environment guard, **not** an active-target or completion
   gate.
 - `npm run progress`: distinguish byte-verified members from reconstructed TUs.
   A function counts as C only when its own file is clean C and its owning member
   has fresh whole-member verification, and as assembly only when its member is
-  one verified `.s`; the two are reported separately (`MATCH-C`/`MATCH-ASM`).
+  one verified `.s` or cpp-preprocessed `.ASM`; the two are reported separately (`MATCH-C`/`MATCH-ASM`).
   Neighboring stubs never count as completed. Code-byte completion requires a
   fully reconstructed member. Config, tool,
   target, header or source changes invalidate affected records until rechecked.
+  Native diagnostic provenance and publication guards bind the original object
+  or archive as well as its validated ELF view, even when callers supply no
+  explicit input list. A changed input cannot be stamped against an older
+  invocation-local object model.
 
 Library call graphs use member/symbol coordinates, never invented VRAM. Calls
 are conservative unambiguous `R_MIPS_26` edges; unresolved relationships are not
-liveness evidence. Parking retains the member TU unchanged, rather than restoring
-one function's stub and discarding neighbors.
+liveness evidence. C autoloop targets are exactly the stub functions of C TUs,
+minus parked entries; assembly TUs are always `handwritten: "asm"`. Classification
+can attach platform-macro evidence but does not exclude C stub targets.
+
+Parking restores the pre-attempt text of changed neighboring parts and the
+selected function's canonical stub, preserving safe attempts under park headers
+inside `#if 0`. Other parts remain untouched. Prep uses a preserved selected
+attempt as its primary draft instead of silently starting again from m2c.
 
 Context export uses fresh whole-member verification, publishes only reconstructed
 functions (not backlog neighbors), and generates per-owner

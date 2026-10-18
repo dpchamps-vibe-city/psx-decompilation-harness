@@ -1,6 +1,10 @@
 # Phase 4 — GTE stage (DMPSX-equivalent)
 
-Status: proposed. Depends on: Phase 3, for the ECOFF model.
+Status: implemented; 192/192 real HMD sources compile and their initialized
+bytes/relocation sites agree after 915 replacements. Full native metadata checks
+do not establish acceptance, so the whole-object requirement remains open.
+The former alignment mismatch was a reader bug; unencoded ECOFF alignment is
+now reported as unavailable, separately from witnessed section differences. Depends on: Phase 3, for the ECOFF model.
 
 ## Goal
 

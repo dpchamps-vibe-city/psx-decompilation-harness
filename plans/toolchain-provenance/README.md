@@ -1,6 +1,14 @@
 # Toolchain provenance
 
-Status: proposed, 2026-10-17. Nothing in this plan is committed.
+> **2026-10-18:** for execution, use [completion-plan.md](completion-plan.md), the
+> single migration document. This file and the phase files are kept as history.
+
+Current status: the compliant completion-plan migration passes all 2,164 native
+whole-object hashes, split checks, the harness suite and native opt-in test.
+Assembly reconstructions and fitting hooks were withdrawn; conflicting assembly
+restoration goals are **not fulfilled**. The user must start the TUI autoloop.
+See the execution status in `completion-plan.md`; the Progress section below is
+historical. Nothing is committed.
 
 ## Goal
 
@@ -135,26 +143,100 @@ Proposed in Phase 7, confirm at its start:
 - Whether to keep one historical old→new lookup so old commit messages stay
   traceable.
 
-## Already done (uncommitted)
-
-psyq-decomp:
-
-- `toolchain.json`: `assembler.inputRewrites` is `[]`.
-- `configs/project-profile.md`: regenerated.
-- `notes/research/assembler-identification-1997-trunk.md`: new.
-- `configs/toolchain-identification.md`: assembler update block.
-- `plans/harness-rdata-section-rewrite.md`: marked superseded.
-- Local evidence under `build/assembler-provenance/`.
-
-Harness: this plan only.
-
 ## Progress
 
-- [ ] Phase 1 — assembler recipe reproduces its expected hash; manifest covers every file
-- [ ] Phase 2 — period `cccp` in production, zero byte changes across C members
-- [ ] Phase 3 — original-object verification; the 178 verifiable members pass through the real gate
-- [ ] Phase 4 — GTE stage; 192/192 HMD members exact
-- [ ] Phase 5 — every member assembles in period syntax; stub round trip exact
-- [ ] Phase 6 — 2,167/2,167 under exact verification, old IDs
-- [ ] Phase 7 — IDs rewritten; 2,167/2,167 again; autoloop resumed
-- [ ] Phase 8 — harness-wide fixes; no acceptance path patches, copies or masks bytes
+Implementation and **passing project activation gates** are distinct. The
+previous universal alignment-blocker claim was caused by a verifier bug and is
+withdrawn; see the correction below.
+
+| Phase | Implemented / measured | Activation status |
+| --- | --- | --- |
+| 1 | Complete recipe, installer, rollback manifest and smoke tests. Two clean offline builds reproduce `d4ec93c0236cfa5e7fc8f6258f3345492d9a70a6ece00f19af189f7ed5fa6428`. All 1,285 source files accounted for: 1,198 unchanged, 2 rolled back, 85 retained with unverifiable-history reasons. | A fresh GNU download and clean online Dockerfile replay also reproduce the pin; installed, not selected in production. |
+| 2 | Production preprocessing separated from dependency discovery; recipe builds and pins cccp. Two clean cccp builds reproduce `28b9f74d19c2ec220cce4fe6eec7c71b66380f932427443c9ce3aa393dce9ded`. Full C population: **1,542/1,542 identical objects**, zero failures. | Production selection waits for Phase 6. The full Docker recipe has now been replayed online with its pinned upstream inputs: cc1 and cccp both reproduce their existing hashes, and the complete source capture is installed and verified. |
+| 3 | Native readers, exact comparator, original mapping, native diagnostics/private function bounds, pins/receipts and opt-in real-project CLI test. **2,167/2,167 ELF/original pairings validate.** The strict comparator reports **0/178** research objects exact. | Not accepted; known differences and unavailable checks are reported separately. |
+| 4 | Closed DMPSX stage, unknown/relocated-placeholder rejection, complete operand tests. Actual Sony HMD sources: **192/192** compile; initialized bytes and relocation sites agree after **915** replacements. Full native acceptance: **0/192**; metadata checks do not establish acceptance. | Operation validated; required whole-object gate failed. |
+| 5 | `.ASM` route, SDK-style symbolic generator, source policy and period templates (tested with the pinned assembler). All **625** assembly sources converted in an isolated workspace; **623** assemble. Across the full population **2,160/2,167** compile; **0** are native-exact. Seven source/generator gaps remain: three `.sbss` cases and four ambiguous executable-word/data cases. | No non-exact source promoted. |
+| 6 | Final configurations staged; the real `check-all` CLI exercised under old IDs. It rejects the first member despite **4/4 instruction words** agreeing, naming missing empty declarations and separately reporting unavailable alignment checks. | No production switch or record deletion. |
+| 7 | `psyq-lib` inventory, original-derived IDs, transactional dry-run-first migration, runtime state/attempt paths and active-loop lock. Full staged proposal covers **2,167 IDs / 4,785 files**, after separately preparing historical references to the excluded Libsn members. Write correctly refuses without fresh native matches. | No production IDs/state changed; loop remains stopped. |
+| 8 | SDK object/data/BSS mutation retired; converter identity/arguments recorded; exact image header/length checks; whole-container publication gate; executed tools/packages/libraries hashed and pins checked. | Harness tests pass. |
+
+### Correction: invented alignment was a verifier bug
+
+The ECOFF reader previously assigned every section `alignment: 16`, borrowing
+BFD's in-memory initialization default. It then compared that invented value
+with the original LNK's encoded alignment (usually 8). This manufactured a
+blanket mismatch. The resulting claim that all 2,167 members were inherently
+unreproducible was unjustified and is withdrawn.
+
+ECOFF alignment is now explicitly `null` (not encoded). The comparator reports
+required checks without evidence in `unresolved`, separately from witnessed
+`differences`. Otherwise-equal content with unavailable alignment yields
+`UNDETERMINED`, not `MATCH` or a fabricated alignment mismatch. Real differences
+still yield `MISMATCH`, including missing empty section declarations under this
+plan's exact section contract. Missing declarations do not imply missing code
+or data when their size is zero.
+
+This corrects the reader and the diagnosis without relaxing acceptance. The
+ECOFF/LNK format boundary still needs independently established evidence for
+checks the candidate does not encode. It is not a proof that changing source
+or using the identified tools cannot reproduce the program. The earlier 178/178
+byte/relocation-site result remains valid within its stated scope, not as full
+native acceptance.
+
+The same audit corrected a second reader bug: LNK binary expressions serialize
+the right operand first. Subtraction/division now retain their correct semantic
+operand order, and view correspondence no longer mistakes `constant - symbol`
+for a positive symbol relocation. Raw records and full trees, including `+0`,
+remain unchanged; no reference folding was introduced. All 2,167 view pairings
+still validate.
+
+A third verifier correction decodes relocation operands according to each
+format: LNK's explicit expressions versus ECOFF's in-place addends, section-VMA
+adjustment and signed HI/LO pairing. This reads symbolic operands; it does not
+apply relocations, place sections or alter bytes. All 763 research relocations
+across 178 objects now agree. Their remaining known differences are empty
+section declarations; alignment remains unavailable. Diagnostic consumers use
+the same decoded operands rather than counting in-place addends twice.
+
+### Evidence and verification
+
+Consumer-local reports under `build/toolchain-provenance/` include
+`cpp-population/report.json`, `correspondence.json`, `hmd-validation/report.json`,
+`period-sources.json`, `native-gates.json`, `alignment-requirement.json` (now an
+explicit withdrawal/correction of the old claim),
+`compiler-online-rebuild/report.json` and the pending member-ID/reference plans.
+The full online compiler replay reproduces cc1
+`c4b82c51976e87e365a26c37b8281596e389ec3209ec5a59cd22ec2cf01cc686`
+and the cccp pin above. The installed 450-file source capture passes the existing
+compiler-source verification command; neither installed executable changed bytes.
+Harness-local logs include `build/toolchain-provenance/relocation-fix-check-all.log`,
+`relocation-fix-full-tests.log` and `relocation-operands-tests.log`.
+
+Last full harness suite: **1,567 tests; 1,444 passed, 123 explicitly skipped, zero failed**.
+Subsequent focused native operand regressions also pass, including an encoded
+ECOFF input-gp header; the full suite was not rerun for that final small correction.
+The skips include opt-in real-project/installed-runtime tests, not disguised
+native acceptance. Instruction snapshots pass without agent-text changes.
+Final provenance controls also bind native diagnostic artifacts/publication to
+both original inputs and validated ELF views, reject stale invocation-local
+models and escaped views, and hash the declared stage's reader dependencies.
+Assembly policy audits original and expanded source, including local defines;
+header-hidden instruction words are rejected in both sync and async builds.
+The synthetic native integration test now rejects unproven metadata and creates
+no accepted record, even when all instruction words agree. Its generated
+symbolic stubs preserve known content, and a changed instruction still produces
+a definite mismatch. The old purported native success depended on the same
+invented alignment and was not a valid acceptance test.
+
+Original inputs, production tool selections, verified records, member IDs and
+consumer autoloop state remain unchanged; only the retired empty rewrite key
+was removed from the live toolchain schema configuration. No commits were made.
+
+- [x] Phase 1 — reproducible assembler recipe and complete manifest
+- [ ] Phase 2 — production activation (population comparison passed)
+- [ ] Phase 3 — required 178/178 strict native acceptance
+- [ ] Phase 4 — required 192/192 strict native HMD acceptance
+- [ ] Phase 5 — all sources/stubs compile and are native-exact
+- [ ] Phase 6 — 2,167/2,167 native-exact under old IDs
+- [ ] Phase 7 — gated production rename/reverification and loop resume
+- [x] Phase 8 — implemented harness-wide fixes and passing tests

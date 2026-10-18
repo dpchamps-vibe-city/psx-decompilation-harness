@@ -1,6 +1,6 @@
 ---
 name: psx-bootstrap-project
-description: Bootstrap a repository after installing the PSX harness with pi install --local. Create the complete project scaffold, headers, configuration, input directories and ignore rules, then explain what the user must supply. Defaults to exe; pass library for ELF/ar library reconstruction. Obtains missing pinned public tooling sources automatically; no game/SDK asset or compiler-binary downloads or matching runs.
+description: Bootstrap a repository after installing the PSX harness with pi install --local. Create the complete project scaffold, headers, configuration, input directories and ignore rules, then explain what the user must supply. Defaults to exe; pass library for Sony LIB/OBJ or ELF/ar library targets. Obtains missing pinned public tooling sources automatically; no game/SDK asset or compiler-binary downloads or matching runs.
 ---
 
 # Bootstrap a PSX repository
@@ -32,16 +32,21 @@ run project setup. Read [the onboarding contract](../../../docs/bootstrap.md)
    from the tool. The answer must name these destinations:
    - **EXE:** legally obtained extracted disc/game files, including its PS-X EXE,
      under `extracted/`; identify them before creating a measured splat config.
-   - **Library:** original supported ELF/ar targets under `library-input/`;
-     `project.json` initially selects `.a` archives only. Adjust selection for
-     standalone objects, and keep every configured glob meaningful.
+   - **Library:** original Sony `.LIB`/`.OBJ` or ELF/ar targets under
+     `library-input/`. `project.json` initially selects ELF `.a` archives only;
+     select `psyq-lib` and explicit content-checked ELF views for Sony inputs.
+     Adjust standalone selection and keep every configured glob meaningful.
    - **SDK (when needed):** original PSY-Q/other SDK libraries under
      `library-input/psyq/LIB/`, matching release headers under `library-input/psyq/INCLUDE/`.
      For another layout, configure the paths explicitly.
-   - **Conversion:** `lib/` is for converted ELF objects/archives. PSY-Q LIB/LNK
-     needs a separately supplied converter and retained provenance; converted
-     object identity is not proof of original LNK encoding identity. EXE SDK
-     integration performs supported first-time conversion of non-colliding members.
+   - **Conversion:** `lib/` holds converted ELF views, not original-object
+     acceptance targets. Retain converter provenance. Sony acceptance compares
+     complete original/rebuilt OBJ hashes through a pinned ECOFF assembler and
+     the declared `psyq-lnk` stage; `early` changes packaging only, and direct
+     GAS always requires `-G0`. Generated reference listings stay under build/;
+     do not reconstruct assembly or fit compiler output. Disabled attempts stay
+     with their TU, and reference headers use an LF-only build-local copy.
+     EXE SDK integration supports first-time conversion of non-colliding members.
    - **Tools:** installed package dependencies, provisioned cc1/cross-binutils/Python
      tools and vendor prerequisites. Bootstrap does not download binaries or
      proprietary inputs. Public tooling sources are provisioned automatically;

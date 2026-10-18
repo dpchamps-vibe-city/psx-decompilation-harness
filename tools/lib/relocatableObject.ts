@@ -12,12 +12,23 @@
  * the encoded addend. Both forms link to the same bytes; the symbol itself is
  * still required to exist at the same section offset. */
 import { elf32Sections, type Elf32Section } from "./elfSections.js";
+import { readEcoff } from "./objectFormats/ecoff.js";
+import { readLnk } from "./objectFormats/lnk.js";
+import { nativeObjectView } from "./objectFormats/view.js";
+import { compareOriginalObject } from "./objectFormats/compare.js";
+import type { NativeObject } from "./objectFormats/model.js";
 import { discoverPrivateFunctions, type ObjectFunction } from "./relocatableCode.js";
 export interface ObjectSymbol {
   name: string; value: number; size: number; binding: number; type: number; visibility: number; section: string;
 }
-export interface ObjectRelocation { section: string; offset: number; type: number; reference: string }
+export interface ObjectRelocation {
+  section: string; offset: number; type: number; reference: string;
+  /** Native decoded operand. Undefined means legacy ELF REL; null is unknown,
+   * never a license to reinterpret the native field as an ELF addend. */
+  addend?: number | null;
+}
 export interface RelocatableObject {
+  native?: NativeObject;
   flags: number;
   sections: Map<string, Elf32Section>;
   symbols: ObjectSymbol[];
@@ -31,6 +42,8 @@ const programSections = (o: RelocatableObject) => [...o.sections].filter(([, s])
 const storageKind = (s: Elf32Section) => `${s.flags & 4 ? "code" : "data"}:${s.type === 8 ? "zero-fill" : "initialized"}`;
 
 export function readRelocatableObject(bytes: Buffer): RelocatableObject {
+  if (bytes.toString("ascii", 0, 3) === "LNK") return nativeObjectView(readLnk(bytes));
+  if (bytes.length >= 2 && [0x162, 0x166, 0x142].includes(bytes.readUInt16LE(0))) return nativeObjectView(readEcoff(bytes));
   const sections = elf32Sections(bytes);
   if (bytes[5] !== 1 || bytes.readUInt16LE(16) !== 1 || bytes.readUInt16LE(18) !== 8) throw new Error("Expected ELF32 little-endian MIPS ET_REL");
   const byIndex = new Map([...sections].map(([name, s]) => [s.index, name]));
@@ -83,13 +96,18 @@ export interface ObjectComparison {
   verdict: "match" | "mismatch" | "undetermined" | "stub";
   matchedWords: number; totalWords: number; candidateWords: number;
   differences: string[];
+  originalHash?: string; candidateHash?: string;
+  /** Required checks lacking encoded evidence, separate from witnessed differences.
+   * Nonempty unresolved checks prohibit MATCH, even when all known fields agree. */
+  unresolved?: string[];
   /** Bounded explanatory evidence; never substitutes for the complete comparison. */
   wordDifferences?: ObjectDifferenceSite[];
   scaffoldBlockers?: string[];
 }
 /** Shared by diff, residual and finalization reporting; acceptance stays strict. */
-export function renderObjectResidual(comparison: Pick<ObjectComparison, "verdict" | "wordDifferences" | "scaffoldBlockers">): string[] {
+export function renderObjectResidual(comparison: Pick<ObjectComparison, "verdict" | "wordDifferences" | "scaffoldBlockers" | "unresolved">): string[] {
   return [`Owning TU: ${comparison.verdict.toUpperCase()}`,
+    ...(comparison.unresolved ?? []).map(message => `Verification unavailable: ${message}`),
     ...(comparison.scaffoldBlockers ?? []).map(message => `Scaffold blocker: ${message}`),
     ...(comparison.wordDifferences ?? []).map(site => {
       const refs = (rows: ObjectRelocation[]) => rows.map(r => `${r.type}:${r.reference}`).join(", ") || "none";
@@ -107,6 +125,7 @@ const signed16 = (n: number) => (n & 0x8000) ? (n & 0xffff) - 0x10000 : n & 0xff
  * and undefined symbols keep their names: those can bind elsewhere at link time.
  * Anything this cannot fold exactly is left untouched for the strict comparison. */
 export function canonicalizeDefinedReferences(object: RelocatableObject): RelocatableObject {
+  if (object.native) return object; // Native original-object comparisons never fold.
   const defined = new Map<string, ObjectSymbol>();
   for (const s of object.symbols) {
     const section = object.sections.get(s.section);
@@ -160,7 +179,12 @@ export function canonicalizeDefinedReferences(object: RelocatableObject): Reloca
 }
 export function compareRelocatableObjects(original: Buffer, candidate: Buffer): ObjectComparison {
   try {
-    const a = canonicalizeDefinedReferences(readRelocatableObject(original)), b = canonicalizeDefinedReferences(readRelocatableObject(candidate)), differences: string[] = [];
+    const originalObject = readRelocatableObject(original), candidateObject = readRelocatableObject(candidate);
+    if (originalObject.native || candidateObject.native) {
+      if (!originalObject.native || !candidateObject.native) throw new Error("Native original-object verification requires LNK/ECOFF on both sides, not an ELF view");
+      return compareOriginalObject(originalObject.native, candidateObject.native);
+    }
+    const a = canonicalizeDefinedReferences(originalObject), b = canonicalizeDefinedReferences(candidateObject), differences: string[] = [];
     const targetSections = new Map(programSections(a)), candidateSections = new Map(programSections(b));
     const targetText = [...a.sections].filter(([, s]) => s.flags & 4);
     let totalWords = 0, matchedWords = 0, candidateWords = 0;

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { projectRoot } from "../../lib/runtimeContext.js";
-import { requireLibraryFunction } from "../../lib/libraryTargets.js";
+import { requireLibraryFunction, libraryObjectInputs } from "../../lib/libraryTargets.js";
 import { libraryContext } from "../../lib/project.js";
 import { configuredFlags } from "../../lib/toolchain.js";
 import { compareFunction } from "../../lib/functionOracle.js";
@@ -27,7 +27,7 @@ import type { ReconstructOptions } from "./engine.js";
 export function reconstructLibraryFunction(options: ReconstructOptions): ResultBundle {
   const started = Date.now();
   const { member, fn, key } = requireLibraryFunction(options.functionName);
-  const flags = libraryContext(member.id);
+  const flags = libraryContext(member.id), objects = libraryObjectInputs(member);
   const overrides = options.ignoreFlagOverrides ? undefined : loadFlagOverrides().get(member.id);
   const directory = options.outputDirectory ?? join(projectRoot(), "build/matchingReconstruction", key);
   mkdirSync(directory, { recursive: true });
@@ -36,9 +36,9 @@ export function reconstructLibraryFunction(options: ReconstructOptions): ResultB
   const bundle: ResultBundle = {
     schemaVersion: MATCHING_RECONSTRUCTION_SCHEMA_VERSION, functionName: key, containerId: member.id,
     coordinate: { kind: "section", section: fn.section, offset: fn.offset, size: fn.size, inferredSize: fn.inferredSize },
-    verification: { scope: "translation-unit", mode: "relocatable-object" }, sizeBytes: fn.size,
+    verification: { scope: "translation-unit", mode: objects.mode }, sizeBytes: fn.size,
     state: "tool-failure", candidates: [], artifacts: { files: {} }, compiles: 0, wallMs: 0,
-    contextMode: contextMode(), inputsRead: [member.input, "project.json", "toolchain.json"],
+    contextMode: contextMode(), inputsRead: [...objects.files, "project.json", "toolchain.json"],
     build: { containerKind: "library", cc1Flags: [...configuredFlags("cc1", flags), ...(overrides ?? [])],
       ...(overrides ? { overrideFlags: overrides } : {}) },
   };
@@ -51,8 +51,8 @@ export function reconstructLibraryFunction(options: ReconstructOptions): ResultB
     bundle.wallMs = Date.now() - started;
     bundle.artifacts = artifacts.manifest();
     const provenance = computeProvenance(key, {
-      files: [member.input, "project.json", "toolchain.json", "configs/flag_overrides.mk"],
-      values: { memberHash: member.sha256, coordinate: bundle.coordinate, build: bundle.build,
+      files: [...objects.files, "project.json", "toolchain.json", "configs/flag_overrides.mk"],
+      values: { memberHash: objects.memberHash, viewHash: objects.viewHash, coordinate: bundle.coordinate, build: bundle.build,
         contextMode: contextMode(), maxCandidates: options.maxCandidates, exhaustive: options.exhaustive },
       implementation: ["tools/agent/matching-reconstruction"],
     });
@@ -120,7 +120,7 @@ export function reconstructLibraryFunction(options: ReconstructOptions): ResultB
         const implicit = detectImplicitDeclarations(readFileSync(compiled.preprocessed, "utf8"), fn.name);
         const rejection = rejectionFromDiagnostics(compiled.diagnostics);
         if (implicit.length || rejection) throw new Error(implicit.length ? `implicit declarations: ${implicit.join(", ")}` : `invalid C: ${rejection}`);
-        const oracle = compareFunction(key, { objectPath: compiled.object! });
+        const oracle = compareFunction(key, { objectPath: compiled.object!, candidateSource: sourcePath });
         if (!oracle.verification || oracle.verification.scope !== "translation-unit") throw new Error("ET_REL whole-member verification unavailable");
         outcome.memberVerification = { verdict: oracle.verification.verdict, differences: oracle.verification.differences };
         outcome.verdict = oracle.verdict === "stub" || oracle.verification.verdict === "stub" ? "error"

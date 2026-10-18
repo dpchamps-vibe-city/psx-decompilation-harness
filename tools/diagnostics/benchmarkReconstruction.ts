@@ -221,7 +221,7 @@ async function m2cBaseline(name: string): Promise<{ verdict: string; detail: str
     const artifacts = compileSource(sourcePath, directory, name, {
       assemble: true, containerKind: location.container.kind,
     });
-    const oracle = compareFunction(name, { objectPath: artifacts.object!, container: location.container });
+    const oracle = compareFunction(name, { objectPath: artifacts.object!, candidateSource: artifacts.source, container: location.container });
     return { verdict: oracle.verdict, detail: `${oracle.same}/${Math.max(oracle.targetWords.length, oracle.candidateWords.length)} words` };
   } catch (error) {
     return { verdict: "noncompiling", detail: (error instanceof Error ? error.message : String(error)).slice(0, 80) };

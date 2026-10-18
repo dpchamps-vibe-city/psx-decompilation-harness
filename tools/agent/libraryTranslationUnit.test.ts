@@ -137,7 +137,7 @@ test("generated reference stubs preserve the strict whole-object oracle, private
     const assemble = () => { execFileSync("mips-linux-gnu-as", ["-EL", "-G0", "-march=r3000", "-I", join(HARNESS_ROOT, "include"), join(f.root, "candidate.s"), "-o", join(f.root, "candidate.o")]); return readFileSync(join(f.root, "candidate.o")); };
     assert.equal(compareRelocatableObjects(bytes, assemble()).verdict, "match");
     const candidate = readRelocatableObject(readFileSync(join(f.root, "candidate.o")));
-    assert(candidate.symbols.some(s => s.name === "first.NON_MATCHING" && s.binding === 0));
+    assert(!candidate.symbols.some(s => s.name.endsWith(".NON_MATCHING")), "backlog status belongs to source, not object symbols");
     assert.equal(candidate.relocations[0]!.reference, ".data@0");
     writeFileSync(join(f.root, "candidate.s"), parts.map(p => p.text).join("\n").replace(".word 7", ".word 8"));
     assert.equal(compareRelocatableObjects(bytes, assemble()).verdict, "mismatch", "wrong shared data cannot be hidden by matching function words");
@@ -245,7 +245,7 @@ test("assembly translation unit: one .s part lists every original function, is i
     const part = manifest.parts[0]!;
     assert.throws(() => inspectLibraryPart(source.replace("second:\n", ""), part), /must define second/);
     assert.throws(() => inspectLibraryPart(source + `\t.include "build/libraries/nonmatchings/${f.member.id}/first.s"\n`, part), /bare macro files/);
-    assert.throws(() => inspectLibraryPart(source + "\t.incbin \"blob.bin\"\n", part), /\.incbin is not reconstructed source/);
+    assert.throws(() => inspectLibraryPart(source + "\t.incbin \"blob.bin\"\n", part), /Copied binary\/relocation directives/);
     assert.throws(() => inspectLibraryPart(source + ".L__library_rel_1_0:\n\t.reloc .L__library_rel_1_0, R_MIPS_26, .text\n", part), /backlog markers|\.reloc/);
     assert.throws(() => inspectLibraryPart(source + "nonmatching third, 8\n", part), /backlog markers/);
     assert.equal(inspectLibraryPart(source.replace("first:\n", "glabel first\n"), part).stub, false, "macro.inc label spellings define the symbol too");

@@ -1,6 +1,9 @@
 # Phase 7 — Member ID rewrite (final step)
 
-Status: proposed. Depends on: Phase 6.
+Status: inventory and transactional migration implemented; a full staged preview
+covers 2,167 active IDs and runtime state. Reference-only preparation accounts
+for the excluded Libsn history. Write refuses without Phase 6 native matches;
+production IDs and the stopped loop remain unchanged. Depends on: Phase 6.
 
 ## Goal
 

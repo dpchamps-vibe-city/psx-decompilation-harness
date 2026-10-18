@@ -27,7 +27,7 @@ export interface FunctionTarget {
   flags: FlagContext;
   coordinate: { kind: "image"; vram?: number } | { kind: "section"; section: string; offset: number; size: number; inferredSize: boolean };
   translationUnit: { source: string; functions: string[] };
-  verification: { scope: "function" | "translation-unit"; mode: "linked-bytes" | "relocatable-object" };
+  verification: { scope: "function" | "translation-unit"; mode: "linked-bytes" | "relocatable-object" | "original-object" };
   context: { types: string; functions: string; compilerHeaders: string[] };
   capabilities: { linkedImageAnalysis: boolean; functionInstructionView: boolean; automaticSingleStubStaging: boolean };
 }
@@ -49,7 +49,7 @@ export function libraryFunctionTarget(member: LibraryMember, fn: LibraryMember["
     assembly: { function: `${folder}/${fn.name}.s`, translationUnit: member.assembly }, includeAsm: { folder, symbol: fn.name },
     flags: libraryContext(member.id, root), coordinate: { kind: "section", section: fn.section, offset: fn.offset, size: fn.size, inferredSize: fn.inferredSize },
     translationUnit: { source: member.source, functions: member.functions.map(f => libraryTargetKey(member, f.name)) },
-    verification: { scope: "translation-unit", mode: "relocatable-object" },
+    verification: { scope: "translation-unit", mode: project.verification.mode },
     context: { types: `build/libraries/context/${member.id}/types.h`, functions: `build/libraries/context/${member.id}/functions.h`, compilerHeaders: project.headers.context },
     capabilities: { linkedImageAnalysis: false, functionInstructionView: true, automaticSingleStubStaging: isDirectoryTu(member) || member.functions.length === 1 } };
 }

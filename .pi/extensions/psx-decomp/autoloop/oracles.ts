@@ -177,7 +177,7 @@ export async function nextTarget(
 ): Promise<string | undefined> {
   const graph = await rebuildCallGraph(projectRoot).catch(() => loadCallGraph(projectRoot));
   const eligible = graph.functions.filter(
-    (entry) => !entry.decompiled && entry.handwritten === false && !entry.dead && !skip.has(entry.name),
+    (entry) => !entry.decompiled && entry.handwritten === false && entry.libraryStub !== false && !entry.dead && !skip.has(entry.name),
   );
   return (eligible.find((entry) => !defer.has(entry.name)) ?? eligible[0])?.name;
 }

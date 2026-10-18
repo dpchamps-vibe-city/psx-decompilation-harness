@@ -3,11 +3,36 @@
 ## Follow-up: configured assembler backend
 
 Production now uses cpp → cc1 → configured assembler: legacy MASPSX → GAS by
-omission, or direct GAS with closed compatibility rewrites. Legacy argv and v1
-compilation identities are preserved when omitted. Assembler profiles replace
+omission, or direct GAS with unchanged compiler output. Configured period-tool
+stages are explicit; compatibility input rewrites are rejected. Acceptance identities
+are versioned and old records must be re-verified. Assembler profiles replace
 the base selection and require original-word evidence and member re-verification;
 see [toolchain backends](toolchain.md#assembler-backends). Historical MASPSX
 measurements below describe that route, not a restriction on GAS acceptance.
+
+## Native provenance rollout
+
+The production pipeline separates dependency discovery from target preprocessing,
+passes assembler input unchanged and permits only named, versioned period-tool
+stages. `psyq-dmpsx` is the sole declared stage. Acceptance checks executed-tool
+and recipe pins; linked host libraries and MASPSX implementation files participate
+in identities. Old accepted records are intentionally stale.
+
+Library projects can select native LNK originals/ECOFF candidates and migrate to
+original-derived IDs with a transactional dry-run-first command. Converted ELF is
+a content-checked diagnostic view, never an original-object acceptance input.
+Period `.ASM` sources and reference stubs use SDK operations; missing representations
+are generator gaps, not copied relocation tables or encoded instructions.
+
+Image projects link identified converter outputs directly. Target-data copying,
+SDK object/BSS mutation and unconditional relocation carry patches are retired.
+Full image checks enforce payload length and PS-X EXE header identity. Engine
+publication requires the real full-container/member check, never just a score.
+
+Tests use synthetic fixtures. An optional real-project regression runs the actual
+project `npm run check-all` and requires fresh native records for every member:
+`PSX_NATIVE_LIBRARY_PROJECT=/absolute/project/path npm test`. It is deliberately
+not a source of a blanket SDK/toolchain compatibility claim.
 
 ## Source and scope
 
@@ -157,7 +182,7 @@ remains an open setup task, not a claimed completed build test.
   Other supported policy mechanisms remain; no blanket authorization is implied.
 - The root Makefile/path example was subsequently replaced by npm tasks and validated toolchain JSON; the original Makefile remains only in the example. See `docs/toolchain.md`.
 - Six targeted tool edits: measured/configured bounds in `classifyGlobals.ts`,
-  configured basename in `genProjectProfile.ts`, linker paths in `patchLibBss.ts`
+  configured basename in `genProjectProfile.ts`, linker paths in the retired object-patching implementation
   and `patchLinkerBss.ts`, measured bounds/paths in `diffBinary.ts`, explicit or
   discovered executable in `headerInfo.ts`.
 - `classifyGlobals.ts` exposes declaration helpers without executing its CLI on

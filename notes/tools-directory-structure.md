@@ -159,8 +159,7 @@ bootstrap-era tools are idempotent or no-op when configs exist.
 | 5 | `patchSplatForLibs.ts` | Rewrites splat YAML to use `o` (object) segments for matched PSY-Q lib `.o` files; writes `build/libSections.json`. |
 | 6 | `addDepObjects.ts` | Finds `.o` files referenced by matched libs but not themselves matched; adds them as `o` segments. Wraps `findMissingLibDeps.ts`. |
 | 7 | `fixCrossFileRefs.ts` | Fixes symbols referenced across `.s` files without global visibility (adds `type:func` entries so next split emits `glabel`). |
-| 8 | `patchLinkerBss.ts` | Adds library `.bss` entries to the generated linker script. Wraps `extractBssSymAddrs.ts`. |
-| 9 | `patchLibBss.ts` | Patches library `.o` files: converts BSS symbols to `SHN_ABS` absolute addresses (PSYLINK placed BSS symbols independently; GNU ld would pack them). |
+| 8 | `patchLinkerBss.ts` | Expresses SDK BSS placement in linker sections; wraps `extractBssSymAddrs.ts`. Object contents and symbols are never patched; the former object-patching step is retired. |
 | 10 | `classifyGlobals.ts` | Generates `include/globals.h` — the `D_XXXXXXXX` extern declarations with correct GP-relative vs absolute addressing. **Never edit `globals.h` by hand.** |
 | 11 | `agent/contextExport.ts --all` | (see agent group) |
 | 12 | `genProjectProfile.ts` | Generates `configs/project-profile.md`, the prompt-facing source for concrete target/toolchain facts, from machine-readable sources: EXE header + `splat.yaml` via psxExeInfo, compiler/flags/assembler version from the Makefile, SDK detection, and a byte-identity hash check. Human facts live in `configs/project-info.json`. |

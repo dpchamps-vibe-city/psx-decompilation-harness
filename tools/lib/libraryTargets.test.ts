@@ -209,8 +209,10 @@ test("metadata-only members retain explicit stubs; missing program listings stil
   assert.equal(parts.length, 1);
   assert.equal(parts[0]!.symbol, "__library_member_data");
   assert.deepEqual(parts[0]!.functions, []);
-  assert.match(parts[0]!.text, /nonmatching __library_member_data, 0/);
+  assert.match(parts[0]!.text, /Metadata-only member/);
   assert.doesNotMatch(parts[0]!.text, /\.(?:word|space|comm)\b/);
+  const zeroStorage = { ...object, sections: new Map([[".text", { ...original.sections.get(".text")!, size: 0, data: Buffer.alloc(0) }]]) };
+  assert.match(libraryAssemblyParts({ ...member, object: zeroStorage }, "")[0]!.text, /Metadata-only member/);
   assert.throws(() => libraryAssemblyParts({ ...member, object: { ...object,
     sections: original.sections } }, ""), /No assembly sections found/);
   for (const section of ["UND", "ABS"]) {

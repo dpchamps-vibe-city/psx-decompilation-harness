@@ -27,7 +27,7 @@ import { projectRoot } from "../../lib/runtimeContext.js";
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compileSource, configuredCc1FlagsForContainer, runTool } from "../decompToolchain.js";
+import { compileSource, configuredCc1FlagsForContainer } from "../decompToolchain.js";
 import { ensureArtifact, stamped } from "../provenance.js";
 import { decodeFunction, type DecodedInsn } from "../matching-reconstruction/decode.js";
 import { signatureOf, type FamilySignature, type SignatureTier } from "../family-transfer/signature.js";
@@ -92,36 +92,16 @@ export interface RecipeAtlas {
 
 /* ---- compiling one recipe ---------------------------------------------------- */
 
-import { configuredTool } from "../../lib/toolchain.js";
+import { objectFunctions, readRelocatableObject } from "../../lib/relocatableObject.js";
 
-/**
- * The words one object's named function occupies.
- *
- * Read from `objdump -d`, which prints the raw word beside each instruction.
- * Reading the section bytes directly would need an ELF parser; the disassembly
- * already carries exactly the bytes, and parsing it is one regular expression
- * over lines the tool itself produced.
- */
+/** The named function's own section bytes, including native LNK candidates. */
 export function objectFunctionWords(objectPath: string, functionName: string): DecodedInsn[] {
-  const dump = runTool(configuredTool("objdump"), ["-d", objectPath]);
-  const words: Array<{ raw: number; vram: number }> = [];
-  let inside = false;
-  for (const line of dump.split("\n")) {
-    const label = line.match(/^([0-9a-f]+)\s+<([^>]+)>:\s*$/i);
-    if (label) {
-      inside = label[2] === functionName;
-      continue;
-    }
-    if (!inside) continue;
-    const instruction = line.match(/^\s*([0-9a-f]+):\s+([0-9a-f]{8})\s/i);
-    if (!instruction) {
-      /* A blank line ends the symbol's listing. */
-      if (line.trim() === "") inside = false;
-      continue;
-    }
-    words.push({ raw: parseInt(instruction[2]!, 16) >>> 0, vram: parseInt(instruction[1]!, 16) });
-  }
-  return decodeFunction(words);
+  const object = readRelocatableObject(readFileSync(objectPath));
+  const fn = objectFunctions(object).find(f => f.name === functionName);
+  if (!fn) throw new Error(`Object does not define ${functionName}`);
+  const bytes = object.sections.get(fn.section)!.data;
+  if (fn.size % 4) throw new Error(`Unaligned function ${functionName}`);
+  return decodeFunction(Array.from({ length: fn.size / 4 }, (_, i) => ({ raw: bytes.readUInt32LE(fn.offset + i * 4), vram: fn.offset + i * 4 })));
 }
 
 /** Compile one recipe and index its words, or report why it did not compile. */

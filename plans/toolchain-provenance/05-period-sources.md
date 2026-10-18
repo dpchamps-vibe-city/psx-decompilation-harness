@@ -1,6 +1,8 @@
 # Phase 5 — Period sources
 
-Status: proposed. Depends on: Phases 2, 3 and 4.
+Status: routes, generator, policy and templates implemented. Isolated staging
+converts all 625 assembly sources; 623 assemble. Full population: 2,160/2,167
+compile, seven explicit source/generator gaps, zero native-exact promotions. Depends on: Phases 2, 3 and 4.
 
 ## Goal
 

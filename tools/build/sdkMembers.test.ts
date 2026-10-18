@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { splitSdkLibs } from "./splitSdkLibs.js";
 import { auditSdkCollisions } from "./auditSdkCollisions.js";
-import { collisionNames, isReturnPadding, loadMemberMap, patchedSdkObjectPath, readAr, readPsyqLib, readTextObject, signatureId, type SigEntry } from "../lib/psyqMembers.js";
+import { collisionNames, isReturnPadding, loadMemberMap, readAr, readPsyqLib, readTextObject, signatureId, type SigEntry } from "../lib/psyqMembers.js";
 import { acknowledgeFindings, scanSdkSignatures, verifiedMatches, type DetectionAcknowledgement } from "../lib/sdkDetection.js";
 import { boundaryPremise, staleSdkSymbols } from "../lib/sdkProvenance.js";
 
@@ -109,8 +109,6 @@ test("split is deterministic, preserves non-colliding input filenames, and write
     assert.ok(readFileSync(stablePath).equals(f.small));
     assert.equal(existsSync(join(f.root, "lib/sdk/470/libtest/same__Large.o")), true);
     assert.equal(existsSync(join(f.root, "src")), false);
-    assert.equal(patchedSdkObjectPath("lib/sdk/470/libtest/same__Large.o"), "build/lib/sdk/470/libtest/same__Large.o");
-    assert.equal(patchedSdkObjectPath("lib/libtest/stable.o"), "build/lib/libtest/stable.o");
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -142,12 +140,13 @@ test("first-time supplied SDK conversion covers colliding and unique members, re
     // Synthetic converter obeys the existing (input member, output ELF) argv
     // contract. No original LNK encoding/decoder claim is made by this fixture.
     const converter = join(root, "converter with spaces");
-    writeFileSync(converter, '#!/bin/sh\nprintf "convert\\n" >> "' + join(root, "conversions") + '"\ndd if="$1" of="$2" bs=1 skip=4 2>/dev/null\n'); chmodSync(converter, 0o755);
-    const options = { root, sdkDir, version: "470", signatures, converter, write: true };
+    writeFileSync(converter, '#!/bin/sh\ntest "$1" = "--fixture-mode" || exit 5\nshift\nprintf "convert\\n" >> "' + join(root, "conversions") + '"\ndd if="$1" of="$2" bs=1 skip=4 2>/dev/null\n'); chmodSync(converter, 0o755);
+    const options = { root, sdkDir, version: "470", signatures, converter, converterArgs: ["--fixture-mode"], write: true };
     const first = splitSdkLibs(options);
     assert.equal(readFileSync(join(root, "conversions"), "utf8").trim().split("\n").length, 3);
     assert.equal(first.members.length, 3);
     assert.ok(first.members.every(member => member.oPath.startsWith("lib/") && member.source.startsWith("library-input/") && member.objectHash && member.archiveHash && member.converter?.mode === "supplied"));
+    assert.deepEqual(first.members[0]!.converter!.args, ["--fixture-mode"]);
     assert.deepEqual(splitSdkLibs(options), first);
     assert.equal(readFileSync(join(root, "conversions"), "utf8").trim().split("\n").length, 3, "verified cached conversions are not repeated");
     assert.ok(readFileSync(archive).equals(bytes), "original archive remains untouched");

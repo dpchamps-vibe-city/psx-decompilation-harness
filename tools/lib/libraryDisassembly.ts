@@ -9,7 +9,7 @@ import { objectFunctions } from "./relocatableObject.js";
  * assembly stub also round-trips exactly. Recheck the original entry census
  * before supplying inferred sizes as disassembler facts or accepting a listing. */
 function validatePartition(member: LibraryMember): void {
-  const recovered = objectFunctions(member.object);
+  const recovered = objectFunctions(member.viewObject ?? member.object);
   for (const fn of recovered) {
     const assigned = member.functions.find(f => f.section === fn.section && f.offset === fn.offset && f.name === fn.name);
     if (!assigned || assigned.size !== fn.size)
@@ -20,7 +20,7 @@ export function libraryDisassemblySymbols(member: LibraryMember): string {
   validatePartition(member);
   const table = member.bytes.readUInt32LE(32), stride = member.bytes.readUInt16LE(46);
   return "// Original symbols and conservative call/address-relocation bounds; not RAM.\n" + member.functions.map(fn => {
-    const section = member.object.sections.get(fn.section)!;
+    const section = (member.viewObject ?? member.object).sections.get(fn.section)!;
     const address = member.bytes.readUInt32LE(table + section.index * stride + 12);
     const coordinate = (address || section.offset) + fn.offset, vrom = section.offset + fn.offset;
     if (fn.size < 8 || fn.offset % 4 || fn.size % 4) throw new Error(`Unsupported code bound: ${member.id}::${fn.name}`);
@@ -31,7 +31,7 @@ export function libraryDisassemblySymbols(member: LibraryMember): string {
 export function validateLibraryDisassembly(member: LibraryMember, listing: string): void {
   validatePartition(member);
   const blocks = [...listing.matchAll(/^\.section\s+([^\s,]+).*$/gm)];
-  for (const [name, section] of member.object.sections) {
+  for (const [name, section] of (member.viewObject ?? member.object).sections) {
     if (!(section.flags & 4) || !section.size) continue;
     const index = blocks.findIndex(b => b[1] === name);
     if (index < 0) throw new Error(`${member.id}: missing code section ${name}`);

@@ -19,15 +19,16 @@ test("toolchain text is validated whenever it changes, and callers share one imm
   assert.deepEqual(loadToolchain(f.root).flags, f.toolchain.flags);
 });
 
-test("a cpp driver rewritten in place is asked for its frontend again", t => {
-  const f = projectFixture(t), driver = join(f.root, "fixture-cpp.sh");
-  const answer = (path: string) => writeFileSync(driver, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(join(f.root, path))}\n`, { mode: 0o755 });
-  f.put("frontend-a", "a"); f.put("frontend-b", "b");
-  answer("frontend-a"); f.toolchain.tools.cpp = driver; f.put("toolchain.json", JSON.stringify(f.toolchain));
+test("standalone period cpp is hashed without executing a driver probe", t => {
+  const f = projectFixture(t), cpp = join(f.root, "fixture-cpp.sh");
+  writeFileSync(cpp, "#!/bin/sh\nexit 73\n", { mode: 0o755 });
+  f.toolchain.tools.cpp = cpp; delete f.toolchain.tools.cppFrontend;
+  f.put("toolchain.json", JSON.stringify(f.toolchain));
   inRuntimeContext(createRuntimeContext(f.root), () => {
-    assert.equal(configuredCppFrontend(), join(f.root, "frontend-a"));
-    answer("frontend-b"); // same size, written within the same second
-    assert.equal(configuredCppFrontend(), join(f.root, "frontend-b"));
+    assert.equal(configuredCppFrontend(), cpp);
+    const before = stableHash(compilationIdentity(f.root));
+    writeFileSync(cpp, "#!/bin/sh\nexit 74\n", { mode: 0o755 });
+    assert.notEqual(stableHash(compilationIdentity(f.root)), before);
   });
 });
 
@@ -35,7 +36,8 @@ test("the configured cpp frontend is independently witnessed by preparation/comp
   const f = projectFixture(t), driver = join(f.root, "fixture-cpp.sh"), frontend = join(f.root, "fixture-frontend");
   f.put("fixture-frontend", "frontend-version-one");
   writeFileSync(driver, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(frontend)}\n`, { mode: 0o755 });
-  f.toolchain.tools.cpp = driver; f.put("toolchain.json", JSON.stringify(f.toolchain));
+  f.toolchain.tools.cpp = driver; f.toolchain.tools.cppFrontend = frontend;
+  f.put("toolchain.json", JSON.stringify(f.toolchain));
   inRuntimeContext(createRuntimeContext(f.root), () => {
     assert.equal(configuredCppFrontend(), frontend);
     const first = stableHash(compilationIdentity(f.root, { kind: "exe", id: "exe" }, "fixture_entry"));

@@ -99,17 +99,15 @@ export function analyzeCSource(source: string): CSourceReport {
       spanningLiterals.push(`line ${node.startPosition.row + 1}`);
     }
 
-    if (node.type === "call_expression") {
-      const callee = node.childForFieldName("function");
-      if (callee?.type !== "identifier" || callee.text !== "INCLUDE_ASM") return;
+  });
+  walkActiveC(root, node => {
+    if (node.type === "call_expression" && node.childForFieldName("function")?.text === "INCLUDE_ASM") {
       const args = node.childForFieldName("arguments");
-      if (!args) return;
-      const folder = children(args).find((child) => child.type === "string_literal");
-      const symbol = children(args).find((child) => child.type === "identifier");
-      if (folder && symbol) {
-        includeAsm.push({ folder: folder.text.replace(/^"|"$/g, ""), symbol: symbol.text });
-      }
+      const folder = args && children(args).find(child => child.type === "string_literal");
+      const symbol = args && children(args).find(child => child.type === "identifier");
+      if (folder && symbol) includeAsm.push({ folder: folder.text.replace(/^"|"$/g, ""), symbol: symbol.text });
     }
+    return true;
   });
 
   if (errors > 0) reasons.push(`${errors} parse error(s)`);
@@ -292,6 +290,20 @@ export function handsSymbolToAssembler(source: string, symbol: string): boolean 
     });
   } finally { tree.delete(); }
   return found;
+}
+
+/** Extract the newest explicitly parked C attempt by its parsed conditional,
+ * not by counting directive-looking lines inside comments or literals. */
+export function preservedAttempt(source: string): string | undefined {
+  const last = [...source.matchAll(/^\/\* (?:PSX parked attempt[^\n]*?|PARKED by \/auto_decompilation_loop[^]*?)\*\/\s*\n#if 0\s*\n/gim)].at(-1);
+  if (!last) return undefined;
+  const start = last.index! + last[0].length, tree = parseC(source);
+  try {
+    const block = tree.rootNode.descendantsOfType("preproc_if").find(n => n.startIndex >= last.index! && n.startIndex < start && n.endIndex >= start && field(n, "condition")?.text === "0");
+    const end = block && children(block).find(n => n.type === "#endif" && !n.isMissing);
+    if (!end) throw new Error("Preserved attempt has no complete parsed #if 0 block; refusing to discard it");
+    return source.slice(start, end.startIndex);
+  } finally { tree.delete(); }
 }
 
 export function fileHandsSymbolToAssembler(path: string, symbol: string): boolean {

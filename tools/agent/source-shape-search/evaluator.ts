@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { configuredTool, disassembleObject, runTool } from "../decompToolchain.js";
+import { readRelocatableObject } from "../../lib/relocatableObject.js";
 import type { TargetScheduleAnalysis } from "../target-schedule/types.js";
 import { scheduleDeltaRank } from "../target-schedule/compare-profiles.js";
 import { compareNormalized } from "../variant-lab/compile.js";
@@ -93,15 +92,11 @@ function canonicalRelocationSymbol(symbol: string): string {
 }
 
 export function functionObjectsEqual(left: string, right: string, scratchDirectory: string): boolean {
-  const leftBinary = join(scratchDirectory, "target.text.bin");
-  const rightBinary = join(scratchDirectory, "candidate.text.bin");
-  runTool(configuredTool("objcopy"), ["-O", "binary", "-j", ".text", left, leftBinary]);
-  runTool(configuredTool("objcopy"), ["-O", "binary", "-j", ".text", right, rightBinary]);
-  if (!readFileSync(leftBinary).equals(readFileSync(rightBinary))) return false;
-  const relocations = (path: string) => disassembleObject(path)
-    .filter((instruction) => instruction.relocation)
-    .map((instruction) => `${instruction.address}:${instruction.relocation!.type}:${canonicalRelocationSymbol(instruction.relocation!.symbol)}`);
-  return JSON.stringify(relocations(left)) === JSON.stringify(relocations(right));
+  const a = readRelocatableObject(readFileSync(left)), b = readRelocatableObject(readFileSync(right));
+  if (!a.sections.get(".text")?.data.equals(b.sections.get(".text")?.data ?? Buffer.alloc(0))) return false;
+  const relocations = (object: typeof a) => object.relocations.filter(r => r.section === ".text")
+    .map(r => [r.offset, r.type, canonicalRelocationSymbol(r.reference), r.addend]);
+  return JSON.stringify(relocations(a)) === JSON.stringify(relocations(b));
 }
 
 /** Lexicographic on the staged residual; a missing reading never outranks one. */

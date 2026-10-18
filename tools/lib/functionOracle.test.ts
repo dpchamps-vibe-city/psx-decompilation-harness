@@ -212,6 +212,9 @@ test("an unresolved word is undetermined, on its own row, and never a match", ()
   assert.equal(result.undetermined.length, 1);
   assert.equal(result.differing.length, 0);
   assert.equal(result.rows.filter((row) => row.kind === "undetermined").length, 1);
+  const reversed = compareWords(candidate, words([[1, "nop"], [0x3c048007, "lui     a0,0x8007"]]));
+  assert.equal(reversed.verdict, "undetermined", "native original operands may also be unavailable");
+  assert.equal(reversed.undetermined[0], candidate[1]);
 });
 
 test("a proven difference outranks an unresolved one — undetermined is not a hiding place", () => {

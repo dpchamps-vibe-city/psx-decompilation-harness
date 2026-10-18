@@ -136,7 +136,6 @@ split: split-sdk-libs
 	npx tsx tools/build/mergeFragments.ts --write
 	SPIMDISASM_ARCHLEVEL=1 splat split configs/splat/exe.yaml
 	npx tsx tools/build/patchLinkerBss.ts --write
-	npx tsx tools/build/patchLibBss.ts --write
 	@printf 'INCLUDE "build/undefined_funcs_auto.txt"\nINCLUDE "build/undefined_syms_auto.txt"\n' >> $(LD_SCRIPT)
 	@if [ -f build/dep_syms.txt ]; then printf 'INCLUDE "build/dep_syms.txt"\n' >> $(LD_SCRIPT); fi
 	@if [ -f build/lib_bss_syms.txt ]; then printf 'INCLUDE "build/lib_bss_syms.txt"\n' >> $(LD_SCRIPT); fi

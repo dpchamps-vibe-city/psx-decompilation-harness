@@ -31,12 +31,15 @@ test("check-all skips every per-container verification rodata check and runs --a
   const f = fixture(t); verifyBuiltContainers(f.containers, true, f.root, f.actions);
   assert.deepEqual(f.events, ["verify:exe", "profile", "verify:ovl_fixture", "rodata:--all"]);
 });
-for (const failure of ["mismatch", "truncated", "missing-bin", "failed-link"] as const) test(`${failure} cannot refresh the executable profile or proceed to overlays`, t => {
+for (const failure of ["mismatch", "sdk-data", "header", "trailing", "truncated", "missing-bin", "failed-link"] as const) test(`${failure} cannot refresh the executable profile or proceed to overlays`, t => {
   const f = fixture(t), exe = f.containers[0]!;
   f.put("configs/project-profile.md", "previous profile\n");
   if (failure === "failed-link") rmSync(join(f.root, exe.paths.builtElf));
   else if (failure === "missing-bin") rmSync(join(f.root, exe.paths.builtBin));
   else if (failure === "truncated") f.put(exe.paths.builtBin, Buffer.alloc(exe.payloadOffset));
+  else if (failure === "trailing") f.put(exe.paths.builtBin, Buffer.concat([readFileSync(join(f.root, exe.targetPath)), Buffer.from([0])]));
+  else if (failure === "header") { const bytes = readFileSync(join(f.root, exe.targetPath)); bytes[0x14] = 1; f.put(exe.paths.builtBin, bytes); }
+  else if (failure === "sdk-data") { const bytes = readFileSync(join(f.root, exe.targetPath)); bytes[bytes.length - 4] = bytes[bytes.length - 4]! ^ 1; f.put(exe.paths.builtBin, bytes); }
   else { const bytes = readFileSync(join(f.root, exe.targetPath)); bytes[exe.payloadOffset] = bytes[exe.payloadOffset]! ^ 1; f.put(exe.paths.builtBin, bytes); }
   assert.throws(() => verifyBuiltContainers(f.containers, true, f.root, f.actions));
   assert.deepEqual(f.events, []);

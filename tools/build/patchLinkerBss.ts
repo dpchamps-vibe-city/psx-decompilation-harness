@@ -91,7 +91,7 @@ function main() {
   let inLibBssSection = false;
   for (const l of lines) {
     if (l.includes("Library BSS entries (added by patchLinkerBss.ts)")) continue;
-    if (l.match(/^\s+\.lib_bss\s/)) { inLibBssSection = true; continue; }
+    if (l.match(/^\s+\.lib_bss(?:_\d+)?\s/)) { inLibBssSection = true; continue; }
     if (inLibBssSection) {
       if (l.trim() === "}") { inLibBssSection = false; continue; }
       continue; // skip contents of .lib_bss section
@@ -101,10 +101,10 @@ function main() {
     strippedLines.push(l);
   }
 
-  // The original PSX linker (PSYLINK) allocated each BSS symbol independently,
-  // not as contiguous blocks per .o. GNU ld places the entire .o(.bss) as one block.
-  // Strategy: place .o(.bss) in a NOLOAD section (for local symbol resolution),
-  // then override global BSS symbols with exact addresses extracted from the original.
+  // Placement belongs to the linker script, never patched object symbol
+  // tables. Each input BSS keeps its storage and local offsets. If a target
+  // needs independently allocated symbols, its identified converter must
+  // expose those input sections; do not erase storage or patch SHN_ABS.
 
   // Run extractBssSymAddrs.ts to get exact global BSS addresses from the original binary
   const bssSymsPath = join(projectRoot(), "build/lib_bss_syms.txt");
@@ -118,19 +118,11 @@ function main() {
   const bssSymCount = bssSymsOutput.trim().split("\n").length;
   console.log(`Wrote ${bssSymCount} BSS symbol definitions to build/lib_bss_syms.txt`);
 
-  // Create a NOLOAD section for library BSS (provides storage for local symbols)
-  const libBssSection: string[] = [];
-  if (bssEntries.length > 0) {
-    const startVram = `0x${bssEntries[0].vram.toString(16).toUpperCase()}`;
-    libBssSection.push(``);
-    libBssSection.push(`    /* Library BSS entries (added by patchLinkerBss.ts) */`);
-    libBssSection.push(`    .lib_bss ${startVram} (NOLOAD) : SUBALIGN(4)`);
-    libBssSection.push(`    {`);
-    for (const e of bssEntries) {
-      libBssSection.push(`        ${e.oPath}(.bss);`);
-    }
-    libBssSection.push(`    }`);
-  }
+  const libBssSection: string[] = ["", "    /* Library BSS entries (added by patchLinkerBss.ts) */"];
+  bssEntries.forEach((e, i) => {
+    libBssSection.push(`    .lib_bss_${i} 0x${e.vram.toString(16)} (NOLOAD) :`);
+    libBssSection.push("    {", `        ${e.oPath}(.bss);`, "    }");
+  });
 
   const newLines = [...strippedLines];
 

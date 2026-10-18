@@ -120,6 +120,14 @@
         },
         "psyq2elf": {
           "$ref": "#/$defs/ownedPath"
+        },
+        "dependencyScanner": {
+          "$ref": "#/$defs/ownedPath",
+          "description": "Optional dependency-only preprocessor. Defaults to tools.cpp; never produces compiled text."
+        },
+        "cppFrontend": {
+          "$ref": "#/$defs/ownedPath",
+          "description": "Explicit delegated frontend for a preprocessor driver. Standalone cpp/cccp needs no entry."
         }
       }
     },
@@ -159,6 +167,10 @@
         },
         "spimdisasm": {
           "$ref": "#/$defs/args"
+        },
+        "psyq2elf": {
+          "$ref": "#/$defs/args",
+          "description": "Optional identified-converter arguments; no automatic carry or byte corrections."
         }
       }
     },
@@ -233,6 +245,19 @@
     },
     "assembler": {
       "$ref": "#/$defs/assembler"
+    },
+    "toolPins": {
+      "type": "object",
+      "propertyNames": { "enum": ["cc1", "cpp", "as", "ld", "objcopy", "objdump", "nm", "readelf", "python", "splat", "spimdisasm", "maspsx", "m2c", "psyq2elf", "cppFrontend"] },
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false, "required": ["sha256"],
+        "properties": {
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "recipe": { "$ref": "#/$defs/ownedPath" },
+          "recipeSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        },
+        "dependentRequired": { "recipe": ["recipeSha256"], "recipeSha256": ["recipe"] }
+      }
     }
   },
   "$defs": {
@@ -291,24 +316,15 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "kind",
-            "inputRewrites"
-          ],
+          "required": ["kind"],
           "properties": {
-            "kind": {
-              "const": "gas"
+            "kind": { "const": "gas" },
+            "objectFormat": { "enum": ["elf", "ecoff"], "default": "elf" },
+            "postAssembly": {
+              "type": "array", "uniqueItems": true,
+              "items": { "enum": ["psyq-dmpsx", "psyq-lnk"] }
             },
-            "inputRewrites": {
-              "type": "array",
-              "uniqueItems": true,
-              "items": {
-                "enum": [
-                  "move-addu",
-                  "rdata-section"
-                ]
-              }
-            }
+            "lnkLayout": { "enum": ["standard", "early"], "default": "standard" }
           }
         }
       ]

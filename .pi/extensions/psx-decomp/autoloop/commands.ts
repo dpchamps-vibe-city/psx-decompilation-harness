@@ -1,4 +1,6 @@
 import { projectRoot as currentProjectRoot } from "../../../../tools/lib/runtimeContext.js";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getSessionBaseline } from "../tools/session-baseline.ts";
 import { DEFAULT_CHECKPOINT_AT_TOKENS, loadLoopConfig } from "./config.ts";
@@ -31,7 +33,7 @@ export function parseArgs(args: string): ParsedArgs {
       parsed.maxFunctions = Number.parseInt(limit[1], 10);
       continue;
     }
-    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(token) && !parsed.target) {
+    if (/^(?:[a-zA-Z0-9_]+::)?[A-Za-z_][A-Za-z0-9_]*$/.test(token) && !parsed.target) {
       parsed.target = token;
       continue;
     }
@@ -140,6 +142,10 @@ export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
         return;
       }
 
+      const lock = join(config.runtimeDir, "active.json");
+      mkdirSync(config.runtimeDir, { recursive: true });
+      try { writeFileSync(lock, JSON.stringify({ pid: process.pid, started: new Date().toISOString() }) + "\n", { flag: "wx" }); }
+      catch { ctx.ui.notify("Autoloop active.json lock exists; stop the other loop or remove a stale lock before restarting.", "error"); return; }
       const flag: AbortFlag = { aborted: false };
       active = flag;
       ctx.ui.notify(
@@ -158,6 +164,7 @@ export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
       } catch (error) {
         ctx.ui.notify(`Escalation loop failed: ${error instanceof Error ? error.message : String(error)}`, "error");
       } finally {
+        rmSync(lock, { force: true });
         active = null;
         running = undefined;
       }

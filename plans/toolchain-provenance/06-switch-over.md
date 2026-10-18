@@ -1,6 +1,7 @@
 # Phase 6 — Switch-over and full re-verification
 
-Status: proposed. Depends on: Phases 1–5.
+Status: configurations prepared and the real staged check-all CLI exercised;
+the native gate fails. Production selection and records remain unchanged. Depends on: Phases 1–5.
 
 ## Goal
 

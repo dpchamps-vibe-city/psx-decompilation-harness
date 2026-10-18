@@ -89,6 +89,7 @@ export function graphHash(graph: CallGraph): string {
       vram: normalizeVram(entry.vram),
       name: entry.name,
       decompiled: entry.decompiled,
+      libraryStub: entry.libraryStub,
       dead: entry.dead,
       handwritten: entry.handwritten,
       calls: [...entry.calls].sort(),
@@ -99,7 +100,7 @@ export function graphHash(graph: CallGraph): string {
 }
 
 export function eligible(entry: CallGraphEntry): boolean {
-  return entry.dead === false && entry.handwritten === false;
+  return entry.dead === false && entry.handwritten === false && entry.libraryStub !== false;
 }
 
 export function reconcileState(state: ControllerState, graph: CallGraph): void {
@@ -119,6 +120,7 @@ export function reconcileState(state: ControllerState, graph: CallGraph): void {
         priority: entry.priority,
         tier: entry.tier,
         graphDecompiled: entry.decompiled,
+        libraryStub: entry.libraryStub,
         dead: entry.dead,
         handwritten: entry.handwritten,
         attempts: [],
@@ -134,6 +136,7 @@ export function reconcileState(state: ControllerState, graph: CallGraph): void {
     current.priority = entry.priority;
     current.tier = entry.tier;
     current.graphDecompiled = entry.decompiled;
+    current.libraryStub = entry.libraryStub;
     current.dead = entry.dead;
     current.handwritten = entry.handwritten;
 
@@ -188,5 +191,5 @@ export function updateNeighborHashes(state: ControllerState, graph: CallGraph, r
 }
 
 export function eligibleState(fn: FunctionState): boolean {
-  return !fn.dead && fn.handwritten === false && !fn.manuallySkipped;
+  return !fn.dead && fn.handwritten === false && fn.libraryStub !== false && !fn.manuallySkipped;
 }

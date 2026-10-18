@@ -1,6 +1,7 @@
 # Phase 8 — Harness-wide provenance fixes
 
-Status: proposed. Depends on:
+Status: implemented; synthetic/integration suite passes. Real project activation
+remains governed by the unmet native gates in the preceding phases. Depends on:
 
 - Phase 3: the plaintext provenance records and the exact-comparison
   principles.

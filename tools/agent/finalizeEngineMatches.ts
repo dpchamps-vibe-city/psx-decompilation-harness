@@ -1,4 +1,5 @@
 import { projectRoot } from "../lib/runtimeContext.js";
+import { checkCandidateContainer } from "../lib/containerAcceptance.js";
 /**
  * finalizeEngineMatches.ts — automated, reproducible finalization of the
  * reconstruction engine's byte-exact matches into the source tree.
@@ -124,7 +125,7 @@ function oracleVerdict(functionName: string, integrated: string, tag: string): {
       assemble: true, useOverrides: true, containerKind: location.container.kind,
     });
     if (!artifacts.object) return { error: "no object" };
-    return { verdict: compareFunction(functionName, { objectPath: artifacts.object, container: location.container }).verdict };
+    return { verdict: compareFunction(functionName, { objectPath: artifacts.object, candidateSource: artifacts.source, container: location.container }).verdict };
   } catch (error) {
     return { error: (error instanceof Error ? error.message : String(error)).slice(0, 120) };
   }
@@ -181,6 +182,8 @@ export function finalizeMatch(functionName: string, write: boolean): FinalizeOut
     const result = oracleVerdict(functionName, integrated, dropGlobalExterns ? "shared" : "own");
     if ("error" in result) { lastError = result.error; continue; }
     if (result.verdict === "match") {
+      try { checkCandidateContainer(functionName, [{ path: srcPath, after: integrated }]); }
+      catch (error) { lastError = String(error); continue; }
       if (write) writeFileSync(srcPath, integrated);
       return { functionName, status: "integrated" };
     }
@@ -216,7 +219,7 @@ function main(): void {
     for (const o of group.slice(0, 6)) console.log(`      ${o.functionName}${o.detail ? ` (${o.detail})` : ""}`);
     if (group.length > 6) console.log(`      … and ${group.length - 6} more`);
   }
-  if (!write && integrated.length > 0) console.log(`\nRe-run with --write to apply, then verify with 'npm run check-all' / 'npm run check -- --container <id>'.`);
+  if (!write && integrated.length > 0) console.log("\nFull container checks passed transactionally. Re-run with --write to apply.");
 }
 
 if (process.argv[1] && (process.argv[1].endsWith("/finalizeEngineMatches.ts") || process.argv[1].endsWith("\\finalizeEngineMatches.ts"))) {

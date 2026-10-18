@@ -2,11 +2,13 @@
  * version, installation path, Git revision and producer provenance. */
 import { relative, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
-import { configuredAssembler, configuredAssemblerConfig, configuredCppFrontend, configuredFlags, configuredFileFlags, loadToolchain, toolchainExecutables, type FlagContext } from "./toolchain.js";
+import { configuredAssembler, configuredAssemblerConfig, configuredCppFrontend, configuredCompilerSource, configuredFlags, configuredFileFlags, loadToolchain, toolchainExecutables, type FlagContext } from "./toolchain.js";
 import { contextForProject, projectRoot, runtimeContext, type RuntimeContext } from "./runtimeContext.js";
 import { fileDigest } from "./contentCache.js";
+import { executedToolIdentity } from "./toolProvenance.js";
+import { assemblerIdentity } from "./assembler.js";
 
-export const COMPONENT_CONTRACTS = Object.freeze({ preparation: "preparation-v2", context: "declaration-context-v3", preprocess: "preprocess-v1", residual: "residual-waypoints-v2", compilation: "production-compile-v1" });
+export const COMPONENT_CONTRACTS = Object.freeze({ preparation: "preparation-v2", context: "declaration-context-v3", preprocess: "preprocess-v1", residual: "residual-waypoints-v2", compilation: "production-compile-v2" });
 export function stableHash(value: unknown): string {
   const stable = (v: any): any => Array.isArray(v) ? v.map(stable) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map(k => [k, stable(v[k])])) : v;
   return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
@@ -32,10 +34,13 @@ export function compilationIdentity(root = projectRoot(), flags?: FlagContext, s
   const context = contextForProject(root), config = loadToolchain(root), assembler = configuredAssembler(flags, root),
     tools = toolchainExecutables(root, assembler.kind === "gas" ? ["maspsx"] : []), frontend = configuredCppFrontend(root);
   return { compatibility: COMPONENT_CONTRACTS.compilation, compiler: { family: config.compiler.family, version: config.compiler.version },
-    // Preserve v1 identities when assembler is omitted; explicit selections are keyed.
-    ...(configuredAssemblerConfig(flags, root) ? { assembler } : {}),
+    // Explicit selections and declared stages join the executed-tool identity.
+    ...(configuredAssemblerConfig(flags, root) ? { assembler: { ...assembler, stages: assemblerIdentity(flags, root).stages } } : {}),
     tools: { ...Object.fromEntries(["cc1", "cpp", "as", ...(assembler.kind === "maspsx" ? ["maspsx"] : []), "objdump"].map(name => [name, tools[name]?.sha256 ?? "unavailable"])),
-      ...(assembler.kind === "gas" ? { assemblerImplementation: fileDigest(`${context.harnessRoot}/tools/lib/assembler.ts`) } : {}), cppFrontend: frontend ? fileDigest(frontend) : "unavailable" },
+      ...(assembler.kind === "gas" ? { assemblerImplementation: fileDigest(`${context.harnessRoot}/tools/lib/assembler.ts`) } : { maspsxPackage: (assemblerIdentity(flags, root) as any).maspsx.packageSha256 }), cppFrontend: frontend ? fileDigest(frontend) : "unavailable" },
+    toolPins: config.toolPins ?? {},
+    compilerSourcePin: configuredCompilerSource(root) ? fileDigest(`${configuredCompilerSource(root)}/pin.json`) : null,
+    linkedLibraries: Object.fromEntries(["cpp", "cc1", "as"].map(name => [name, tools[name]?.path ? executedToolIdentity(name as "as", root).dependencies.map(d => [d.path.split("/").pop(), d.sha256]) : "unavailable"])),
     flags: Object.fromEntries(["cpp", "cc1", "as", ...(assembler.kind === "maspsx" ? ["maspsx"] : [])].map(name => [name, semanticFlags(configuredFlags(name as "cc1", flags, root).concat(name === "cc1" && stem ? configuredFileFlags(stem, root) : []), context)])),
   };
 }

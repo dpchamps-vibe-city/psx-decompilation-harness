@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { filesUnder } from "../lib/contentCache.js";
 import { readPsyqLib } from "../lib/psyqMembers.js";
+import { readLnk } from "../lib/objectFormats/lnk.js";
 import { readRelocatableObject, type RelocatableObject } from "../lib/relocatableObject.js";
 import { configuredSdk } from "../lib/toolchain.js";
 import { projectRoot } from "../lib/runtimeContext.js";
@@ -39,48 +40,14 @@ export function indexedLoadCensus(object: RelocatableObject) {
  * Layout follows the supported LIB/LNK converter record grammar. */
 export function lnkPackaging(bytes: Buffer) {
   const sections: Array<{ id: number; name: string }> = [], files: string[] = [];
-  let pos = 4, complete = false, error: string | undefined;
-  const need = (size: number) => { if (pos + size > bytes.length) throw new Error(`Truncated LNK at ${pos}`); };
-  const skip = (size: number) => { need(size); pos += size; };
-  const byte = () => { need(1); return bytes[pos++]!; };
-  const u16 = () => { need(2); const value = bytes.readUInt16LE(pos); pos += 2; return value; };
-  const text = () => { const size = byte(); need(size); const value = bytes.toString("latin1", pos, pos + size); pos += size; return value; };
-  const expression = (depth = 0): void => {
-    if (depth > 64) throw new Error("LNK expression nesting exceeds 64");
-    const op = byte();
-    if (op === 0) skip(4);
-    else if ([2, 4, 12, 22].includes(op)) skip(2);
-    else if ([44, 46, 50].includes(op)) { expression(depth + 1); expression(depth + 1); }
-    else throw new Error(`Unknown LNK expression ${op}`);
-  };
+  let complete = false, error: string | undefined;
   try {
-    if (bytes.toString("hex", 0, 4) !== "4c4e4b02") throw new Error("Unsupported LNK magic/version");
-    while (pos < bytes.length) {
-      const op = byte();
-      if (op === 0) { complete = true; break; }
-      switch (op) {
-        case 2: skip(u16()); break;
-        case 6: case 50: case 60: skip(2); break;
-        case 8: skip(4); break;
-        case 10: skip(3); expression(); break;
-        case 12: case 48: skip(8); text(); break;
-        case 14: skip(2); text(); break;
-        case 16: { const id = u16(); skip(3); sections.push({ id, name: text() }); break; }
-        case 18: skip(6); text(); break;
-        case 28: skip(2); files.push(text()); break;
-        case 46: skip(1); break;
-        case 52: skip(3); break;
-        case 54: skip(4); break;
-        case 56: skip(6); break;
-        case 58: skip(8); break;
-        case 74: skip(28); text(); break;
-        case 76: case 78: case 80: skip(10); break;
-        case 82: skip(14); text(); break;
-        case 84: skip(14); skip(u16() * 2); text(); text(); break;
-        case 86: skip(36); text(); break;
-        default: throw new Error(`Unknown LNK record ${op} at ${pos - 1}`);
-      }
+    const object = readLnk(bytes);
+    for (const record of object.records ?? []) if (record.opcode === 16) {
+      const id = record.bytes.readUInt16LE(1), length = record.bytes[6]!;
+      sections.push({ id, name: record.bytes.toString("latin1", 7, 7 + length) });
     }
+    files.push(...object.files); complete = true;
   } catch (cause) { error = String(cause); }
   const firstSectionId = sections[0]?.id ?? null;
   const constructors = sections.some(s => [".ctors", ".dtors"].includes(s.name));

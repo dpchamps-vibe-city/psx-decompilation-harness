@@ -6,12 +6,13 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { projectRoot } from "../lib/runtimeContext.js";
-import { requireLibraryFunction, libraryMembers, withLibraryMetadata } from "../lib/libraryTargets.js";
-import { libraryAssemblyParts, librarySourceScaffold } from "../lib/libraryAssembly.js";
+import { compareLibraryObjects, requireLibraryFunction, libraryMembers, withLibraryMetadata } from "../lib/libraryTargets.js";
+import { libraryAssemblyParts, librarySourceScaffold, writeLibraryAssemblyParts } from "../lib/libraryAssembly.js";
 import { librarySourceFiles, libraryAssemblyTu, libraryTuStatus, isDirectoryTu } from "../lib/libraryTranslationUnit.js";
 import { compareRelocatableObjects, type ObjectComparison } from "../lib/relocatableObject.js";
 import { snapshot } from "../lib/contentCache.js";
-import { loadLibraryProject } from "../lib/project.js";
+import { libraryContext, loadLibraryProject } from "../lib/project.js";
+import { assemble } from "../lib/assembler.js";
 import { sdkPrototypes } from "./calleeTruth.js";
 import { compileSource, rejectionFromDiagnostics } from "./decompToolchain.js";
 import { prepareLibraryFunction } from "./libraryTarget.js";
@@ -42,20 +43,31 @@ export function checkLibrarySplits(): LibrarySplitCheckReport {
   const report: LibrarySplitCheckReport = { status: "failed",
     scope: "generated original assembly splits only; not live C or decompilation completion", members: [],
     report: relative(root, join(directory, "report.json")) };
-  const parts = members.map(member => ({ member, parts: libraryAssemblyParts(member, readFileSync(join(root, member.assembly), "utf8")) }));
   const paths = ["toolchain.json", "project.json", ...project.headers.reference, ...project.headers.owned,
-    ...members.map(m => m.input), ...parts.flatMap(({ member, parts }) => parts.map(p => `build/libraries/nonmatchings/${member.id}/${p.symbol}.s`))];
+    ...members.map(m => m.input), ...members.map(m => m.assembly)];
   const before = snapshot(root, paths);
   withLibraryMetadata(() => {
-    for (const { member, parts: fragments } of parts) {
+    for (const member of members) {
       const output = join(directory, member.id); mkdirSync(output);
       const source = join(output, "original-scaffold.c");
-      writeFileSync(source, librarySourceScaffold(member, project.headers.context, fragments));
       try {
-        const artifacts = compileSource(source, join(output, "compile"), member.id, { assemble: true, containerKind: "library", containerId: member.id });
-        const rejection = rejectionFromDiagnostics(artifacts.diagnostics);
-        if (rejection) throw new Error(`Invalid scaffold: ${rejection}`);
-        const comparison = compareRelocatableObjects(member.bytes, readFileSync(artifacts.object!));
+        const fragments = libraryAssemblyParts(member, readFileSync(join(root, member.assembly), "utf8"));
+        const folder = join(output, "fragments");
+        writeLibraryAssemblyParts(member, fragments, root, folder);
+        let object: string;
+        if (fragments.some(p => p.symbol === "__library_member_assembly")) {
+          const driver = join(output, "original-scaffold.s");
+          writeFileSync(driver, ["__library_member_symbols", "__library_member_assembly"].map(s => `.include ${JSON.stringify(relative(root, join(folder, `${s}.s`)))}`).join("\n") + "\n");
+          object = join(output, "original-scaffold.o");
+          assemble(libraryContext(member.id, root), driver, object, root);
+        } else {
+          writeFileSync(source, librarySourceScaffold(member, project.headers.context, fragments, relative(root, folder)));
+          const artifacts = compileSource(source, join(output, "compile"), member.id, { assemble: true, containerKind: "library", containerId: member.id });
+          const rejection = rejectionFromDiagnostics(artifacts.diagnostics);
+          if (rejection) throw new Error(`Invalid scaffold: ${rejection}`);
+          object = artifacts.object!;
+        }
+        const comparison = compareLibraryObjects(member, readFileSync(object));
         report.members.push({ id: member.id, verdict: comparison.verdict, differences: comparison.differences });
       } catch (error) { report.members.push({ id: member.id, verdict: "failed", differences: [String(error)] }); }
     }
@@ -87,7 +99,7 @@ export async function preflightLibraryFunction(name: string): Promise<LibraryPre
     const artifacts = compileSource(member.source, join(directory, "compile"), member.id, { assemble: true, containerKind: "library", containerId: member.id });
     const rejection = rejectionFromDiagnostics(artifacts.diagnostics);
     if (rejection) throw new Error(`Invalid C: ${rejection}`);
-    report.memberComparison = compareRelocatableObjects(member.bytes, readFileSync(artifacts.object!));
+    report.memberComparison = compareLibraryObjects(member, readFileSync(artifacts.object!));
     if (report.memberComparison.verdict !== "match") throw new Error(report.memberComparison.differences.join("; "));
     report.stages.push({ name: stage, status: "passed", detail: "All original code/data bytes, symbols and relocations retained; backlog is not reconstructed C" });
     stage = "selected-function preparation";

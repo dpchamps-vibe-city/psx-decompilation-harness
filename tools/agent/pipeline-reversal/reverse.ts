@@ -213,7 +213,7 @@ export function reversePipeline(options: ReverseOptions): ReversalArtifacts {
      the container for every overlay symbol, so nothing has to be passed in. */
   const target = resolveFunctionTarget(functionName);
   const container = target.coordinate.kind === "image" ? requireFunctionLocation(functionName).container : undefined;
-  const oracle = compareFunction(functionName, { objectPath, ...(container ? { container } : {}) });
+  const oracle = compareFunction(functionName, { objectPath, ...(!candidateProvenance.value.source.startsWith("(") ? { candidateSource: candidateProvenance.value.source } : {}), ...(container ? { container } : {}) });
   /* Nothing downstream can read a stub. The lift would produce the original
      words on both sides and every waypoint would agree, so the reversal would
      report a perfect program that no compiler produced. Refuse at the seam. */

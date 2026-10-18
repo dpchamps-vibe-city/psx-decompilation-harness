@@ -16,6 +16,10 @@ for (const kind of ["exe", "overlay"] as const) test(`actual ${kind} cc1 argv ag
   if (kind === "exe") await f.install([target]);
   else await f.install([{ name: "fixture_entry", offset: 0, words: [0x03e00008, 0] }], { ovl_11: [target] });
   f.put(sourcePath, source);
+  const oracle = await f.load<typeof import("../lib/functionOracle.js")>("tools/lib/functionOracle.ts");
+  assert.deepEqual(oracle.targetWordsOf(name).map(word => word.raw), compiled.words, "the original-word oracle selects the symbol's owner by default");
+  assert.equal(oracle.compareFunction(name, { objectPath: compiled.art.object! }).verdict, "match");
+  if (kind === "overlay") assert.throws(() => oracle.targetWordsOf(name, { container: "exe" }), /no subsegment/, "an explicit owner is not silently replaced");
   f.put(`${kind === "exe" ? "build" : "build/ovl_11"}/asm/nonmatchings/${name}/${name}.s`, `.set noreorder\n.text\n.globl ${name}\n${name}:\njr $ra\naddiu $v0,$a0,3\n`);
   const tc = JSON.parse(readFileSync(join(f.root, "toolchain.json"), "utf8"));
   const actual = tc.tools.cc1, log = join(f.root, "build/cc1-argv.jsonl"), wrapper = join(f.root, "build/cc1-wrapper.sh"), body = join(f.root, "build/cc1-wrapper.mjs");

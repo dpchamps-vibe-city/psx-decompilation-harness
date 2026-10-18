@@ -112,14 +112,19 @@ test("library reconstruction produces exact clean C only after whole-member veri
   });
 });
 
-test("a word-exact function cannot hide a differing ELF header or missing neighboring function", t => {
+test("library reconstruction ignores ELF packaging flags but still verifies the whole member", t => {
   const f = fixture(t);
   fixtureContext(f.root, () => {
     const bytes = f.compile("int f(void) { return 7; }\n");
     bytes.writeUInt32LE(bytes.readUInt32LE(36) ^ 1, 36);
     let key = f.select(bytes);
     let result = withContextMode("cold", () => reconstructFunction({ functionName: key, notify: () => {} }));
-    assert.notEqual(result.state, "exact-candidate");
+    assert.equal(result.state, "exact-candidate", "ELF header flags are packaging, not emitted program content");
+    assert.equal(result.winner!.memberVerification!.verdict, "match");
+
+    key = f.select(f.compile("int f(void) { return 7; }\nint cell = 3;\n"));
+    result = withContextMode("cold", () => reconstructFunction({ functionName: key, notify: () => {} }));
+    assert.notEqual(result.state, "exact-candidate", "matching code cannot hide missing initialized storage");
     assert.ok(result.candidates.some(c => c.matchedWords === c.totalWords && c.memberVerification!.verdict === "mismatch"));
     assert.equal(result.winner, undefined);
     // Compiling a fixture after selection is explicitly an EXE-profile compile;

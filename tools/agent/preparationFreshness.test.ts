@@ -1,15 +1,16 @@
 import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { packetIsFresh, hashFile, stagePrepared } from "./prepareFunction.js";
 import { configuredToolchainIdentity } from "./decompToolchain.js";
 import type { PreparationPacket } from "./campaign/packet.js";
+import { configuredCompilerAnalysis } from "../lib/toolchain.js";
+import { projectFixture } from "../testing/projectFixture.js";
 
 test("packet freshness separates ledger diagnostics while checking artifacts and discovery membership", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "preparation-freshness-")); t.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const dir of ["src", "build", "include"]) mkdirSync(join(root, dir));
+  const { root } = projectFixture(t);
+  for (const dir of ["src", "build", "include"]) mkdirSync(join(root, dir), { recursive: true });
   for (const [p, value] of [["src/f.c", "void f(void) {}\n"], ["include/common.h", "/* input */"], ["build/draft.c", "void f(void) { }\n"],
     ["build/raw.c", "void f(void) { }\n"], ["build/f.i", "cpp"], ["build/f.s", "assembly"], ["build/f.o", "object"]]) writeFileSync(join(root, p!), value!);
   const artifact = (path: string) => ({ path, sha256: hashFile(join(root, path)) });
@@ -17,9 +18,13 @@ test("packet freshness separates ledger diagnostics while checking artifacts and
     memberships: { src: ["src/f.c"] }, tools: configuredToolchainIdentity() },
     primary: { ...artifact("build/draft.c"), text: readFileSync(join(root, "build/draft.c"), "utf8"), origin: "m2c" },
     compilation: { preprocessed: artifact("build/f.i"), assembly: artifact("build/f.s"), object: artifact("build/f.o") },
-    generation: { raw: "build/raw.c", rawHash: hashFile(join(root, "build/raw.c")) } } as unknown as PreparationPacket;
+    generation: { raw: "build/raw.c", rawHash: hashFile(join(root, "build/raw.c")) },
+    discovery: { compilerAnalysis: configuredCompilerAnalysis(root) } } as unknown as PreparationPacket;
   assert.equal(packetIsFresh(packet, root), true);
   assert.equal(packetIsFresh({} as PreparationPacket, root), false);
+  assert.equal(packetIsFresh({ ...packet, discovery: {} } as PreparationPacket, root), false, "missing compiler analysis is not fresh");
+  const changedAnalysis = { ...packet.discovery.compilerAnalysis!, reason: "changed diagnostic support" };
+  assert.equal(packetIsFresh({ ...packet, discovery: { ...packet.discovery, compilerAnalysis: changedAnalysis } }, root), false);
   writeFileSync(join(root, "build/ledger.jsonl"), "new diagnostic\n"); assert.equal(packetIsFresh(packet, root), true);
   writeFileSync(join(root, "src/newly-available.c"), "void other(void) {}\n"); assert.equal(packetIsFresh(packet, root), false);
   rmSync(join(root, "src/newly-available.c")); assert.equal(packetIsFresh(packet, root), true);

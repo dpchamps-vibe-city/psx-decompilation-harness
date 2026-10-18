@@ -14,6 +14,7 @@ import { attemptStaticFinalization, buildInputs, documentCompletion, inputIdenti
 import { DEFAULT_CONFIG } from "../../shared/config.ts";
 import { seedProjectFixture } from "../../../../tools/testing/projectFixture.js";
 import { checkSourcePolicy } from "../../shared/source-policy.ts";
+import { configuredCompilerAnalysis } from "../../../../tools/lib/toolchain.js";
 
 function fixture(t: { after: (f: () => void) => void }) {
   const root = mkdtempSync(join(tmpdir(), "prepared-lifecycle-")); t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -32,19 +33,19 @@ function fixture(t: { after: (f: () => void) => void }) {
     context: { index: emptyDeclarationIndex(), projection: "build/context.c", excluded: [], unknown: [], headers: ["common.h"] },
     generation: { status: "generated" }, compilation: { status: "succeeded", commands: [], diagnostics: "warning: retained" }, comparison: { status: "exact" },
     integration: { state: "staged", changes: ["src/f.c"], destinationHash: hashText(stub), blockers: [] },
-    discovery: { unknowns: [], report: null, priorExperiments: [], preflight: [] }, finalization: { status: "not-attempted" },
+    discovery: { unknowns: [], report: null, priorExperiments: [], preflight: [], compilerAnalysis: configuredCompilerAnalysis(root) }, finalization: { status: "not-attempted" },
   };
   return { root, stub, packet, attempt: { packet, path: "build/draft/packet.json" } };
 }
-test("an exact draft is CAS-staged and finalized without a solver, then documentation resumes by identity", async (t) => {
+test("an exact draft is CAS-staged and finalized without solver or documentation turns", async (t) => {
   const { root, packet, attempt } = fixture(t); let gates = 0;
   const result = await attemptStaticFinalization({ root, attempt, aborted: () => false,
     finalize: async () => { gates++; assert.equal(readFileSync(join(root, "src/f.c"), "utf8"), packet.primary!.text); return { passed: true, changedFiles: ["src/f.c"], detail: "all gates" }; } });
-  assert.equal(gates, 1); assert.equal(result.completed!.origin, "static"); assert.equal(result.completed!.documentation, "pending");
+  assert.equal(gates, 1); assert.equal(result.completed!.origin, "static"); assert.equal(result.completed!.documentation, "skipped");
   let turns = 0;
   const documented = await documentCompletion(root, result.completed!, async () => { turns++; return true; });
-  assert.equal(documented.documentation, "passed");
-  await documentCompletion(root, documented, async () => { turns++; return true; }); assert.equal(turns, 1);
+  assert.equal(documented.documentation, "skipped"); assert.equal(documented.verification, "passed");
+  assert.equal(turns, 0, "static matches retain their evidence without a model documentation turn");
 });
 test("noncompiling output and failed generation have useful handoffs, never residuals or writes", async (t) => {
   const { root, stub, packet, attempt } = fixture(t); packet.compilation.status = "failed"; packet.comparison.status = "not-available";
@@ -153,6 +154,18 @@ test("cancellation before integration makes zero finalization calls", async (t) 
   const result = await attemptStaticFinalization({ root, attempt, aborted: () => true, finalize: async () => { throw new Error("must not run"); } });
   assert.equal(result.completed, undefined); assert.equal(readFileSync(join(root, "src/f.c"), "utf8"), stub);
 });
+test("agent completion documentation resumes by identity and runs only once", async (t) => {
+  const { root } = fixture(t), inputs = buildInputs(root);
+  const completion: Completion = { origin: "agent", inputs, verifiedIdentity: inputIdentity(inputs), documentation: "pending", changedFiles: [] };
+  let turns = 0;
+  const document = async () => { turns++; return true; };
+  const documented = await documentCompletion(root, completion, document);
+  assert.equal(documented.documentation, "passed"); assert.equal(documented.verification, "passed");
+  assert.equal(documented.verifiedIdentity, completion.verifiedIdentity);
+  await documentCompletion(root, documented, document);
+  assert.equal(turns, 1);
+});
+
 test("documentation failure remains pending; source/header drift explicitly invalidates verification", async (t) => {
   const { root } = fixture(t); const inputs = buildInputs(root);
   const c: Completion = { origin: "agent", inputs, verifiedIdentity: inputIdentity(inputs), documentation: "pending", changedFiles: [] };

@@ -1,0 +1,210 @@
+{
+  "schemaVersion": 1,
+  "rows": [
+    {
+      "file": ".pi/extensions/psx-bootstrap/index.ts",
+      "descriptionsOnly": true,
+      "sha256": "3627ade6a90eb522d5141658b223a1cea95ffae154b20c10a87ede338d04afec"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/autoloop/commands.ts",
+      "descriptionsOnly": true,
+      "sha256": "5bda8a822aac57d77ede8e8f9694828715a30a87355c9e0b61b55e6ecae8f4c5"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/autoloop/handoff.ts",
+      "descriptionsOnly": true,
+      "sha256": "621050143d3461dcc652e1a1f783f5169d1a25018b43d4798a05ce5bfd275f12"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/autoloop/policy-verdict.ts",
+      "descriptionsOnly": true,
+      "sha256": "86a7627726f2b9b01275a908c273cca2391bdad3b71773f7c7f8b52697450a12"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/autoloop/prep.ts",
+      "descriptionsOnly": true,
+      "sha256": "12d0d8370ff439bcbf3e24df3ddfe9d5d4e18e7eb993e94f9b4a95d1ca87fb9c"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/autoloop/prompts.ts",
+      "descriptionsOnly": false,
+      "sha256": "b2074806b982ada68f19d0615936d3fea3fd893c6b092945fbf75404ce16dd17"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/index.ts",
+      "descriptionsOnly": true,
+      "sha256": "fa4b1fc859ac5ac9c4d3e887f2bd08a05785397a78da6cdfdeadda827d4287a4"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/analyze-target-schedule.ts",
+      "descriptionsOnly": true,
+      "sha256": "bae246a8d27330f211fc3295296fe0dc06d68102da0322ee5570d4e67778a53c"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/call-graph.ts",
+      "descriptionsOnly": true,
+      "sha256": "3090cdebfe5d78ad61f6158d9851e8a0c3f2492112ba51cbcc240d925d1e3c73"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/compiler-trace.ts",
+      "descriptionsOnly": true,
+      "sha256": "aee078556ef1525984081b27c5cdc7020b93191a15d0dc9ddcda6fe3480c4f1f"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/diagnostics.ts",
+      "descriptionsOnly": true,
+      "sha256": "1a822b521068f6e1b3b188fcfd1ec424697b2321e2e7354050c82f06ec49ecba"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/explain-diff.ts",
+      "descriptionsOnly": true,
+      "sha256": "e2f01d6c8a7332167d2ea608f1c71f4f067997ae0cd54da17378e9c013dab3ea"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/export-context.ts",
+      "descriptionsOnly": true,
+      "sha256": "3b1dd7125b836e2431f5dbe7f1ee52b80bdf4243b4da134f66d23573dd416936"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/finalize-function.ts",
+      "descriptionsOnly": true,
+      "sha256": "a7af4c60bdf343f952fb2fc4199f57e197300c02981664311b8765f6b1823c50"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/fuzz-variants.ts",
+      "descriptionsOnly": true,
+      "sha256": "2b30de028ecfe545e4234175b45e32487feb9933bcf656350d9117cdf163ad51"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/m2c.ts",
+      "descriptionsOnly": true,
+      "sha256": "9d28341f000b51ebbe5a767dabd75dca34a9b11d407cda997f2c2d489a494f21"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/park-function.ts",
+      "descriptionsOnly": true,
+      "sha256": "bb3e4864f2907abd390f94153ea8168de2920cea4ce731bfeeadc025ec604fb8"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/project-build.ts",
+      "descriptionsOnly": true,
+      "sha256": "d9acc60b9c922c54a75a73fce8291c000fb32b7a361321bb25c5ee958dfe9f44"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/search-source-shapes.ts",
+      "descriptionsOnly": true,
+      "sha256": "b873c10b10c157dde16d778d7991ac2980ab7761ce9411129152703563661e6b"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/synthesize-source-shapes.ts",
+      "descriptionsOnly": true,
+      "sha256": "06b5e91e78c4654157d8a6ef3f46472ec3323f89b23e1fc8606b13d3bffefd0b"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/tools/verify-build.ts",
+      "descriptionsOnly": true,
+      "sha256": "3199639a97f550572e565263af7255ead02c2469a23ab19f2b96fa54a7248775"
+    },
+    {
+      "file": ".pi/extensions/psx-resources/controller.ts",
+      "descriptionsOnly": true,
+      "sha256": "dbf16e3affbed0003787fcffd4754c7ec49bff34e530f8a34d12b0b1991f81d3"
+    },
+    {
+      "file": ".pi/extensions/psx-resources/tools/index.ts",
+      "descriptionsOnly": true,
+      "sha256": "be51e95495779853028552a55d3a6c925796313cffd19e01236ff482e810d89a"
+    },
+    {
+      "file": ".pi/extensions/psx-resources/tools/specs.ts",
+      "descriptionsOnly": true,
+      "sha256": "3b736ffcd68c048d6a3365390032340b2ff0c31a16c41c788bd30f7b37166387"
+    },
+    {
+      "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
+      "descriptionsOnly": false,
+      "sha256": "633beadbea355e2cec0ba153823a8d1b9e884a742321a1a5bca5f052ea2bba57"
+    },
+    {
+      "file": ".pi/skills/psx-build-resource-parser/SKILL.md",
+      "descriptionsOnly": false,
+      "sha256": "9829bc4e9698f47656b357fef9a6315e1a9823ffa81aca3bace12ba32a76a920"
+    },
+    {
+      "file": ".pi/skills/psx-decompile-function/SKILL.md",
+      "descriptionsOnly": false,
+      "sha256": "433a733b9bbd4d1ac4021436f399410b8b49142524dc61eaf1e0ebcc5f43015c"
+    },
+    {
+      "file": ".pi/skills/psx-identify-project/SKILL.md",
+      "descriptionsOnly": false,
+      "sha256": "5a4b448451a19244879dfa6e1cb5746d9c8e941691f050e530678293f16d4978"
+    },
+    {
+      "file": ".pi/skills/psx-post-decompile-documentation/SKILL.md",
+      "descriptionsOnly": false,
+      "sha256": "3dc0c7661080caa8fe071cbb80955d053285414aa04bfc491fe814a9a31de29c"
+    },
+    {
+      "file": ".pi/skills/psx-prepare-function/SKILL.md",
+      "descriptionsOnly": false,
+      "sha256": "33bb985b462d44c8f75addc2e79774ec2f0ed44c1d375c58c5dec97dade1e336"
+    },
+    {
+      "file": ".pi/skills/psx-project-refinement/SKILL.md",
+      "descriptionsOnly": false,
+      "sha256": "c8bd36fe35789662251a8adf343a6ffc1fe0e15922f2292c643f7d27b2df7c69"
+    },
+    {
+      "file": ".pi/skills/psx-refine-function/SKILL.md",
+      "descriptionsOnly": false,
+      "sha256": "e40fb428fce526044c9e77c029c3f2d8c1c0287084e064809871dbe47afac560"
+    },
+    {
+      "file": "AGENTS.md",
+      "descriptionsOnly": false,
+      "sha256": "ee38e3cb8fe5c5db84103878eae70333f9d98784e15a29c5adab513d8a1285ca"
+    },
+    {
+      "file": "prompts/reference/allocation.md",
+      "descriptionsOnly": false,
+      "sha256": "d3802a5d352e333ee34e49764b0fc5125276d85ac2723811c134a1a1547dd1a0"
+    },
+    {
+      "file": "prompts/reference/declarations.md",
+      "descriptionsOnly": false,
+      "sha256": "1e5d1d550309b77f96a1ec362179e8ce03575a46ed74b50a091ea9bbc5d96bb7"
+    },
+    {
+      "file": "prompts/reference/flags.md",
+      "descriptionsOnly": false,
+      "sha256": "c078e6be20a458e5fc44c7d3ed00290e5b2dac9ec59a6f6efbaaf254a3ea918b"
+    },
+    {
+      "file": "prompts/reference/loop.md",
+      "descriptionsOnly": false,
+      "sha256": "2ddb43c931d53804717fe300d12b6f8c3217ebd408b0dc8262e4ab53198ed6db"
+    },
+    {
+      "file": "prompts/reference/population.md",
+      "descriptionsOnly": false,
+      "sha256": "67342a9610fb21a5af883b132c2199f83e7a5ec8dbd04e430ec4d55a31639e8a"
+    },
+    {
+      "file": "prompts/reference/schedule.md",
+      "descriptionsOnly": false,
+      "sha256": "34d21f27b9f53558a45c5914006355b5887dd824d13196b75c127685d8c12bb1"
+    },
+    {
+      "file": "prompts/reference/sdk.md",
+      "descriptionsOnly": false,
+      "sha256": "ac03894422f244451713585de1bee213aa0f1eb39d8ffcdcddda726681bb6e6a"
+    },
+    {
+      "file": "prompts/reference/stuck.md",
+      "descriptionsOnly": false,
+      "sha256": "727ab988409a52efa4e926bdfb05f8306c09f33c842a6279c6360226b50b0775"
+    }
+  ]
+}

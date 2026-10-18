@@ -994,7 +994,7 @@ export function auditDefinitions(scratch: string, auditCallers = false,
       const prototype = prototypesIn(scope.source, displayPath(source), scope.lineOf).find((p) => p.kind === "definition" && p.name === node.name);
       if (!prototype) continue; /* disabled attempts and stubs are not definitions */
       const artifact = compileSource(source, join(scratch, node.name), node.name, { assemble: true, containerKind: node.container.kind });
-      const verdict = compareFunction(node.name, { objectPath: artifact.object!, container: node.container });
+      const verdict = compareFunction(node.name, { objectPath: artifact.object!, candidateSource: artifact.source, container: node.container });
       if (verdict.verdict !== "match") { report.unknowns.push({ function: node.name, reason: `definition is not matched: ${verdict.verdict}` }); continue; }
       report.matched++;
       const target = evidence.target!(node.name);

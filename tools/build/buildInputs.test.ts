@@ -13,7 +13,7 @@ test("npm build tracks headers, .mk flags, tools and new include members", t => 
   for (const dir of ["src", "include", "bin", "configs"])  mkdirSync(join(root, dir));
   const compiler = join(root, "bin/compiler.mjs"), assembler = join(root, "bin/assembler.mjs");
   writeFileSync(compiler, `#!${process.execPath}\nimport fs from 'node:fs';const a=process.argv.slice(2),i=a.indexOf('-o');fs.appendFileSync('events','compile\\n');fs.writeFileSync(a[i+1],fs.readFileSync(a[i-1]));\n`, { mode: 0o755 });
-  writeFileSync(assembler, `import fs from 'node:fs';const a=process.argv.slice(2);fs.writeFileSync(a[a.indexOf('-o')+1],fs.readFileSync(a.at(-1)));\n`);
+  writeFileSync(assembler, `import fs from 'node:fs';const a=process.argv.slice(2);const header=Buffer.alloc(52);header.write('\\x7fELF');header[4]=header[5]=header[6]=1;header.writeUInt16LE(1,16);header.writeUInt16LE(8,18);header.writeUInt32LE(1,20);header.writeUInt16LE(52,40);fs.writeFileSync(a[a.indexOf('-o')+1],Buffer.concat([header,fs.readFileSync(a.at(-1))]));\n`);
   const config = JSON.parse(readFileSync(join(HARNESS_ROOT, "toolchain.json"), "utf8"));
   config.compiler.family = "fixture"; config.tools.cc1 = compiler; config.tools.python = process.execPath; config.tools.maspsx = assembler;
   config.includeDirs = ["include"]; config.flags.cpp = ["-undef"];

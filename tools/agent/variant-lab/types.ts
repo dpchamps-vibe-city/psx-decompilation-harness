@@ -192,7 +192,7 @@ export interface ToolIdentity {
   compiler: { path: string; sha256: string; version: string };
   assemblerShim?: { path: string; sha256: string };
   cpp: string;
-  assembler: string | { kind: "maspsx" | "gas"; inputRewrites: string[]; maspsx?: { path: string; sha256: string } };
+  assembler: string | { kind: "maspsx" | "gas"; objectFormat: "elf" | "ecoff"; postAssembly: string[]; maspsx?: { path: string; sha256: string } };
   assemblerVersion?: string;
   objdump: string;
 }

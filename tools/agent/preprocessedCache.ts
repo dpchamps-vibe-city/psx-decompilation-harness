@@ -1,10 +1,11 @@
 import { COMPONENT_CONTRACTS, stableHash } from "../lib/cacheIdentity.js";
+import { scanDependencies, dependencyScannerIdentity, dependencyPaths } from "../lib/dependencyScanner.js";
 import { projectRoot } from "../lib/runtimeContext.js";
 /** The real target cpp, reused by content + transitive include/search identity.
  * Cached text is immutable; inference views receive their own declaration models. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { digest, fileDigest, filesUnder, readCache, snapshot, writeCache } from "../lib/contentCache.js";
@@ -14,12 +15,7 @@ import { libraryMemberForSource, requireLibraryFunction } from "../lib/libraryTa
 import { isDirectoryTu, libraryCompileInput, librarySourceFiles } from "../lib/libraryTranslationUnit.js";
 import { configuredCppFrontend, configuredFlags, configuredTool, executablePath, loadToolchain } from "../lib/toolchain.js";
 
-export function dependencyPaths(text: string, root: string): string[] {
-  const first = text.replace(/\\\r?\n/g, " ").split("\n")[0] ?? "";
-  const colon = first.indexOf(":");
-  if (colon < 0) throw new Error("cpp did not emit a dependency rule");
-  return (first.slice(colon + 1).match(/(?:\\.|[^\s])+/g) ?? []).map((p) => resolve(root, p.replace(/\\(.)/g, "$1")));
-}
+export { dependencyPaths } from "../lib/dependencyScanner.js";
 const searchMemo = new Map<string, string[]>();
 interface RequestMetadata { tools?: { cpp: string; frontend: string; hashes: string[]; config: string }; members: Map<string, string[]>; names: Set<string> }
 const includeCandidate = (path: string, names: Set<string>) => /\.(?:h|inc)$/.test(path) || !basename(path).includes(".") || names.has(basename(path));
@@ -42,7 +38,7 @@ export function withPreprocessorMetadata<T>(task: () => T): T {
     validate(); return result;
   });
 }
-function cppConfiguration(root = projectRoot()): string { return stableHash({ cpp: configuredTool("cpp", root), family: loadToolchain(root).compiler.family }); }
+function cppConfiguration(root = projectRoot()): string { return stableHash({ cpp: configuredTool("cpp", root), frontend: configuredCppFrontend(root), family: loadToolchain(root).compiler.family }); }
 function toolConfiguration(root = projectRoot()): { cpp: string; frontend: string; hashes: string[]; config: string } {
   const state = metadata.getStore();
   if (state?.tools) return state.tools;
@@ -105,7 +101,7 @@ export function cachedPreprocess(source: string, root = projectRoot(), flags?: s
   const member = context?.kind === "library" && !source.endsWith(".h") ? (name ? requireLibraryFunction(name, root).member : libraryMemberForSource(source.slice(root.length + 1), root)) : undefined;
   const composition = member && isDirectoryTu(member) ? snapshot(root, librarySourceFiles(member, root)) : undefined;
   const input = member && isDirectoryTu(member) ? libraryCompileInput(member, source, join(root, "build/cache/preprocessed/inputs", digest(source)), root, name ? resolveFunctionTarget(name, root).symbol : undefined) : source;
-  const preprocessing = preprocessingTools(), { cpp } = preprocessing.tools;
+  const preprocessing = preprocessingTools(root), { cpp } = preprocessing.tools;
   const { key: searchKey, dirs } = includeSearch(flags, root, preprocessing);
   const search = [...new Set([dirname(source), ...dirs])];
   const membershipOf = (names: string[]) => includeMembership(search, names);
@@ -113,14 +109,17 @@ export function cachedPreprocess(source: string, root = projectRoot(), flags?: s
     compatibility: COMPONENT_CONTRACTS.preprocess };
   const key = digest(JSON.stringify(identity));
   const path = join(root, "build/cache/preprocessed", `${digest(source)}.json`);
-  type Cached = Omit<ProcessedBundle, "cache"> & { searchNames: string[]; membership: Array<[string, string[]]> };
+  type Cached = Omit<ProcessedBundle, "cache"> & { searchNames: string[]; membership: Array<[string, string[]]>; scanner: ReturnType<typeof dependencyScannerIdentity> };
   const prior = readCache<Cached>(path, key);
   if (prior && JSON.stringify(prior.membership) === JSON.stringify(membershipOf(prior.searchNames)) &&
     JSON.stringify(prior.inputs) === JSON.stringify(snapshot(root, prior.dependencies))) return { ...prior, cache: "hit" };
   const temp = mkdtempSync(join(tmpdir(), "psx-cpp-cache-"));
   try {
     const deps = join(temp, "source.d"), output = join(temp, "source.i");
-    const run = () => execFileSync(cpp, [...flags, "-MD", "-MF", deps, "-MT", "source", input, "-o", output], { cwd: root, maxBuffer: 32 * 1024 * 1024 });
+    const run = () => {
+      writeFileSync(deps, scanDependencies(input, flags!, root));
+      execFileSync(cpp, [...flags!, input, "-o", output], { cwd: root, maxBuffer: 32 * 1024 * 1024 });
+    };
     run();
     const dependenciesOf = () => [...new Set([...dependencyPaths(readFileSync(deps, "utf8"), root), ...(member && isDirectoryTu(member) ? librarySourceFiles(member, root).map(p => resolve(root, p)) : [])])];
     let dependencies = dependenciesOf();
@@ -139,7 +138,7 @@ export function cachedPreprocess(source: string, root = projectRoot(), flags?: s
     if (JSON.stringify(before) !== JSON.stringify(after) || identity.sourceHash !== fileDigest(source) ||
       JSON.stringify(membership) !== JSON.stringify(membershipOf(searchNames)))
       throw new Error("preprocessor inputs changed during preprocessing");
-    const value = { text: readFileSync(output, "utf8"), dependencies, inputs: snapshot(root, dependencies), searchNames, membership };
+    const value = { text: readFileSync(output, "utf8"), dependencies, inputs: snapshot(root, dependencies), searchNames, membership, scanner: dependencyScannerIdentity(root) };
     writeCache(path, key, value);
     return { ...value, cache: "miss" };
   } finally { rmSync(temp, { recursive: true, force: true }); }

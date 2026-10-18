@@ -37,7 +37,7 @@ export interface PreparationPacket {
     inputs: Record<string, string>; fingerprint: string; tools: unknown; flags: string[];
     memberships?: Record<string, string[]>;
   };
-  verification?: { scope: "function" | "translation-unit"; mode: "linked-bytes" | "relocatable-object" };
+  verification?: { scope: "function" | "translation-unit"; mode: "linked-bytes" | "relocatable-object" | "original-object" };
   primary: PacketSource | null;
   context: { index: DeclarationIndex; projection: string; excluded: string[]; unknown: string[]; headers: string[] };
   generation: { status: "not-attempted" | "generated" | "failed" | "unsupported"; raw?: string; rawHash?: string; draftHash?: string; command?: CommandRecord };

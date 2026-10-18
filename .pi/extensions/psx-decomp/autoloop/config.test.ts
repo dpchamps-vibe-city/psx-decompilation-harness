@@ -97,6 +97,7 @@ test("command arguments select a target, a limit, or a subcommand", () => {
   assert.deepEqual(parseArgs("status"), { action: "status" });
   assert.deepEqual(parseArgs("stop"), { action: "stop" });
   assert.deepEqual(parseArgs("func_80012345"), { action: "run", target: "func_80012345" });
+  assert.deepEqual(parseArgs("archive_33::entry"), { action: "run", target: "archive_33::entry" });
   assert.deepEqual(parseArgs("func_80012345 --max=3"), { action: "run", target: "func_80012345", maxFunctions: 3 });
   assert.deepEqual(parseArgs("--max-functions=7"), { action: "run", maxFunctions: 7 });
   assert.equal(parseArgs("func_1 func_2").action, "usage");

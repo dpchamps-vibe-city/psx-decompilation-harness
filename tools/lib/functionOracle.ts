@@ -477,9 +477,9 @@ export function compareWords(target: RenderedWord[], candidate: RenderedWord[]):
   let ci = 0;
 
   const settle = (targetWord: RenderedWord, candidateWord: RenderedWord) => {
-    if (candidateWord.undetermined) {
+    if (targetWord.undetermined || candidateWord.undetermined) {
       rows.push({ kind: "undetermined", target: targetWord, candidate: candidateWord });
-      undetermined.push(candidateWord);
+      undetermined.push(candidateWord.undetermined ? candidateWord : targetWord);
       return;
     }
     if (renderedWordsEqual(targetWord, candidateWord)) {
@@ -543,6 +543,8 @@ export interface OracleResult extends OracleComparison {
 export interface OracleOptions {
   /** Defaults to the container's object directory, `<objDir>/<name>.c.o`. */
   objectPath?: string;
+  /** Library candidates substitute this C part in the owning manifest. */
+  candidateSource?: string;
   /**
    * Which binary the function belongs to. Defaults to `exe`; an overlay
    * function is compared against its own extracted member bytes, at its own
@@ -638,7 +640,7 @@ export function objectHandsSymbolToAssembler(objectPath: string, functionName: s
 export function compareFunction(functionName: string, options: OracleOptions = {}): OracleResult {
   if (loadLibraryProject()) {
     if (!options.objectPath) throw new Error("Compile the owning TU and pass objectPath for a function diagnostic");
-    return compareRelocatableFunction(functionName, options.objectPath);
+    return compareRelocatableFunction(functionName, options.objectPath, options.candidateSource);
   }
   const container =
     typeof options.container === "string"

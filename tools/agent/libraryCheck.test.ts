@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { configuredTool, type ToolName } from "../lib/toolchain.js";
+import { configuredCompilerSource, configuredTool, type ToolName } from "../lib/toolchain.js";
 import { libraryMembers, type LibraryMember } from "../lib/libraryTargets.js";
 import { libraryMembersOwning } from "../lib/libraryTranslationUnit.js";
 import { checkLibrary } from "./libraryTarget.js";
@@ -16,9 +16,10 @@ function fixture(t: { after: (cleanup: () => void) => void }) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const config = JSON.parse(readFileSync(join(ROOT, "toolchain.json"), "utf8"));
   for (const name of Object.keys(config.tools) as ToolName[]) config.tools[name] = configuredTool(name, ROOT);
+  config.compiler.source = configuredCompilerSource(ROOT);
   config.includeDirs = ["include"]; config.profiles = {}; config.containerProfiles = {};
   config.flags.as = config.flags.as.map((f: string) => f === "-G8" ? "-G0" : f);
-  config.assembler = { kind: "gas", inputRewrites: [] };
+  config.assembler = { kind: "gas" };
   mkdirSync(join(root, "include")); mkdirSync(join(root, "inputs"));
   writeFileSync(join(root, "toolchain.json"), JSON.stringify(config));
   const assembly = (symbol: string, value: number) =>

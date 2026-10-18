@@ -6,6 +6,8 @@ import type { PolicyFinding } from "../../shared/types.ts";
 import { declaresIncludeAsm, inspectSource, type SourceFacts } from "./c-ast.ts";
 import type { LoopConfig, ParkRecord, ParkReason } from "./types.ts";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
+import { requireLibraryFunction } from "../../../../tools/lib/libraryTargets.js";
+import { isDirectoryTu, libraryAssemblyTu } from "../../../../tools/lib/libraryTranslationUnit.js";
 
 /**
  * The stub a parked function is returned to.
@@ -16,7 +18,11 @@ import { loadLibraryProject } from "../../../../tools/lib/project.js";
  * broken park rather than a wrong path.
  */
 export function canonicalStub(projectRoot: string, functionName: string): string {
-  if (loadLibraryProject(projectRoot)) throw new Error("Cannot synthesize a single-function library fallback; preserve the owning TU and its existing INCLUDE_ASM stubs");
+  if (loadLibraryProject(projectRoot)) {
+    const { member, fn } = requireLibraryFunction(functionName, projectRoot);
+    if (!isDirectoryTu(member) || libraryAssemblyTu(member, projectRoot)) throw new Error("Library parking requires a C TU function part; assembly is never reconstructed");
+    return `INCLUDE_ASM("build/libraries/nonmatchings/${member.id}", ${fn.name});\n`;
+  }
   return [
     '#include "common.h"',
     '#include "include_asm.h"',
@@ -132,19 +138,16 @@ async function inspectText(input: PlanParkInput, name: string, source: string): 
  * be the thing that breaks the build.
  */
 export async function planPark(input: PlanParkInput): Promise<ParkPlan> {
-  if (loadLibraryProject(input.projectRoot)) return {
-    source: input.attemptSource, preserved: true,
-    reasons: ["Library park preserves the complete member TU unchanged; no disabled neighbor bodies or original-object fallback"],
-  };
+  const symbol = loadLibraryProject(input.projectRoot) ? requireLibraryFunction(input.functionName, input.projectRoot).fn.name : input.functionName;
   const reasons: string[] = [];
 
   const committed = input.committedSource === undefined ? undefined : stripPreviousPark(input.committedSource);
   const stubFacts = committed ? await inspectText(input, "base", committed) : undefined;
   const base =
-    committed && stubFacts && declaresIncludeAsm(stubFacts, input.functionName)
+    committed && stubFacts && declaresIncludeAsm(stubFacts, symbol)
       ? committed
       : canonicalStub(input.projectRoot, input.functionName);
-  if (committed && stubFacts && !declaresIncludeAsm(stubFacts, input.functionName)) {
+  if (committed && stubFacts && !declaresIncludeAsm(stubFacts, symbol)) {
     reasons.push("committed source no longer declares the INCLUDE_ASM placeholder; synthesized a canonical stub");
   }
 
@@ -156,7 +159,7 @@ export async function planPark(input: PlanParkInput): Promise<ParkPlan> {
     const attemptFacts = await inspectText(input, "attempt", input.attemptSource);
     if (!attemptFacts.available) {
       reasons.push(`C parser unavailable: ${attemptFacts.reasons.join("; ")}`);
-    } else if (declaresIncludeAsm(attemptFacts, input.functionName)) {
+    } else if (declaresIncludeAsm(attemptFacts, symbol)) {
       reasons.push("attempt is itself an INCLUDE_ASM stub; nothing to preserve");
     } else if (!attemptFacts.embeddable) {
       reasons.push(`attempt is not safe to embed: ${attemptFacts.reasons.join("; ")}`);
@@ -180,7 +183,7 @@ export async function planPark(input: PlanParkInput): Promise<ParkPlan> {
   let source = compose(preserveAttempt);
   const composedFacts = await inspectText(input, "parked", source);
   const composedIsSound =
-    composedFacts.available && composedFacts.parses && declaresIncludeAsm(composedFacts, input.functionName);
+    composedFacts.available && composedFacts.parses && declaresIncludeAsm(composedFacts, symbol);
 
   if (!composedIsSound && preserveAttempt) {
     reasons.push(`composed park did not parse (${composedFacts.reasons.join("; ") || "unknown"}); kept the bare stub`);

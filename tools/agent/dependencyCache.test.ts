@@ -12,8 +12,8 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 2_100));
 
 test("a dependency list is reused only while its inputs and every searched directory are unchanged", async t => {
   const f = projectFixture(t), log = join(f.root, "cpp-runs.log"), wrapper = join(f.root, "cpp-wrapper.sh");
-  writeFileSync(wrapper, `#!/bin/sh\nfor a in "$@"; do [ "$a" = "-MM" ] && echo run >> ${JSON.stringify(log)}; done\nexec ${configuredTool("cpp", ROOT)} "$@"\n`, { mode: 0o755 });
-  f.toolchain.tools.cpp = wrapper; f.toolchain.includeDirs = ["include"]; f.put("toolchain.json", JSON.stringify(f.toolchain));
+  writeFileSync(wrapper, `#!/bin/sh\nfor a in "$@"; do [ "$a" = "-M" ] && echo run >> ${JSON.stringify(log)}; done\nexec ${configuredTool("cpp", ROOT)} "$@"\n`, { mode: 0o755 });
+  f.toolchain.tools.cpp = wrapper; f.toolchain.flags.cpp.unshift("-nostdinc"); f.toolchain.includeDirs = ["include"]; f.put("toolchain.json", JSON.stringify(f.toolchain));
   f.put("include/dep_a.h", '#include "dep_b.h"\n'); f.put("include/dep_b.h", "#define B 1\n");
   f.put("src/dep_fixture.c", '#include "dep_a.h"\n#include "dep_later.h"\nint dep_fixture(void) { return B; }\n');
   const runs = () => existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).length : 0;

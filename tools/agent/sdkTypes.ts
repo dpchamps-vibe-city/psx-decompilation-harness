@@ -20,6 +20,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { configuredSdkHeaders } from "../lib/toolchain.js";
+import { walkActiveC } from "./cSourceAnalysis.js";
 import { biosFunctionProjection } from "../lib/biosFunctionMacro.js";
 import { loadLibraryProject } from "../lib/project.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
@@ -265,7 +266,7 @@ export function extractSignaturesFromSource(source: string): ExtractedSignature[
     return found;
   }
 
-  walk(tree.rootNode, (node) => {
+  walkActiveC(tree.rootNode, (node) => {
     if (node.type !== "function_definition") return true;
     const returnType = field(node, "type");
     const declarator = field(node, "declarator");

@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { parseC, declaratorName, field } from "./residual-source-search/tree-sitter-c.js";
 import { biosFunctionProjection } from "../lib/biosFunctionMacro.js";
-import { isAssemblyPart, isDirectoryTu, inspectLibraryPart, libraryFunctionFilename, readLibraryTu, type LibraryTuManifest, type LibraryTuPart } from "../lib/libraryTranslationUnit.js";
+import { isAssemblyPart, isDirectoryTu, isLibraryGeneratedSymbol, inspectLibraryPart, libraryFunctionFilename, readLibraryTu, type LibraryTuManifest, type LibraryTuPart } from "../lib/libraryTranslationUnit.js";
 import { libraryInputFiles, type LibraryProject } from "../lib/project.js";
 import type { LibraryMember } from "../lib/libraryTargets.js";
 import { legacyLibrarySource, libraryMemberSource } from "../lib/librarySourceLayout.js";
@@ -83,9 +83,9 @@ export function planLibraryTu(member: LibraryMember, source: string): { manifest
       let symbol = node.type === "function_definition" ? declaratorName(field(node, "declarator"))?.text : undefined;
       if (node.type === "expression_statement") symbol = analyzeCSource(source.slice(node.startIndex, node.endIndex)).includeAsm[0]?.symbol;
       if (!symbol) continue;
-      if (symbol !== "__library_member_data" && !member.functions.some(fn => fn.name === symbol)) throw new Error(`Unexpected function in TU split: ${symbol}`);
+      if (!isLibraryGeneratedSymbol(symbol) && !member.functions.some(fn => fn.name === symbol)) throw new Error(`Unexpected function in TU split: ${symbol}`);
       support(node.startIndex);
-      const path = symbol === "__library_member_data" ? "_data.c" : libraryFunctionFilename(member, symbol);
+      const path = symbol === "__library_member_data" ? "_data.c" : symbol === "__library_member_symbols" ? "_symbols.c" : libraryFunctionFilename(member, symbol);
       if (files.has(path)) throw new Error(`Duplicate function in TU split: ${symbol}`);
       const end = projection.sites.find(s => s.valid && s.start === node.startIndex)?.end ?? node.endIndex;
       const text = source.slice(node.startIndex, end) + "\n", part = { path, symbol };
@@ -162,7 +162,7 @@ function migrateLibraryTuDirectories(members: LibraryMember[], project: LibraryP
   for (const member of members) {
     if (!isDirectoryTu(member)) throw new Error(`Not a directory TU: ${member.source}`);
     const grouped = libraryMemberSource({ ...project, output: { ...project.output, sourceLayout: "grouped" } },
-      inputs.get(member.input)!,
+      project.views?.elf[member.id] ? { path: project.views.elf[member.id]!, archive: false } : inputs.get(member.input)!,
       { name: member.member, ordinal: member.ordinal }, member.id);
     const candidates = [...new Set([grouped, legacyLibrarySource(project, member.id, member.member)])].filter(p => existsSync(join(root, p)));
     if (existsSync(join(root, member.source))) {

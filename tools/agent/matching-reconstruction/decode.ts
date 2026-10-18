@@ -62,6 +62,7 @@ export interface DecodedInsn {
 export function decodeFunctionWords(words: RenderedWord[]): DecodedInsn[] {
   return words.map(word => {
     const insn = decodeWord(word.raw, word.vram);
+    if (word.undetermined) { insn.op = "unknown"; delete insn.target; }
     if (word.coordinate) insn.coordinate = word.coordinate;
     if (word.relocations?.length) {
       insn.relocations = word.relocations;

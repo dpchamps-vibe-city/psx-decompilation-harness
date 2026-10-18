@@ -34,6 +34,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { configuredToolchainIdentity } from "./decompToolchain.js";
+import { loadLibraryProject } from "../lib/project.js";
+import { scopedLibraryMembers, libraryObjectInputs } from "../lib/libraryTargets.js";
 
 /* ---- primitives ---------------------------------------------------------
  * These lived in variant-lab/artifacts.ts, which re-exports them so existing
@@ -144,8 +146,18 @@ export function implementationHash(paths: string[]): string {
 
 /** Compute the provenance stamp for an artifact about to be produced. */
 export function computeProvenance(functionName: string, inputs: ProvenanceInputs): Provenance {
+  const root = projectRoot(), project = loadLibraryProject(root);
+  let objects: ReturnType<typeof libraryObjectInputs> | undefined;
+  if (project?.verification.mode === "original-object") {
+    const members = scopedLibraryMembers(root), separator = functionName.indexOf("::");
+    const matches = separator >= 0 ? members.filter(m => m.id === functionName.slice(0, separator)) : members.filter(m => m.functions.some(f => f.name === functionName));
+    if (matches.length > 1) throw new Error(`Ambiguous library provenance target ${functionName}; use member::symbol`);
+    if (separator >= 0 && !matches.length) throw new Error(`Unknown native provenance member: ${functionName}`);
+    if (matches[0]) objects = libraryObjectInputs(matches[0], root, project);
+  }
+  const paths = [...new Set([...(inputs.files ?? []), ...(objects ? [...objects.files, "project.json", "toolchain.json", "configs/flag_overrides.mk"] : [])])];
   const files: Record<string, string> = {};
-  for (const path of (inputs.files ?? []).slice().sort()) {
+  for (const path of paths.sort()) {
     const absolute = isAbsolute(path) ? path : join(projectRoot(), path);
     files[projectPath(absolute)] = existsSync(absolute) ? sha256File(absolute) : "absent";
   }
@@ -155,13 +167,18 @@ export function computeProvenance(functionName: string, inputs: ProvenanceInputs
     values[name] = sha256(stableJson(value));
   }
 
+  if (objects) {
+    if (Object.hasOwn(inputs.values ?? {}, "$nativeObject")) throw new Error("$nativeObject is reserved for the native input witness");
+    values.$nativeObject = sha256(stableJson(objects));
+  }
+  const implementation = [...(inputs.implementation ?? []), ...(objects ? ["tools/lib/objectFormats", "tools/lib/relocatableObject.ts", "tools/lib/relocatableCode.ts", "tools/lib/libraryTargets.ts", "tools/lib/libraryOriginals.ts", "tools/lib/targetAdapter.ts", "tools/lib/toolchain.ts", "tools/agent/decompToolchain.ts"] : [])];
   const identity = {
     schemaVersion: PROVENANCE_SCHEMA_VERSION,
     function: functionName,
     files,
     values,
     toolchainHash: toolchainHash(),
-    implementationHash: inputs.implementation ? implementationHash(inputs.implementation) : "unspecified",
+    implementationHash: implementation.length ? implementationHash(implementation) : inputs.implementation ? implementationHash([]) : "unspecified",
   };
 
   return {

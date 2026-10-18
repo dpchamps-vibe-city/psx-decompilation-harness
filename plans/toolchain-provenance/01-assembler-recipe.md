@@ -1,6 +1,7 @@
 # Phase 1 — Assembler recipe
 
-Status: proposed. Depends on: nothing. Changes only psyq-decomp.
+Status: implemented; two clean offline builds reproduce the pinned hash and the
+manifest accounts for every source file. See README Progress. Depends on: nothing. Changes only psyq-decomp.
 
 ## Goal
 
@@ -56,7 +57,9 @@ The other 83 belong to other CPUs, other formats or generic code.
 
 Decision D2: roll back **all 87**, wherever the history can be verified.
 Option (a), `tc-mips.c` only, remains the measured reference: `as` SHA-256
-`d4ec93c0…`, 178/178 LNK-identical.
+`d4ec93c0…`, 178/178 initialized-byte/relocation-site agreement. That historical
+research result is not strict whole-object acceptance; the Phase 3 native
+metadata gate fails (see README Progress).
 
 - A file that cannot be rolled back, because its history is unverifiable or
   the rollback breaks the build, stays at release content. The manifest lists

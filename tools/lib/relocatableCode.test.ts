@@ -20,6 +20,10 @@ test("private entries use section-relative JAL relocations, not ELF file offsets
   assert(object.sections.get(".text")!.data.equals(before));
   object.relocations[0]!.reference = ".text@8"; object.sections.get(".text")!.data.writeUInt32LE(0x0c000008, 8);
   assert.equal(objectFunctions(object)[1]!.offset, 40, "local symbol value contributes to the REL addend");
+  object.relocations[0]!.reference = ".text@0"; object.relocations[0]!.addend = 40;
+  assert.equal(objectFunctions(object)[1]!.offset, 40, "explicit native operand replaces, not adds to, the raw jump field");
+  object.relocations[0]!.addend = null;
+  assert.equal(objectFunctions(object).length, 1, "unknown native operands never fall back to raw fields");
 });
 test("private-entry discovery refuses imports, raw jump fields, tail branches and interior sized symbols", () => {
   for (const mutate of [
@@ -72,6 +76,10 @@ test("address-taken private callbacks receive separate function extents and relo
   assert.deepEqual(functions[1]!.discovery, { kind: "address-relocation", sites: [{ section: ".text", offset: 0 }, { section: ".text", offset: 4 }] });
   assert.deepEqual(functions[2]!.discovery, { kind: "address-relocation", sites: [{ section: ".text", offset: 8 }, { section: ".text", offset: 12 }] });
   assert(object.sections.get(".text")!.data.equals(before), "discovery never changes original encoded addends");
+  object.relocations.forEach((r, i) => { r.addend = i < 2 ? 32 : 40; });
+  assert.deepEqual(objectFunctions(object).map(f => f.offset), [0, 32, 40], "native HI full operands are not added to the raw low field again");
+  object.relocations.forEach(r => { r.addend = null; });
+  assert.equal(objectFunctions(object).length, 1, "unknown native pairs do not manufacture callbacks");
 });
 
 test("a private entry with both call and address witnesses retains actual call-site provenance", () => {

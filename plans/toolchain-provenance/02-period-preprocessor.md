@@ -1,6 +1,7 @@
 # Phase 2 — Period preprocessor
 
-Status: proposed. Depends on: nothing.
+Status: harness split, recipe extension and 1,542-member population comparison
+implemented (zero object differences). Production activation remains gated. Depends on: nothing.
 
 ## Goal
 

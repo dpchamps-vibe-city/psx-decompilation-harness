@@ -424,7 +424,7 @@ export interface ResultBundle {
   /** Present only for linked-image results. */
   vram?: number;
   coordinate?: { kind: "section"; section: string; offset: number; size: number; inferredSize: boolean };
-  verification?: { scope: "function" | "translation-unit"; mode: "linked-bytes" | "relocatable-object" };
+  verification?: { scope: "function" | "translation-unit"; mode: "linked-bytes" | "relocatable-object" | "original-object" };
   sizeBytes: number;
   state: TerminalState;
   relation?: ScanRelation;

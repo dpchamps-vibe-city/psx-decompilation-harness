@@ -124,7 +124,7 @@
     {
       "file": ".pi/skills/psx-bootstrap-project/SKILL.md",
       "descriptionsOnly": false,
-      "sha256": "633beadbea355e2cec0ba153823a8d1b9e884a742321a1a5bca5f052ea2bba57"
+      "sha256": "0b4da2d69a849f7c187be4970b8fe51d532b2e8cb1a06bb9bba5bbdbf09cb652"
     },
     {
       "file": ".pi/skills/psx-build-resource-parser/SKILL.md",
@@ -164,7 +164,7 @@
     {
       "file": "AGENTS.md",
       "descriptionsOnly": false,
-      "sha256": "ee38e3cb8fe5c5db84103878eae70333f9d98784e15a29c5adab513d8a1285ca"
+      "sha256": "aba4fafa6aa21dc198a8a6a664d662f13a043d9cbcf04b915bdb5c0b9668173d"
     },
     {
       "file": "prompts/reference/allocation.md",

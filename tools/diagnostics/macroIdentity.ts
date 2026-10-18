@@ -79,12 +79,12 @@ export function loadMacroFunctions(containers: readonly Container[]): { function
         const relocations: NonNullable<MacroFunction["relocations"]> = new Map(member.object.relocations
           .filter(r => r.section === fn.section && r.offset >= fn.offset && r.offset < fn.offset + fn.size).map(r => {
             const word = section.data.readUInt32LE(r.offset);
-            const addend = r.type === 4 ? (word & 0x3ffffff) * 4 : (word << 16 >> 16) * (r.type === 10 ? 4 : 1);
+            const addend = r.addend !== undefined ? r.addend : r.type === 4 ? (word & 0x3ffffff) * 4 : (word << 16 >> 16) * (r.type === 10 ? 4 : 1);
             const local = /^(.*)@(\d+)$/.exec(r.reference);
             const named = member.object.symbols.find(s => `named:${s.name}` === r.reference);
             const targetSection = local?.[1] ?? named?.section, value = local ? Number(local[2]) : named?.value;
-            const targetOffset = value === undefined ? undefined : value + addend + (r.type === 10 ? 4 : 0);
-            const callee = r.type === 4 ? resolveLibraryCall(member, r.reference, addend, members) : undefined;
+            const targetOffset = value === undefined || addend === null ? undefined : value + addend + (r.type === 10 ? 4 : 0);
+            const callee = r.type === 4 && addend !== null ? resolveLibraryCall(member, r.reference, addend, members) : undefined;
             return [(r.offset - fn.offset) / 4, { type: r.type, reference: r.reference, addend,
               ...(targetSection === fn.section && targetOffset !== undefined && targetOffset >= fn.offset && targetOffset < fn.offset + fn.size ? { targetOffset } : {}),
               ...(callee ? { callee } : {}) }];

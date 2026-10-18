@@ -6,6 +6,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { fileDigest } from "./contentCache.js";
+import { loadLibraryProject } from "./project.js";
+import { referenceHeaderCopy } from "./referenceHeaders.js";
 import { fileOverrideFlags } from "./flagOverrides.js";
 import { prepareSupportedCompiler } from "../build/prepareCompiler.js";
 import { resolveCompilerAnalysis, type CompilerAnalysisSelection } from "./compilerAnalysis.js";
@@ -14,22 +16,23 @@ export { HARNESS_ROOT } from "./runtimeContext.js";
 
 export const TOOLCHAIN_FILE = "toolchain.json";
 export const TOOL_NAMES = ["cc1", "cpp", "as", "ld", "objcopy", "objdump", "nm", "readelf", "python", "splat", "spimdisasm", "maspsx", "m2c"] as const;
-export type ToolName = typeof TOOL_NAMES[number] | "psyq2elf";
+export type ToolName = typeof TOOL_NAMES[number] | "psyq2elf" | "dependencyScanner" | "cppFrontend";
 export const FLAG_NAMES = ["cpp", "cc1", "as", "ld", "maspsx", "m2c", "spimdisasm"] as const;
 export type FlagName = typeof FLAG_NAMES[number];
 export type ConfiguredPath = string | OwnedPath;
 export type AssemblerKind = "maspsx" | "gas";
-export const ASSEMBLER_REWRITES = ["move-addu", "rdata-section"] as const;
-export type AssemblerConfig = { kind: "maspsx" } | { kind: "gas"; inputRewrites: string[] };
-export interface AssemblerSelection { kind: AssemblerKind; inputRewrites: string[] }
+export const ASSEMBLY_STAGES = ["psyq-dmpsx", "psyq-lnk"] as const;
+export type AssemblerConfig = { kind: "maspsx" } | { kind: "gas"; objectFormat?: "elf" | "ecoff"; postAssembly?: string[]; lnkLayout?: "standard" | "early" };
+export interface AssemblerSelection { kind: AssemblerKind; objectFormat: "elf" | "ecoff"; postAssembly: string[]; lnkLayout?: "standard" | "early" }
 export interface ToolchainConfig {
   assembler?: AssemblerConfig;
+  toolPins?: Partial<Record<ToolName, { sha256: string; recipe?: ConfiguredPath; recipeSha256?: string }>>;
   $schema?: string;
   schemaVersion: 1;
   compiler: { family: string; version: string; source?: ConfiguredPath; capabilities?: string[]; analysis?: CompilerAnalysisSelection };
-  tools: Record<typeof TOOL_NAMES[number], ConfiguredPath> & { psyq2elf?: ConfiguredPath };
+  tools: Record<typeof TOOL_NAMES[number], ConfiguredPath> & { psyq2elf?: ConfiguredPath; dependencyScanner?: ConfiguredPath; cppFrontend?: ConfiguredPath };
   includeDirs: string[];
-  flags: Record<FlagName, string[]>;
+  flags: Record<FlagName, string[]> & { psyq2elf?: string[] };
   /** A profile replaces the named flag arrays; omitted arrays inherit base. */
   profiles: Record<string, Partial<Record<FlagName, string[]>> & { includeDirs?: string[]; assembler?: AssemblerConfig }>;
   containerProfiles: Record<string, string>;
@@ -57,16 +60,21 @@ function strings(value: unknown, at: string): void {
 }
 function validateAssembler(value: unknown, at: string): void {
   const selection = object(value, at);
-  keys(selection, selection.kind === "gas" ? ["kind", "inputRewrites"] : ["kind"], at);
+  keys(selection, selection.kind === "gas" ? ["kind", "objectFormat", "postAssembly", "lnkLayout"] : ["kind"], at);
   if (!["maspsx", "gas"].includes(selection.kind)) throw new Error(`${TOOLCHAIN_FILE}: unknown ${at}.kind ${selection.kind}`);
-  if (selection.kind === "gas") {
-    strings(selection.inputRewrites, `${at}.inputRewrites`);
-    for (const id of selection.inputRewrites) if (!ASSEMBLER_REWRITES.includes(id)) throw new Error(`${TOOLCHAIN_FILE}: unknown assembler input rewrite ${id}`);
-    if (new Set(selection.inputRewrites).size !== selection.inputRewrites.length) throw new Error(`${TOOLCHAIN_FILE}: duplicate ${at}.inputRewrites`);
+  if (selection.objectFormat !== undefined && !["elf", "ecoff"].includes(selection.objectFormat)) throw new Error(`${TOOLCHAIN_FILE}: unknown ${at}.objectFormat`);
+  if (selection.lnkLayout !== undefined && !["standard", "early"].includes(selection.lnkLayout)) throw new Error(`${TOOLCHAIN_FILE}: unknown ${at}.lnkLayout`);
+  if (selection.postAssembly?.includes("psyq-lnk") && (selection.objectFormat !== "ecoff" || selection.postAssembly.at(-1) !== "psyq-lnk"))
+    throw new Error(`${TOOLCHAIN_FILE}: psyq-lnk requires ECOFF and must be the last stage`);
+  if (selection.lnkLayout !== undefined && !selection.postAssembly?.includes("psyq-lnk")) throw new Error(`${TOOLCHAIN_FILE}: lnkLayout requires psyq-lnk`);
+  if (selection.postAssembly !== undefined) {
+    strings(selection.postAssembly, `${at}.postAssembly`);
+    for (const stage of selection.postAssembly) if (!ASSEMBLY_STAGES.includes(stage)) throw new Error(`${TOOLCHAIN_FILE}: unknown assembly stage ${stage}`);
+    if (new Set(selection.postAssembly).size !== selection.postAssembly.length) throw new Error(`${TOOLCHAIN_FILE}: duplicate assembly stage`);
   }
 }
 /** GAS assumes undeclared externs are small; this rule is not yet modeled. */
-export function assertAssemblerSmallData(selection: AssemblerSelection, flags: readonly string[]): void {
+export function assertAssemblerSmallData(selection: Pick<AssemblerSelection, "kind" | "objectFormat" | "lnkLayout" | "postAssembly"> | { kind: AssemblerKind }, flags: readonly string[]): void {
   if (selection.kind !== "gas") return;
   let threshold = 8; // GNU as default, unlike MASPSX's implicit -G0.
   for (let i = 0; i < flags.length; i++) {
@@ -103,8 +111,19 @@ function validateToolchain(text: string, root: string): ToolchainConfig {
   catch (error) { throw new Error(`Cannot load ${join(root, TOOLCHAIN_FILE)}: ${String(error)}`); }
   object(value, "config");
   if (Object.hasOwn(value, "fileFlags")) throw new Error(`${TOOLCHAIN_FILE}: fileFlags is unsupported; use configs/flag_overrides.mk`);
-  keys(value, ["$schema", "schemaVersion", "compiler", "tools", "includeDirs", "flags", "profiles", "containerProfiles", "sdk", "assembler"], "config");
+  keys(value, ["$schema", "schemaVersion", "compiler", "tools", "includeDirs", "flags", "profiles", "containerProfiles", "sdk", "assembler", "toolPins"], "config");
   if (value.assembler !== undefined) validateAssembler(value.assembler, "assembler");
+  if (value.toolPins !== undefined) {
+    object(value.toolPins, "toolPins"); keys(value.toolPins, [...TOOL_NAMES, "psyq2elf", "cppFrontend"], "toolPins");
+    for (const [name, raw] of Object.entries(value.toolPins)) {
+      const pin = object(raw, `toolPins.${name}`); keys(pin, ["sha256", "recipe", "recipeSha256"], `toolPins.${name}`);
+      if (!/^[a-f0-9]{64}$/.test(pin.sha256)) throw new Error(`${TOOLCHAIN_FILE}: invalid toolPins.${name}.sha256`);
+      if (pin.recipe !== undefined) {
+        ownedPath(pin.recipe, `toolPins.${name}.recipe`, root);
+        if (!/^[a-f0-9]{64}$/.test(pin.recipeSha256)) throw new Error(`${TOOLCHAIN_FILE}: recipe requires a SHA-256 pin`);
+      } else if (pin.recipeSha256 !== undefined) throw new Error(`${TOOLCHAIN_FILE}: recipeSha256 requires recipe`);
+    }
+  }
   if (value.schemaVersion !== 1) throw new Error(`${TOOLCHAIN_FILE}: unsupported schemaVersion ${value.schemaVersion}`);
   object(value.compiler, "compiler"); keys(value.compiler, ["family", "version", "source", "capabilities", "analysis"], "compiler");
   string(value.compiler.family, "compiler.family"); string(value.compiler.version, "compiler.version");
@@ -116,12 +135,14 @@ function validateToolchain(text: string, root: string): ToolchainConfig {
     string(analysis.provider, "compiler.analysis.provider");
     ownedPath(analysis.profile, "compiler.analysis.profile", root);
   }
-  object(value.tools, "tools"); keys(value.tools, [...TOOL_NAMES, "psyq2elf"], "tools");
+  object(value.tools, "tools"); keys(value.tools, [...TOOL_NAMES, "psyq2elf", "dependencyScanner", "cppFrontend"], "tools");
   for (const name of TOOL_NAMES) ownedPath(value.tools[name], `tools.${name}`, root);
-  if (value.tools.psyq2elf !== undefined) ownedPath(value.tools.psyq2elf, "tools.psyq2elf", root);
+  for (const name of ["psyq2elf", "dependencyScanner", "cppFrontend"] as const)
+    if (value.tools[name] !== undefined) ownedPath(value.tools[name], `tools.${name}`, root);
   strings(value.includeDirs, "includeDirs");
-  object(value.flags, "flags"); keys(value.flags, FLAG_NAMES, "flags");
+  object(value.flags, "flags"); keys(value.flags, [...FLAG_NAMES, "psyq2elf"], "flags");
   for (const name of FLAG_NAMES) strings(value.flags[name], `flags.${name}`);
+  if (value.flags.psyq2elf !== undefined) strings(value.flags.psyq2elf, "flags.psyq2elf");
   object(value.profiles, "profiles");
   for (const [name, profile] of Object.entries(value.profiles)) {
     const p = object(profile, `profiles.${name}`); keys(p, [...FLAG_NAMES, "includeDirs", "assembler"], `profiles.${name}`);
@@ -141,7 +162,7 @@ function validateToolchain(text: string, root: string): ToolchainConfig {
   if (value.sdk.headers !== undefined) ownedPath(value.sdk.headers, "sdk.headers", root);
   for (const profile of [undefined, ...Object.values(value.profiles)] as Array<any>) {
     const assembler = profile?.assembler ?? value.assembler ?? { kind: "maspsx" };
-    assertAssemblerSmallData({ ...assembler, inputRewrites: assembler.inputRewrites ?? [] }, profile?.as ?? value.flags.as);
+    assertAssemblerSmallData(assembler, profile?.as ?? value.flags.as);
   }
   return value as ToolchainConfig;
 }
@@ -197,18 +218,26 @@ export function configuredAssemblerConfig(container?: FlagContext, root = projec
 }
 export function configuredAssembler(container?: FlagContext, root = projectRoot()): AssemblerSelection {
   const selection = configuredAssemblerConfig(container, root) ?? { kind: "maspsx" };
-  return { kind: selection.kind, inputRewrites: selection.kind === "gas" ? [...selection.inputRewrites] : [] };
+  return { kind: selection.kind, objectFormat: selection.kind === "gas" ? selection.objectFormat ?? "elf" : "elf", postAssembly: selection.kind === "gas" ? [...selection.postAssembly ?? []] : [],
+    ...(selection.kind === "gas" && selection.postAssembly?.includes("psyq-lnk") ? { lnkLayout: selection.lnkLayout ?? "standard" } : {}) };
 }
 export function configuredFlags(name: FlagName, container?: FlagContext, root = projectRoot()): string[] {
   const config = loadToolchain(root), profile = selectedProfile(config, container);
   const selected = profile ? config.profiles[profile] : undefined;
   const flags = [...(selected?.[name] ?? config.flags[name])];
   if (name === "cpp" || name === "as") flags.unshift(...(selected?.includeDirs ?? config.includeDirs).map(p => `-I${resolve(root, p)}`));
+  const references = new Set((name === "cpp" || name === "as" ? loadLibraryProject(root)?.headers.reference ?? [] : []).map(p => resolve(root, p)));
+  const include = (path: string) => { const absolute = resolve(root, path); return references.has(absolute) ? referenceHeaderCopy(absolute, root) : absolute; };
   for (let i = 0; i < flags.length; i++) {
-    if (flags[i] === "-I" && flags[i + 1]) flags[++i] = resolve(root, flags[i]!);
-    else if (flags[i]!.startsWith("-I") && flags[i]!.length > 2) flags[i] = `-I${resolve(root, flags[i]!.slice(2))}`;
+    if (flags[i] === "-I" && flags[i + 1]) { i++; flags[i] = include(flags[i]!); }
+    else if (flags[i]!.startsWith("-I") && flags[i]!.length > 2) flags[i] = `-I${include(flags[i]!.slice(2))}`;
   }
   return flags;
+}
+/** Sony .ASM is preprocessed as assembly, not under C-language header guards. */
+export function configuredAssemblyCppFlags(container?: FlagContext, root = projectRoot()): string[] {
+  return configuredFlags("cpp", container, root).filter(f => !/^-lang-/.test(f) && !/^-D(?:_?LANGUAGE_C|__cplusplus)(?:=|$)/.test(f))
+    .concat("-lang-asm", "-D_LANGUAGE_ASSEMBLY", "-D__ASSEMBLER__");
 }
 export function configuredFileFlags(stem: string, root = projectRoot()): string[] { return fileOverrideFlags(root, stem); }
 export function configuredSdk(root = projectRoot()): { version: string; convertedDir: string; originalDir: string; signatures: string } {
@@ -253,27 +282,14 @@ export function executablePath(command: string, root = projectRoot()): string | 
   const candidates = command.includes("/") ? [resolve(root, command)] : (process.env.PATH ?? "").split(delimiter).map(p => resolve(root, p, command));
   return candidates.find(p => existsSync(p) && statSync(p).isFile()) ?? null;
 }
-/** GCC's configured preprocessor driver delegates to a separate cc1 binary.
- * Its bytes are an input even when the driver itself did not change. */
+/** Standalone period preprocessors need no driver probes. A driver that
+ * delegates preprocessing must explicitly identify its frontend as well. */
 export function configuredCppFrontend(root = projectRoot()): string | null {
-  const cpp = executablePath(configuredTool("cpp", root), root);
-  if (!cpp) return null;
-  return loadToolchain(root).compiler.family === "gcc" ? executablePath(cppFrontendName(cpp, root), root) : cpp;
+  return executablePath(configuredTool(loadToolchain(root).tools.cppFrontend ? "cppFrontend" : "cpp", root), root);
 }
-/* Asking the driver costs a process per compile identity. Its answer depends on
- * the driver and the search environment, so it is re-asked whenever either
- * changes. A driver written in the last few seconds is always re-asked: a
- * rewrite inside one timestamp tick would otherwise leave its stat unchanged. */
-const cppFrontendNames = new Map<string, { stamp: string; name: string }>();
-function cppFrontendName(cpp: string, root: string): string {
-  const stat = statSync(cpp, { bigint: true });
-  const stamp = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
-  const key = [resolve(root), cpp, process.env.GCC_EXEC_PREFIX ?? "", process.env.COMPILER_PATH ?? "", process.env.PATH ?? ""].join("\0");
-  const prior = cppFrontendNames.get(key);
-  if (prior?.stamp === stamp) return prior.name;
-  const name = execFileSync(cpp, ["-print-prog-name=cc1"], { cwd: root, encoding: "utf8" }).trim();
-  if (Date.now() - Number(stat.ctimeMs) > 5_000) cppFrontendNames.set(key, { stamp, name });
-  return name;
+/** Dependency discovery never supplies text to the compiler. */
+export function configuredDependencyScanner(root = projectRoot()): string {
+  return configuredTool(loadToolchain(root).tools.dependencyScanner ? "dependencyScanner" : "cpp", root);
 }
 export function toolchainDigest(root = projectRoot()): string { return createHash("sha256").update(readFileSync(join(root, TOOLCHAIN_FILE))).digest("hex"); }
 export function toolchainExecutables(root = projectRoot(), excluded: string[] = []): Record<string, { command: string; path: string | null; sha256: string | null }> {

@@ -1,4 +1,5 @@
 import { projectRoot } from "../lib/runtimeContext.js";
+import { assertAssemblySource } from "../lib/assemblyPolicy.js";
 import { assemble, assembleAsync, assemblerIdentity, captureAssemblerExpansion as captureExpansion } from "../lib/assembler.js";
 export type { AssemblerExpansion } from "../lib/assembler.js";
 import { execFileSync, spawn, spawnSync } from "child_process";
@@ -9,8 +10,10 @@ import { fileURLToPath } from "url";
 import type { Container } from "../lib/container.js";
 import { imageContainerFor, resolveFunctionTarget, requireTargetCapability, sourceFlagContext } from "../lib/targetAdapter.js";
 import { objectFunctions, readRelocatableObject } from "../lib/relocatableObject.js";
+import { disassembleBytes } from "../lib/functionOracle.js";
 
-import { configuredAssemblerConfig, configuredFlags, configuredTool, configuredCompilerAnalysis, executablePath, loadToolchain, requireCompilerCapability, toolchainDigest, toolchainExecutables } from "../lib/toolchain.js";
+import { configuredAssemblyCppFlags, configuredCppFrontend, configuredAssembler, configuredAssemblerConfig, configuredFlags, configuredTool, configuredCompilerAnalysis, loadToolchain, requireCompilerCapability, toolchainDigest, toolchainExecutables } from "../lib/toolchain.js";
+import { dependencyScannerIdentity, scanDependencies } from "../lib/dependencyScanner.js";
 export { configuredTool } from "../lib/toolchain.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
 import { requireLibraryFunction, libraryMemberById } from "../lib/libraryTargets.js";
@@ -19,7 +22,7 @@ import { isDirectoryTu, libraryAssemblyDependencies, libraryAssemblyTu, libraryF
 export function productionCompileInput(source: string, output: string, context: FlagContext, stem = "", root = projectRoot()): string {
   if (context.kind !== "library" || !context.id || source.endsWith(".h")) return source;
   const member = libraryMemberById(context.id!, root);
-  const symbol = stem.match(/^lib_[a-f0-9]{16}_\d+::([A-Za-z_]\w*)(?:\.|$)/)?.[1];
+  const symbol = stem.match(/^[a-zA-Z0-9_]+::([A-Za-z_]\w*)(?:\.|$)/)?.[1];
   if (isDirectoryTu(member) && !symbol && resolve(root, source) !== resolve(root, member.source) &&
       !member.functions.some(fn => resolve(root, libraryFunctionSource(member, fn.name)) === resolve(root, source)) &&
       !extractSignaturesFromSource(readFileSync(resolve(root, source), "utf8")).some(s => member.functions.some(fn => fn.name === s.name))) return source; // standalone header/SDK encoding probe, not a target candidate
@@ -34,7 +37,7 @@ function compilationContext(stem: string, kind?: FlagContext["kind"], id?: strin
   if (kind === "library") return libraryContext(id ?? "");
   if (kind) return { kind, ...(id ? { id } : {}) };
   if (!stem && !loadLibraryProject()) return { kind: kind ?? "exe", id: "exe" };
-  const scoped = stem.match(/^(lib_[a-f0-9]{16}_\d+::[A-Za-z_]\w*)(?:\.|$)/);
+  const scoped = stem.match(/^([a-zA-Z0-9_]+::[A-Za-z_]\w*)(?:\.|$)/);
   return resolveFunctionTarget(scoped?.[1] ?? stem).flags;
 }
 function overrideKey(stem: string, context: FlagContext): string {
@@ -246,10 +249,8 @@ export function configuredToolchainIdentity(context?: FlagContext | string) {
   const cc = executables.cc1!;
   if (!cc.path || !cc.sha256) throw new Error(`Configured compiler not found: ${cc.command}. Run npm run setup and provision the toolchain.`);
   let cppFrontend: { path: string; sha256: string } | null = null;
-  if (loadToolchain().compiler.family === "gcc") {
-    const path = executablePath(runTool(configuredTool("cpp"), ["-print-prog-name=cc1"]).trim());
-    if (path) cppFrontend = { path: relativePath(path), sha256: fileSha256(path) };
-  }
+  const frontend = configuredCppFrontend();
+  if (frontend) cppFrontend = { path: relativePath(frontend), sha256: fileSha256(frontend) };
   return {
     node: process.version,
     configSha256: toolchainDigest(),
@@ -258,7 +259,7 @@ export function configuredToolchainIdentity(context?: FlagContext | string) {
     cppFrontend,
     compiler: { path: relativePath(cc.path), sha256: cc.sha256, version: firstVersionLine(cc.command, ["--version"]) },
     ...(configuredAssemblerConfig(flags) ? {
-      assembler: { kind: selection.kind, inputRewrites: selection.inputRewrites,
+      assembler: { kind: selection.kind, objectFormat: selection.objectFormat, postAssembly: selection.postAssembly, stages: selection.stages, ...(selection.lnkLayout ? { lnkLayout: selection.lnkLayout } : {}),
         ...(maspsx ? { maspsx } : {}) },
       cpp: firstVersionLine(configuredTool("cpp"), ["--version"]),
       assemblerVersion: firstVersionLine(executables.as!.command, ["--version"]),
@@ -410,7 +411,7 @@ export function detectImplicitDeclarations(preprocessed: string, stem: string): 
 
 /**
  * Every file the preprocessor would read for this source: the source itself
- * plus its transitive includes, resolved by the preprocessor's own `-MM` pass
+ * plus its transitive includes, resolved by the dependency scanner's `-M` pass
  * under the configured include paths — a scan of headers on disk answers a
  * different question. `-MG` keeps a not-yet-generated header in the list as a
  * name, so its later appearance still counts as an input change.
@@ -433,7 +434,7 @@ export function sourceDependencyFiles(source: string, context?: FlagContext, roo
 }
 
 /**
- * The `-MM -MG` answer for one input, reused while it cannot have changed: the
+ * The `-M -MG` answer for one input, reused while it cannot have changed: the
  * same command, tools, environment and input text, the same content in every
  * other file it lists, and the same header candidates in every directory the
  * preprocessor searches, so a newly shadowing or newly available header still
@@ -441,10 +442,11 @@ export function sourceDependencyFiles(source: string, context?: FlagContext, roo
  * around the run. `undefined` is a run that listed no rule.
  */
 function cppDependencies(input: string, flags: string[], root: string, includedFrom: string[]): string[] | undefined {
-  const argv = [...flags, "-MM", "-MG", input];
+  const argv = [...flags, "-M", "-MG", input];
   const preprocessing = preprocessingTools(root), { tools, environment } = preprocessing;
   const search = [...new Set([dirname(input), ...includedFrom, ...includeSearch(flags, root, preprocessing).dirs])];
-  const key = digest(JSON.stringify({ contract: "source-dependencies-v1", argv, tools, environment, search, text: readFileSync(input, "utf8") }));
+  const scanner = dependencyScannerIdentity(root);
+  const key = digest(JSON.stringify({ contract: "source-dependencies-v2", argv, scanner, tools, environment, search, text: readFileSync(input, "utf8") }));
   const path = join(root, "build/cache/dependencies", `${digest(input)}.json`);
   const listed = (files: string[] | null) => (files ?? []).filter(file => file !== input);
   const membership = (files: string[] | null) => digest(JSON.stringify(includeMembership(search, listed(files).map(file => basename(file)))));
@@ -453,7 +455,7 @@ function cppDependencies(input: string, flags: string[], root: string, includedF
   if (prior && sameSnapshot(prior.inputs, snapshot(root, listed(prior.files))) && prior.membership === membership(prior.files))
     return prior.files ? [...prior.files] : undefined;
   const started = Date.now(), before = JSON.stringify(search.map(dir => filesUnder(dir)));
-  const text = runTool(configuredTool("cpp", root), argv, root).replace(/\\\n/g, " ");
+  const text = scanDependencies(input, flags, root).replace(/\\\n/g, " ");
   const colon = text.indexOf(":");
   const files = colon < 0 ? null : text.slice(colon + 1).trim().split(/\s+/).filter(Boolean).map(token => isAbsolute(token) ? token : join(root, token));
   const settled = listed(files).every(file => !existsSync(file) || statSync(file).ctimeMs < started - 2_000) &&
@@ -524,9 +526,22 @@ export function compileSource(
 
   const context = compilationContext(stem, options.containerKind, options.containerId);
   const assemblyTu = assemblyTranslationUnit(context);
+  if (!assemblyTu && absoluteSource.endsWith(".ASM")) {
+    assertAssemblySource(readFileSync(absoluteSource, "utf8"), absoluteSource, { cpp: true, sdkPlaceholders: configuredAssembler(context).postAssembly.includes("psyq-dmpsx") });
+    resetCompilerArtifacts(absoluteOutput, stem);
+    runTool(configuredTool("cpp"), [...configuredAssemblyCppFlags(context), absoluteSource, "-o", assembly]);
+    assertAssemblySource(readFileSync(assembly, "utf8"), assembly, { sdkPlaceholders: configuredAssembler(context).postAssembly.includes("psyq-dmpsx") });
+    if (options.assemble) assemble(context, assembly, object);
+    return { source: absoluteSource, preprocessed: assembly, assembly, object, outputDir: absoluteOutput, stem, cc1Flags: [], diagnostics: "", form: "assembly" };
+  }
   if (assemblyTu) {
     const planned = planAssemblyTranslationUnit(context, assemblyTu, absoluteSource, absoluteOutput, stem);
-    if (options.assemble) assemble(context, assemblyTu.source, planned.object!);
+    if (assemblyTu.source.endsWith(".ASM")) {
+      planned.preprocessed = planned.assembly = join(absoluteOutput, `${stem}.asm.s`);
+      runTool(configuredTool("cpp"), [...configuredAssemblyCppFlags(context), assemblyTu.source, "-o", planned.preprocessed]);
+      if (!assemblyTu.part.backlog) assertAssemblySource(readFileSync(planned.preprocessed, "utf8"), planned.preprocessed, { sdkPlaceholders: configuredAssembler(context).postAssembly.includes("psyq-dmpsx") });
+    }
+    if (options.assemble) assemble(context, planned.assembly, planned.object!);
     return planned;
   }
   resetCompilerArtifacts(absoluteOutput, stem);
@@ -559,8 +574,8 @@ export function compileSource(
   return result;
 }
 
-/** A library member reconstructed as its one hand-written `.s`: the production
- * assembler (with its input rewrites) is the whole pipeline. */
+/** A library member reconstructed as one hand-written source. `.ASM` uses
+ * production cpp before the configured assembler and declared stages. */
 function assemblyTranslationUnit(context: FlagContext): LibraryAssemblyTu | undefined {
   return context.kind === "library" && context.id ? libraryAssemblyTu(libraryMemberById(context.id), projectRoot()) : undefined;
 }
@@ -603,9 +618,22 @@ export async function compileSourceAsync(
   const object = join(absoluteOutput, `${stem}.c.o`);
   const context = compilationContext(stem, options.containerKind, options.containerId);
   const assemblyTu = assemblyTranslationUnit(context);
+  if (!assemblyTu && absoluteSource.endsWith(".ASM")) {
+    assertAssemblySource(readFileSync(absoluteSource, "utf8"), absoluteSource, { cpp: true, sdkPlaceholders: configuredAssembler(context).postAssembly.includes("psyq-dmpsx") });
+    resetCompilerArtifacts(absoluteOutput, stem);
+    await runToolAsync(configuredTool("cpp"), [...configuredAssemblyCppFlags(context), absoluteSource, "-o", assembly], projectRoot(), options.signal);
+    assertAssemblySource(readFileSync(assembly, "utf8"), assembly, { sdkPlaceholders: configuredAssembler(context).postAssembly.includes("psyq-dmpsx") });
+    if (options.assemble) await assembleAsync(context, assembly, object, projectRoot(), options.signal);
+    return { source: absoluteSource, preprocessed: assembly, assembly, object, outputDir: absoluteOutput, stem, cc1Flags: [], diagnostics: "", form: "assembly" };
+  }
   if (assemblyTu) {
     const planned = planAssemblyTranslationUnit(context, assemblyTu, absoluteSource, absoluteOutput, stem);
-    if (options.assemble) await assembleAsync(context, assemblyTu.source, planned.object!, projectRoot(), options.signal);
+    if (assemblyTu.source.endsWith(".ASM")) {
+      planned.preprocessed = planned.assembly = join(absoluteOutput, `${stem}.asm.s`);
+      await runToolAsync(configuredTool("cpp"), [...configuredAssemblyCppFlags(context), assemblyTu.source, "-o", planned.preprocessed], projectRoot(), options.signal);
+      if (!assemblyTu.part.backlog) assertAssemblySource(readFileSync(planned.preprocessed, "utf8"), planned.preprocessed, { sdkPlaceholders: configuredAssembler(context).postAssembly.includes("psyq-dmpsx") });
+    }
+    if (options.assemble) await assembleAsync(context, planned.assembly, planned.object!, projectRoot(), options.signal);
     return planned;
   }
   resetCompilerArtifacts(absoluteOutput, stem);
@@ -637,8 +665,8 @@ export function assembleTarget(funcName: string, outputDir: string): string {
     const directory = resolve(projectRoot(), outputDir); mkdirSync(directory, { recursive: true });
     const object = join(directory, `${key}.target.o`);
     const temporary = `${object}.${process.pid}.${assembleTargetSequence++}`;
-    writeFileSync(temporary, member.bytes); renameSync(temporary, object);
-    writeObjectFunctionView(object, fn.name);
+    writeFileSync(temporary, member.originalObject?.bytes ?? member.bytes); renameSync(temporary, object);
+    writeObjectFunctionView(object, member.originalObject ? key : fn.name);
     return object;
   }
   const asmSource = resolveAsmSource(funcName);
@@ -732,10 +760,31 @@ export function splitOperands(text: string): string[] {
 }
 
 export function disassembleObject(object: string, span?: { section: string; offset: number; size: number }): DisassembledInstruction[] {
-  const symbol = objectFunctionView(object);
+  const symbol = objectFunctionView(object), bytes = readFileSync(object);
+  const native = bytes.toString("ascii", 0, 3) === "LNK" || (bytes.length >= 2 && [0x162, 0x166, 0x142].includes(bytes.readUInt16LE(0)));
+  const model = native || (!span && symbol) ? readRelocatableObject(bytes) : undefined;
   if (!span && symbol) {
-    span = objectFunctions(readRelocatableObject(readFileSync(object))).find(fn => fn.name === symbol);
+    if (model!.native?.format === "psyq-lnk" && symbol.includes("::")) {
+      const target = requireLibraryFunction(symbol);
+      if (digest(bytes) !== target.member.originalObject?.sha256) throw new Error(`Native target changed: ${object}`);
+      span = target.fn;
+    } else span = objectFunctions(model!).find(fn => fn.name === symbol);
     if (!span) throw new Error(`Object does not define ${symbol}: ${object}`);
+  }
+  if (model?.native) {
+    const types: Record<number, string> = { 1: "R_MIPS_16", 2: "R_MIPS_32", 4: "R_MIPS_26", 5: "R_MIPS_HI16", 6: "R_MIPS_LO16", 7: "R_MIPS_GPREL16", 8: "R_MIPS_LITERAL" };
+    const spans = span ? [span] : [...model.sections].filter(([, s]) => s.flags & 4).map(([section, s]) => ({ section, offset: 0, size: s.size }));
+    return spans.flatMap(range => {
+      const section = model.sections.get(range.section);
+      if (!section || range.offset < 0 || range.size < 0 || range.offset + range.size > section.size || range.size % 4) throw new Error(`Invalid native instruction span: ${object}`);
+      if (!range.size) return [];
+      return disassembleBytes(section.data.subarray(range.offset, range.offset + range.size), range.offset).map((text, i) => {
+        const [mnemonic, operandText = ""] = text.split(/\s+(.*)/), address = range.offset + i * 4;
+        const relocation = model.relocations.find(r => r.section === range.section && r.offset === address);
+        return { address, mnemonic: mnemonic!.toLowerCase(), operands: splitOperands(operandText), operandText, raw: `${address.toString(16)}: ${text}`,
+          ...(relocation ? { relocation: { type: types[relocation.type]!, symbol: relocation.reference } } : {}) };
+      });
+    });
   }
   const dump = runTool(configuredTool("objdump"), ["-dr", "--no-show-raw-insn", ...(span ? ["-j", span.section,
     `--start-address=${span.offset}`, `--stop-address=${span.offset + span.size}`] : []), object]);
@@ -772,7 +821,13 @@ export function disassembleObject(object: string, span?: { section: string; offs
 export function disassembleFunctionObject(object: string, name: string): DisassembledInstruction[] {
   const target = requireTargetCapability(name, "functionInstructionView");
   if (target.coordinate.kind === "image") return disassembleObject(object);
-  const fn = objectFunctions(readRelocatableObject(readFileSync(object))).find(f => f.name === target.symbol);
+  const bytes = readFileSync(object), model = readRelocatableObject(bytes);
+  let fn;
+  if (model.native?.format === "psyq-lnk") {
+    const original = requireLibraryFunction(name);
+    if (digest(bytes) !== original.member.originalObject?.sha256) throw new Error(`Native target changed: ${object}`);
+    fn = original.fn;
+  } else fn = objectFunctions(model).find(f => f.name === target.symbol);
   if (!fn) throw new Error(`Object does not define ${target.symbol}: ${object}`);
   return disassembleObject(object, fn);
 }

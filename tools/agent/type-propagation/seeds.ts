@@ -67,7 +67,7 @@ export function seedOracle(directory: string, withheld: string[] = [], permitted
       } else {
         const artifact = compileSource(source, join(projectRoot(), "build/cache/verified-seeds", container.id, name, inputHash), name,
           { assemble: true, containerKind: container.kind, preprocessedText: processed.text });
-        const verdict = compareFunction(name, { objectPath: artifact.object!, container });
+        const verdict = compareFunction(name, { objectPath: artifact.object!, candidateSource: artifact.source, container });
         if (verdict.verdict !== "match") throw new Error(`defining C relocated bytes: ${verdict.verdict}`);
         prototype.slots = slotsWithTypedefs(prototype.paramTypes ?? [], scope.source);
         prototype.usedParameters = parameterReads(scope.source, name);

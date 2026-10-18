@@ -245,7 +245,7 @@ function differingWords(functionName: string, entry: Entry): string[] {
     const target = resolveFunctionTarget(functionName);
     const container = target.coordinate.kind === "image" ? requireFunctionLocation(functionName).container : undefined;
     const oracle = compareFunction(functionName, {
-      objectPath: entry.provenance.value.object, ...(container ? { container } : {}),
+      objectPath: entry.provenance.value.object, ...(entry.provenance.value.source && !entry.provenance.value.source.startsWith("(") ? { candidateSource: entry.provenance.value.source } : {}), ...(container ? { container } : {}),
     });
     if (oracle.differing.length === 0) return oracle.verification && oracle.verification.verdict !== "match"
       ? [`Owning TU: ${oracle.verification.verdict}`, ...oracle.verification.differences] : [];

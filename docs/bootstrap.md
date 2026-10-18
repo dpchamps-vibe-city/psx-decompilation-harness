@@ -61,9 +61,18 @@ Original PSY-Q LIB/LNK conversion requires a separately supplied converter,
 configured as `tools.psyq2elf`. Supported first-time extraction converts both
 unique and colliding members into `lib/`, retaining original/member/converter
 hashes. Different existing results are never overwritten silently. An ELF
-member match does not prove identity with the original LNK encoding. Library
+member match does not prove identity with the original LNK encoding. There is
+no preexisting-object self-certification or post-link SDK byte correction. A
+HI16 carry correction must belong to the identified converter itself (with its
+own validated configuration/hash); the harness supplies no generic carry-fix
+switch. BSS placement is linker-script-only. Library
 selection is explicit in `project.json`; never select both an archive and its
 extracted copies or infer target kind from the existence of `lib/`.
+
+Converter-specific options belong in optional `flags.psyq2elf` and must be
+backed by that identified converter's evidence. The converter's executed-file
+and linked-library hashes plus these arguments bind extraction records. There is
+no implicit HI16 carry correction, object-byte repair or target-data copying.
 
 ## Safety, updates and workers
 
@@ -87,7 +96,16 @@ allowlist entries in the same patch, integrated through the existing worker
 mechanism.
 
 Scaffolding leaves the assembler at MASPSX, the backwards-compatible default;
-identification never switches it automatically. Select direct GAS or per-owner
+identification never switches it automatically. When an existing toolchain
+selects `assembler.objectFormat: "ecoff"`, bootstrap supplies the positional
+1997-compatible `macro.inc` and stub-only `include_asm.h` from
+`templates/period/include/`; existing headers are preserved. Modern templates
+remain the default. Hand-written `.ASM` TUs use production cpp, SDK register/GTE
+headers, the configured assembler and declared stages. The shipped modern
+`gte_macros.inc` encodes COP2 directly for projects not selecting DMPSX; it is
+not the SDK's placeholder protocol. Reference stub generation emits symbolic
+instructions/data and reports gaps, never `.reloc` tables or instruction words.
+Select direct GAS or per-owner
 assembler profiles only from target evidence, then re-verify (see
 [assembler backends](toolchain.md#assembler-backends)).
 

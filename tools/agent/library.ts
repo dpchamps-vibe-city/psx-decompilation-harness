@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadLibraryProject } from "../lib/project.js";
 import { prepareLibraryFunction, measureLibraryFunction, renderLibraryComparison, runLibraryTask } from "./libraryTarget.js";
 import { preflightLibraryFunction, checkLibrarySplits } from "./libraryPreflight.js";
+import { migrateMemberIds } from "./migrateMemberIds.js";
 
 export async function main(args: string[]): Promise<void> {
   const [task, ...rest] = args;
@@ -15,10 +16,22 @@ export async function main(args: string[]): Promise<void> {
       "npm run library -- check-splits [--json] (all original assembly splits only, not live C)\n" +
       "npm run library -- diff MEMBER::SYMBOL [--src FILE]\n" +
       "npm run library -- check [--member ID | --accepted]\n" +
+      "npm run library -- migrate-member-ids [--write] [--json] (dry-run by default)\n" +
       "check without scope verifies EVERY configured member; --accepted is only an environment guard.");
     return;
   }
   if (!loadLibraryProject()) throw new Error("Configure a relocatable-library target in project.json first; see docs/library-targets.md");
+  if (task === "migrate-member-ids") {
+    if (rest.some(a => !["--write", "--json"].includes(a))) throw new Error("migrate-member-ids accepts only --write and --json");
+    const report = migrateMemberIds(rest.includes("--write"));
+    console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : [
+      `${report.written ? "Migrated" : "Dry run:"} ${Object.keys(report.mapping).length} member IDs`,
+      ...report.changes.map(c => `${c.regenerate ? "Regenerate: " : ""}${c.path}${c.path !== c.destination ? ` -> ${c.destination}` : ""}: ${c.occurrences} occurrences`),
+      ...report.invalidated.map(p => `Invalidate: ${p}`),
+      "Run split to regenerate reference fragments/graph, then check-all under the new IDs before resuming the autoloop.",
+    ].join("\n"));
+    return;
+  }
   const allowed = task === "check-splits" ? ["--json"] : task === "progress" ? ["--json", "--list", "--remaining", "--done", "--markdown"] :
     task === "check" ? ["--member", "--accepted"] : ["prepare", "preflight"].includes(task) ? ["--json"] : task === "diff" ? ["--src"] : [];
   const positional: string[] = [];

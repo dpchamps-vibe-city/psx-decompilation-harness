@@ -10,7 +10,7 @@ export interface MacroFunction {
   bytes: Buffer;
   /** ET_REL coordinates/operands, not linked addresses. Indexed by word. */
   coordinate?: { section: string; offset: number; inferredSize: boolean };
-  relocations?: ReadonlyMap<number, { type: number; reference: string; addend: number; targetOffset?: number; callee?: string }>;
+  relocations?: ReadonlyMap<number, { type: number; reference: string; addend: number | null; targetOffset?: number; callee?: string }>;
   /** Metadata only; never a filter on target-byte decoding/tiling. */
   sourceRepresentation?: "compiled-C" | "INCLUDE_ASM" | "top-level-asm" | "missing" | "not-inspected";
   /** Independent adjudication only; disassembler 'handwritten' comments do

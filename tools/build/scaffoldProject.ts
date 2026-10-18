@@ -171,8 +171,10 @@ export function planScaffold(root: string, mode: BootstrapMode = "exe", packageR
     if (!existsSync(join(packageRoot, "templates/project", required))) throw new Error(`Package bootstrap template missing: ${required}`);
   add("configs/flag_overrides.mk", FLAG_OVERRIDE_HEADER, true);
   add("tools/resource-parsers/parser-plugins.ts", "/* Project-authored resource parsers. Built-in parsers stay in the installed package. */\nexport const EXTRA_PARSERS = [];\n", true);
+  const toolchainBytes = currentBytes(root, "toolchain.json") ?? readFileSync(join(packageRoot, "templates/project/toolchain.json"));
+  const period = parseObject(toolchainBytes, "toolchain.json").assembler?.objectFormat === "ecoff";
   for (const path of ["include/include_asm.h", "include/macro.inc", "include/labels.inc", "include/gte_macros.inc", "include/debughook.h", "include/scratchpad.h"])
-    add(path, readFileSync(join(packageRoot, path)), true);
+    add(path, readFileSync(join(packageRoot, period && ["include/include_asm.h", "include/macro.inc"].includes(path) ? `templates/period/${path}` : path)), true);
   add("project.json", json(mode === "exe"
     ? { schemaVersion: 1, target: { kind: "linked-image" } }
     : { schemaVersion: 1,

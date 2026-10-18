@@ -26,7 +26,7 @@ test("mixed C/backlog references survive either replacement order; local matches
   config.includeDirs = ["include"]; config.profiles = {}; config.containerProfiles = {};
   config.flags.cc1 = config.flags.cc1.map((f: string) => f === "-G8" ? "-G0" : f);
   config.flags.as = config.flags.as.map((f: string) => f === "-G8" ? "-G0" : f);
-  config.assembler = { kind: "gas", inputRewrites: ["move-addu"] };
+  config.assembler = { kind: "gas" };
   mkdirSync(join(root, "include"));
   for (const file of ["include_asm.h", "macro.inc", "gte_macros.inc"]) copyFileSync(join(ROOT, "include", file), join(root, "include", file));
   writeFileSync(join(root, "toolchain.json"), JSON.stringify(config));
@@ -34,7 +34,6 @@ test("mixed C/backlog references survive either replacement order; local matches
     const seed = join(root, "seed.c"); writeFileSync(seed, sources.entry + sources.caller);
     const artifacts = compileSource(seed, join(root, "seed"), "seed", { containerKind: "exe", assemble: false });
     const assembly = readFileSync(artifacts.assembly, "utf8")
-      .replace(/^\s*move\s+([^,\n]+),([^\n#]+)/gm, "\taddu $1,$2,$0")
       .replace(/^entry:/m, ".Lentry:\nentry:").replace(/\bjal\s+entry\b/g, "jal .Lentry");
     writeFileSync(join(root, "original.s"), assembly);
     execFileSync(config.tools.as, [...config.flags.as, join(root, "original.s"), "-o", join(root, "original.o")]);
@@ -58,7 +57,7 @@ test("mixed C/backlog references survive either replacement order; local matches
         const measured = measureLibraryFunction(key(symbol), candidate);
         assert.equal(measured.comparison.verdict, "match", JSON.stringify(measured.comparison));
         assert.equal(measured.functionComparison.verdict, "match");
-        const local = compareRelocatableFunction(key(symbol), measured.artifacts.object!);
+        const local = compareRelocatableFunction(key(symbol), measured.artifacts.object!, measured.artifacts.source);
         assert.equal(local.verdict, "match");
         assert.equal(local.verification!.verdict, "match");
         assert(local.rawCandidateWords!.some(w => w.relocations?.some(r => r.reference === "named:entry")));

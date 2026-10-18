@@ -191,7 +191,7 @@ export function transferFromDonor(
         notify(`    ${id}: invalid C (${rejection})`);
         continue;
       }
-      const oracle = compareFunction(target, { objectPath: artifacts.object!, container: targetWords.container });
+      const oracle = compareFunction(target, { objectPath: artifacts.object!, candidateSource: artifacts.source, container: targetWords.container });
       outcome.verdict = oracle.verdict === "stub" ? "error" : oracle.verdict;
       outcome.matchedWords = oracle.same;
       outcome.totalWords = Math.max(oracle.targetWords.length, oracle.candidateWords.length);
@@ -242,7 +242,7 @@ export function verifyCandidate(
     });
     const implicit = detectImplicitDeclarations(readFileSync(artifacts.preprocessed, "utf-8"), target);
     if (implicit.length > 0) return { verdict: "error", error: `implicit declaration(s): ${implicit.join(", ")}` };
-    const oracle = compareFunction(target, { objectPath: artifacts.object!, container });
+    const oracle = compareFunction(target, { objectPath: artifacts.object!, candidateSource: artifacts.source, container });
     return {
       verdict: oracle.verdict === "stub" ? "error" : oracle.verdict,
       matchedWords: oracle.same,

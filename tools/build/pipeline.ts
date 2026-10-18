@@ -1,5 +1,8 @@
 import { projectRoot, harnessRoot } from "../lib/runtimeContext.js";
 import { assemble } from "../lib/assembler.js";
+import { acceptanceToolchain, executedToolIdentity } from "../lib/toolProvenance.js";
+import { assertAssemblySource } from "../lib/assemblyPolicy.js";
+import { scanDependencies, dependencyScannerIdentity } from "../lib/dependencyScanner.js";
 import { currentScriptArgs } from "../lib/installedScripts.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { splitSdkLibs } from "./splitSdkLibs.js";
@@ -61,7 +64,7 @@ export function splitSdk(): void {
     if (state().sdk) return;
     const config = loadToolchain(), sdk = configuredSdk();
     const map = splitSdkLibs({ root: projectRoot(), sdkDir: sdk.originalDir, convertedDir: sdk.convertedDir, signatures: sdk.signatures, version: sdk.version, write: true,
-      ...(config.tools.psyq2elf ? { converter: configuredTool("psyq2elf") } : {}) });
+      ...(config.tools.psyq2elf ? { converter: configuredTool("psyq2elf"), converterArgs: config.flags.psyq2elf ?? [] } : {}) });
     console.log(`Wrote SDK ${map.version}: ${map.members.length} members, ${new Set(map.members.filter(m => m.collision).map(m => m.oPath)).size} collision-safe objects, ${map.signatures.length} signature mappings`);
     state().sdk = true;
   });
@@ -87,7 +90,7 @@ export function splitContainer(container: Container): void {
   }
   script("build/mergeFragments", ["--write"]);
   splat(container);
-  for (const name of ["patchLinkerBss", "patchLibBss"]) script(`build/${name}`, ["--write"]);
+  script("build/patchLinkerBss", ["--write"]);
   appendLinkIncludes(container);
   script("build/classifyGlobals", ["--write"]);
   script("agent/contextExport", ["--all"]);
@@ -128,7 +131,10 @@ export function compileObject(container: Container, source: string, root = proje
   }
   mkdirSync(dirname(output), { recursive: true });
   rmSync(output, { force: true });
-  command(configuredTool("cpp", root), [...configuredFlags("cpp", container, root), "-MD", "-MP", "-MF", deps, "-MT", output, source, "-o", preprocessed], root);
+  const cppFlags = configuredFlags("cpp", container, root);
+  writeFileSync(deps, scanDependencies(source, cppFlags, root));
+  writeFileSync(`${deps}.scanner.json`, JSON.stringify(dependencyScannerIdentity(root), null, 2) + "\n");
+  command(configuredTool("cpp", root), [...cppFlags, source, "-o", preprocessed], root);
   const dependencies = dependencyPaths(readFileSync(deps, "utf8"), root);
   const before = inputKey(dependencies);
   command(configuredTool("cc1", root), [...flags, preprocessed, "-o", assembly], root);
@@ -139,6 +145,7 @@ export function compileObject(container: Container, source: string, root = proje
   return output;
 }
 function assembleObject(container: Container, source: string, root: string, identity: string): string {
+  assertAssemblySource(readFileSync(source, "utf8"), source);
   const output = `${source}.o`;
   const key = digest(JSON.stringify({ identity, flags: configuredFlags("as", container, root), inputs: snapshot(root, [source, ...assemblyIncludes(root)]) }));
   if (artifactCurrent(output, key)) return output;
@@ -185,6 +192,7 @@ function buildContainerInInvocation(container: Container, retry: boolean): void 
   if (container.kind === "exe") splitSdk();
   else refreshEngineExports();
   if (!existsSync(join(projectRoot(), container.paths.ldScript))) throw new Error(`Missing ${container.paths.ldScript}; run npm run split -- --container ${container.id}`);
+  if (/\bbuild\/lib\//.test(readFileSync(join(projectRoot(), container.paths.ldScript), "utf8"))) throw new Error("Linker script references retired patched SDK copies under build/lib; regenerate it to link identified converter outputs directly");
   if (!state().identity) {
     refreshBuildInputs(projectRoot());
     state().identity = readFileSync(join(projectRoot(), "build/toolchain-inputs.stamp"), "utf8").trim();
@@ -220,14 +228,19 @@ function buildContainerInInvocation(container: Container, retry: boolean): void 
   }
   state().built.add(container.id);
 }
-/** Verify the entire payload, never a truncated slice or just function scores.
- * EXE headers are excluded; raw overlays are compared in their entirety. */
+/** Verify exact payload extent and load-bearing PS-X EXE header fields.
+ * Raw overlays are compared in their entirety. No prefix-only acceptance. */
 export function verifyContainer(container: Container, root = projectRoot()): void {
   const original = readFileSync(resolve(root, container.targetPath)), built = readFileSync(join(root, container.paths.builtBin));
   let a = original, b = built;
   if (container.kind === "exe") {
     const end = container.payloadOffset + container.payloadSize;
     if (original.length < end || built.length < end) throw new Error(`${container.id}: original or built payload is truncated`);
+    if (built.length !== end) throw new Error(`${container.id}: built image has trailing bytes beyond the declared payload`);
+    if (container.payloadOffset < 0x20 || original.toString("ascii", 0, 8) !== "PS-X EXE" || built.toString("ascii", 0, 8) !== "PS-X EXE") throw new Error(`${container.id}: invalid PS-X EXE header`);
+    for (const [name, offset] of [["entry point", 0x10], ["gp", 0x14], ["load address", 0x18], ["payload size", 0x1c]] as const)
+      if (original.readUInt32LE(offset) !== built.readUInt32LE(offset)) throw new Error(`${container.id}: EXE ${name} differs`);
+    if (original.readUInt32LE(0x1c) !== container.payloadSize) throw new Error(`${container.id}: original payload size disagrees with container layout`);
     a = original.subarray(container.payloadOffset, end); b = built.subarray(container.payloadOffset, end);
   }
   const dir = dirname(join(root, container.paths.builtBin));
@@ -238,11 +251,16 @@ export function verifyContainer(container: Container, root = projectRoot()): voi
 }
 /** The verification phase is separate from required build-time rodata work.
  * Keeping this sequence explicit makes success/failure side effects testable. */
-export function verifyBuiltContainers(containers: Container[], all: boolean, root = projectRoot(), actions = {
+export function verifyBuiltContainers(containers: Container[], all: boolean, root = projectRoot(), actions: {
+  verify: typeof verifyContainer; profile: () => void; rodata: (args: string[]) => void;
+  provenance?: () => unknown;
+} = {
+  provenance: () => ({ ...acceptanceToolchain(root), ld: executedToolIdentity("ld", root), objcopy: executedToolIdentity("objcopy", root) }),
   verify: verifyContainer,
   profile: () => generateProjectProfile(["--write"]),
   rodata: runRodataDerivation,
 }): void {
+  const provenance = actions.provenance?.();
   for (const container of containers) {
     if (!existsSync(join(root, container.paths.builtElf))) throw new Error(`${container.id}: no successful final link to verify`);
     actions.verify(container, root);
@@ -250,6 +268,10 @@ export function verifyBuiltContainers(containers: Container[], all: boolean, roo
     if (!all) actions.rodata(["--container", container.id]);
   }
   if (all) actions.rodata(["--all"]);
+  if (provenance) for (const container of containers) writeFileSync(join(root, dirname(container.paths.builtBin), "acceptance.json"), JSON.stringify({
+    schemaVersion: 1, container: container.id, verdict: "match", toolchain: provenance,
+    originalSha256: fileDigest(resolve(root, container.targetPath)), candidateSha256: fileDigest(join(root, container.paths.builtBin)),
+  }, null, 2) + "\n");
 }
 function selection(args: string[], all = false): Container[] {
   const index = args.indexOf("--container");

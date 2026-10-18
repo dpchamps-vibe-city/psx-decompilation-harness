@@ -23,7 +23,7 @@ export interface MemberRecord {
   sourceHash: string;
   archiveHash?: string;
   objectHash?: string;
-  converter?: { sha256: string; mode: "supplied" | "preexisting-elf" | "elf-ar" };
+  converter?: { sha256: string; mode: "supplied" | "preexisting-elf" | "elf-ar"; path?: string; args?: string[]; dependencies?: Array<{ path: string; sha256: string }> };
   symbols: { name: string; offset: number }[];
   oPath: string;
   collision: boolean;
@@ -38,8 +38,6 @@ export interface MemberMap {
 export const hash = (bytes: Buffer | string): string => createHash("sha256").update(bytes).digest("hex");
 export const signatureId = (entry: SigEntry): string => hash(JSON.stringify(entry));
 export const memberKey = (name: string): string => name.replace(/\.(obj|o)$/i, "").toLowerCase();
-/** Original and regenerated SDK inputs share the existing patched-object tree. */
-export const patchedSdkObjectPath = (oPath: string): string => `build/${oPath.replace(/^build\/sdk\//, "")}`;
 
 /** Original LIB v1/v2 layouts, witnessed by the vendored MipsDis parser. Fail
  * closed on truncation; never scan for LNK magic inside payloads. */

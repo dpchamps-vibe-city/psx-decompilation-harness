@@ -18,13 +18,21 @@ preparation, compiler analysis, SDK integration and Pi verification share it.
   `harness`, `project`, `runtime` or `external`; no resolver tries alternate roots.
   Spaces in paths remain one argv
   item. For wrappers, configure an executable wrapper file, not `node file.js`.
+  Production preprocessing uses `tools.cpp` without dependency-generation or
+  driver-probing flags. Optional `tools.dependencyScanner` defaults to `tools.cpp`
+  and uses the period-compatible `-M -MG` protocol; its output discovers inputs
+  but never feeds the compiler. Dependency receipts record the scanner's hash;
+  changing only the scanner does not change `compilationIdentity`. If `tools.cpp`
+  is a driver that delegates preprocessing, explicitly configure
+  `tools.cppFrontend` too, so both executables are hashed. Standalone period
+  `cccp` needs no frontend entry and is never asked for `-print-prog-name`.
 - `compiler`: candidate family/version, optional pinned source directory, and
   optional `analysis: { provider, profile }`. The configured provider supplies
   diagnostic evidence; the harness does not dispatch on compiler versions.
   Legacy `capabilities` remain compatible when no provider is selected, but
   are ignored once `analysis` is configured. The production compile protocol
   remains cpp → cc1 → configured assembler (MASPSX → GAS, or direct GAS with
-  named compatibility rewrites); adding diagnostics does not replace it with
+  unchanged compiler output and explicitly declared period-tool stages); adding diagnostics does not replace it with
   another compiler-driver protocol. Unknown providers report unavailable rather
   than borrowing a GCC parser or pass model.
 - `includeDirs`: shared cpp/GAS include search directories, anchored to the root.
@@ -68,45 +76,45 @@ EXE/overlay layout. The one-EXE/paired-archive container model remains a convent
 
 Schema v1 keeps `tools.maspsx` and `flags.maspsx` required, even for GAS-only
 projects; GAS contexts ignore them. With no `assembler` key, MASPSX and its
-legacy argv/compilation identities are unchanged. Bootstrap retains this default.
-An explicit profile assembler replaces the base selection, not its rewrite list:
+legacy argv is unchanged. The provenance identity is versioned: older acceptance
+records must be re-verified. Bootstrap retains this default.
+An explicit profile assembler replaces the base selection:
 
 ```json
-"assembler": { "kind": "gas", "inputRewrites": ["move-addu"] },
+"assembler": { "kind": "gas", "objectFormat": "ecoff", "postAssembly": ["psyq-dmpsx", "psyq-lnk"] },
 "profiles": {
   "native": { "assembler": { "kind": "maspsx" } }
 }
 ```
 
-`inputRewrites` is required for `gas` (an empty array is valid), forbidden for
-`maspsx`, and accepts only known IDs. `move-addu` rewrites an entire instruction
-line `move rd,rs` to `addu rd,rs,$0`, retaining trailing `#` comments and line
-count. It reconciles period encoding with modern GAS's `or` encoding. Labels,
-directives, comments, included stubs and handwritten `#APP` regions are unchanged.
-A new rewrite requires original-word evidence and a focused regression fixture;
-rewrites are not an unrestricted text filter or a means to patch target words.
+`objectFormat` defaults to `elf`; `ecoff` selects native little-endian MIPS
+ECOFF output and verification. The configured assembler must actually emit that
+format. `inputRewrites` is rejected, including an empty list. Compiler output
+feeds `tools.as` unchanged: no move substitution, section renaming or temporary
+rewritten input. Choose an identified assembler that implements the target's
+operations instead of patching its inputs or outputs.
 
-`rdata-section` rewrites a bare compiler directive `.rdata` to
-`.section .rdata,"a",@progbits`, preserving whitespace, trailing `#` comments
-and line endings. Modern ELF GAS maps the `.rdata` pseudo-op to `.rodata`;
-the explicit directive retains the original allocated, read-only PROGBITS
-section name. The adopting PSY-Q library project's census found nonempty
-`.rdata` in 154 of 2,224 original members (40 with switch tables); its LNK-to-ELF
-converter and `tools/lib/libraryAssembly.ts` both retain `.rdata`. The compiler
-emits `.rdata`, so only assembly was changing its name. Arguments, labels and
-`#APP` regions are not rewritten; inputs marked `handwritten` bypass all rewrites.
-Opt in per project via `assembler.inputRewrites`; library compiler data then
-shares the same section as included reference data. Convert the member's
-`_data.c` in the same change to avoid duplicate contents. Executable projects
-should retain their current selection unless their linker scripts also collect
-`.rdata` (the image oracle already aliases `.rdata`/`.rodata`).
+**`psyq-dmpsx`** is a declared post-assembly stage, a native implementation
+of Sony's DMPSX GTE finalization. Its closed placeholder grammar and operand
+mapping derive from the SDK's INLINE_S/INLINE_C protocol and COP2 encoding.
+Only executable candidate storage is inspected. Recognized placeholders become
+COP2 command words; an unknown or relocated placeholder fails. Non-executable
+storage and ordinary instructions are untouched. No declaration means no stage.
+Every replacement is recorded. The stage identity hashes its implementation
+and the object readers it executes; missing implementation files fail closed.
+This is not a configurable rewrite channel:
+a new stage needs a named period-tool basis and real input/output validation,
+not matching-score evidence. Project population validation remains project-owned;
+synthetic encoding tests alone do not certify a particular SDK distribution.
 
-`tools/lib/assembler.ts` owns every assembler command. Direct GAS writes
-`<object>.as-input.s`, then invokes `tools.as` with `flags.as` from the project
-root, so relative `.include`s still resolve. MASPSX forces GAS `-G0` unless
-`--dont-force-G0` is configured; direct GAS does not. GAS requires an explicit
-zero threshold: nonzero `-G` (including its default) is unsupported because GAS
-assumes undeclared externs are small, unlike ASPSX's declaration-based rule.
+`tools/lib/assembler.ts` owns every assembler command and hashes the unchanged
+input. It invokes `tools.as` with `flags.as` from the project root, so relative
+`.include`s still resolve. MASPSX forces GAS `-G0` unless
+`--dont-force-G0` is configured; direct GAS does not. GAS normally requires an explicit
+zero threshold because it assumes undeclared externs are small, unlike ASPSX's
+declaration-based rule. Direct GAS requires explicit `-G0` in every profile.
+`lnkLayout: "early"` changes LNK section IDs/order and empty-section packaging
+only; it does not authorize `-G8`. The period stub generator rejects `.sbss` data.
 
 GAS's default optimization permits reorder-mode branch-slot swapping, including
 a macro's final word (never a MIPS1 load). `-O` remains an ordinary `flags.as`
@@ -115,12 +123,56 @@ MASPSX forces noreorder at compiler function boundaries and inserts hazard nops
 into its text. GAS inserts hazards internally, so compiler-text attribution
 cannot see them: inspect the object or listing instead.
 
-Expansion capture preserves MASPSX's text output. For GAS it retains rewritten
-input plus `<object>.listing.txt` (`-alm`) mapping each source line to its words.
-A separate listing assembly is byte-compared with the production object; its
-receipt carries kind, rewrites, both argvs, and input/listing/object hashes.
-Cache/verification identities include effective kind and rewrites, and the
-MASPSX hash/flags only when used; changing selection makes receipts stale.
+Expansion capture preserves MASPSX's text output. GAS retains its original
+input and `<object>.listing.txt` (`-alm`). A separate listing assembly runs the
+same declared stages and must equal the production object. Receipts retain both
+argvs, input/output hashes, stage versions/implementation hashes and replacements.
+Accepted library receipts survive candidate-directory cleanup. Assembly source
+policy checks both the original `.ASM` and its cpp expansion, so a header or
+local define cannot hide raw instruction words. Executable data directives
+(`.word`, `.half`, `.byte`, `.int`, `.long`, `.fill`, and nonzero-filled `.space`)
+are rejected, including symbolic words and invalid instruction encodings. The
+exceptions are recognized SDK placeholders with DMPSX declared and printable
+`.ascii`/`.asciz` text. Literal `#if 0` attempts are preserved but not audited as
+active source. Backlog status comes from TU manifests, not `.NON_MATCHING`
+symbols. These source checks do not apply to generated reference listings.
+
+Acceptance checks configured `toolPins` (SHA-256 plus optional recipe digest)
+and the configured compiler's source/binary binding on every run. Native
+original-object acceptance requires cpp, cc1 and as pins (and a frontend pin when
+cpp explicitly delegates to one). Plaintext accepted
+records identify these tools, recipes, object format and stages. Identities hash
+MASPSX's implementation package, not just its launcher, and linked libraries of
+host executables, not just binutils launchers. Scanner changes do not change
+production-byte identity; production cpp changes do.
+
+**`psyq-lnk`** must be the last post-assembly stage and requires ECOFF. It reads
+only the candidate, emits Sony LNK v2, and retains the raw assembled ECOFF next
+to the output as `<object>.ecoff`. Its closed `lnkLayout` table is `standard`
+(default) or `early`; the selected layout and implementation hashes enter
+identities and receipts. Unknown sections, symbol classes and relocations fail.
+
+`original-object` acceptance compares the complete original and rebuilt `.OBJ`
+SHA-256 hashes. A mismatch reports the first differing LNK record; no section,
+symbol, alignment, relocation or record-order normalization can grant acceptance.
+Accepted records retain both hashes and pinned tools; failed member records
+retain the candidate path and first differing record. Successful compile bundles
+are removed, including retained ECOFF; only the newest failed candidate bundle
+per member remains. Cross-format comparison
+is diagnostic only: ECOFF has no encoded alignment, so its diagnostic reader
+retains `null` rather than inventing BFD's default.
+
+SDK conversion requires an identified `tools.psyq2elf`; optional `flags.psyq2elf`
+passes explicit converter-specific options before the input/output paths. The
+converter hash, arguments and linked-library hashes participate in extraction
+identities and member receipts; preexisting converted objects cannot certify themselves. Converted objects link directly. There is no
+SDK data/rdata copying, unconditional HI16 correction or BSS symbol/header
+patching. A converter-specific carry bug must be fixed and validated in that
+identified converter, never repaired against the target image. BSS placement
+belongs exclusively in the linker script. Image checks reject trailing payload
+bytes and differing entry/gp/load-address/payload-size fields. Engine candidates
+must pass the whole container/member gate before publication; a function score
+or an unavailable check never licenses publication.
 
 `identify` reports per-member indexed-load scratch relations (`gas-rule`,
 `aspsx-rule`, or ambiguous), plus native LNK packaging when supplied through
@@ -322,9 +374,10 @@ rodata rederive/re-split retry preserve the inherited convergence behavior.
 Unresolved code members are reported, **not** claimed verified. Per-function
 matches do not replace this final oracle.
 
-For ELF/ar targets, `split`/`split-all`/`disassemble` scaffold member TUs
-with INCLUDE_ASM; `build` compiles present TUs; `check`/`check-all` require every
-member to be clean C and whole-object matching. `progress` reports fresh member
+For ELF/ar and Sony LIB/LNK targets, `split`/`split-all`/`disassemble` scaffold member TUs
+with INCLUDE_ASM; `build` compiles present TUs; `check`/`check-all` build every
+member and report every failure, including nonmatching stubs. Matching backlog
+is byte-verified but never counted as reconstructed C/assembly. `progress` reports fresh member
 verification. Use `npm run library -- --help` for inventory, preparation and
 scoped member checks. Image-only SDK integration/config-check/wipe tasks are not
 library adapters. Plain `clean` removes build outputs, not original inputs/C.

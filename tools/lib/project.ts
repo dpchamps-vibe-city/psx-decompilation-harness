@@ -7,10 +7,11 @@ import { loadToolchain } from "./toolchain.js";
 export const PROJECT_FILE = "project.json";
 export interface LibraryProject {
   schemaVersion: 1;
-  target: { kind: "relocatable-library"; format: "elf-ar"; archives: string[]; standaloneObjects: string[] };
+  target: { kind: "relocatable-library"; format: "elf-ar" | "psyq-lib"; archives: string[]; standaloneObjects: string[] };
   headers: { reference: string[]; owned: string[]; context: string[] };
   selection: { scope: "all-code-members" };
-  verification: { mode: "relocatable-object" };
+  verification: { mode: "relocatable-object" | "original-object"; originals?: { format: "psyq-lnk"; archives: string[]; objects: string[]; map: Record<string, { archive: string; ordinal: number } | { object: string }> } };
+  views?: { elf: Record<string, string> };
   output: { sourceDir: string; sourceLayout?: "grouped" | "member-id" | "tu-directory"; inputRoot?: string };
   /** Named toolchain flag/include profiles; exact member id wins over default. */
   toolchainProfile?: string;
@@ -28,14 +29,14 @@ export function loadLibraryProject(root = projectRoot()): LibraryProject | null 
   const file = join(root, PROJECT_FILE);
   if (!existsSync(file)) return null;
   const p = JSON.parse(readFileSync(file, "utf8"));
-  object(p, ["$schema", "schemaVersion", "target", "headers", "selection", "verification", "output", "toolchainProfile", "memberProfiles"], "config");
+  object(p, ["$schema", "schemaVersion", "target", "headers", "selection", "verification", "views", "output", "toolchainProfile", "memberProfiles"], "config");
   if (p.schemaVersion !== 1) throw new Error(`${PROJECT_FILE}: unsupported schemaVersion`);
   object(p.target, ["kind", "format", "archives", "standaloneObjects"], "target");
   if (p.target.kind === "linked-image") {
     if (Object.keys(p.target).length !== 1) throw new Error(`${PROJECT_FILE}: linked-image layout belongs in configs/splat and configs/overlays.json`);
     return null;
   }
-  if (p.target.kind !== "relocatable-library" || p.target.format !== "elf-ar") throw new Error(`${PROJECT_FILE}: supported library format is elf-ar (not original PSY-Q LIB/LNK)`);
+  if (p.target.kind !== "relocatable-library" || !["elf-ar", "psyq-lib"].includes(p.target.format)) throw new Error(`${PROJECT_FILE}: supported library formats are elf-ar and psyq-lib`);
   p.target.archives ??= []; p.target.standaloneObjects ??= [];
   paths(p.target.archives, "target.archives"); paths(p.target.standaloneObjects, "target.standaloneObjects");
   if (!p.target.archives.length && !p.target.standaloneObjects.length) throw new Error(`${PROJECT_FILE}: no target inputs configured`);
@@ -46,8 +47,26 @@ export function loadLibraryProject(root = projectRoot()): LibraryProject | null 
     if (a === b || a.startsWith(b + "/") || b.startsWith(a + "/")) throw new Error(`${PROJECT_FILE}: reference and owned headers overlap`);
   }
   p.selection ??= { scope: "all-code-members" }; object(p.selection, ["scope"], "selection");
-  p.verification ??= { mode: "relocatable-object" }; object(p.verification, ["mode"], "verification");
-  if (p.selection.scope !== "all-code-members" || p.verification.mode !== "relocatable-object") throw new Error(`${PROJECT_FILE}: unsupported selection/verification mode`);
+  p.verification ??= { mode: "relocatable-object" }; object(p.verification, ["mode", "originals"], "verification");
+  if (p.selection.scope !== "all-code-members" || !["relocatable-object", "original-object"].includes(p.verification.mode)) throw new Error(`${PROJECT_FILE}: unsupported selection/verification mode`);
+  if (p.verification.originals !== undefined) {
+    if (p.verification.mode !== "original-object" || p.target.format === "psyq-lib") throw new Error(`${PROJECT_FILE}: transitional originals mapping belongs only to elf-ar original-object verification`);
+    const o = p.verification.originals; object(o, ["format", "archives", "objects", "map"], "verification.originals");
+    if (o.format !== "psyq-lnk") throw new Error(`${PROJECT_FILE}: originals format must be psyq-lnk`);
+    o.archives ??= []; o.objects ??= []; paths(o.archives, "originals.archives"); paths(o.objects, "originals.objects");
+    object(o.map, Object.keys(o.map ?? {}), "originals.map");
+    for (const [id, raw] of Object.entries(o.map)) {
+      const m = raw as any; object(m, m?.archive ? ["archive", "ordinal"] : ["object"], `originals.map.${id}`);
+      paths([m.archive ?? m.object], `originals.map.${id}`);
+      if (m.archive && (!Number.isSafeInteger(m.ordinal) || m.ordinal < 0)) throw new Error(`${PROJECT_FILE}: invalid original ordinal ${id}`);
+    }
+  }
+  if (p.target.format === "elf-ar" && p.verification.mode === "original-object" && !p.verification.originals) throw new Error(`${PROJECT_FILE}: original-object mode requires an originals mapping`);
+  if (p.target.format === "psyq-lib" && p.verification.mode !== "original-object") throw new Error(`${PROJECT_FILE}: psyq-lib requires original-object verification`);
+  if (p.views !== undefined) {
+    object(p.views, ["elf"], "views"); object(p.views.elf, Object.keys(p.views.elf ?? {}), "views.elf"); paths(Object.values(p.views.elf), "views.elf");
+  }
+  if (p.target.format === "psyq-lib" && !p.views) throw new Error(`${PROJECT_FILE}: psyq-lib requires explicit content-checked ELF views`);
   p.output ??= { sourceDir: "src/libraries" }; object(p.output, ["sourceDir", "sourceLayout", "inputRoot"], "output"); paths([p.output.sourceDir], "output.sourceDir");
   if (!p.output.sourceDir.startsWith("src/") || /[*?\[{]/.test(p.output.sourceDir)) throw new Error(`${PROJECT_FILE}: output.sourceDir must be a directory under src/`);
   p.output.sourceLayout ??= "grouped";

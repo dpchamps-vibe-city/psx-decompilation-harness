@@ -1,6 +1,7 @@
 # Phase 3 — Original-object verification
 
-Status: proposed. Depends on: Phase 1, for the opt-in real-project check only.
+Status: capability implemented; all 2,167 view pairings validate. Strict native
+acceptance is 0/178 research members; see README Progress. Depends on: Phase 1, for the opt-in real-project check only.
 
 ## Goal
 
@@ -9,9 +10,13 @@ assembler (ECOFF) against the original SDK object (PSY-Q LNK), exactly. No
 format conversion is applied on either side. The converted ELF files keep their
 role as member inventory and disassembly input, and leave acceptance.
 
-The research shows this works: 178/178 members identical, including all 763
-relocations. The 2.8 release, as a negative control, fails on exactly its six
-known members.
+The earlier research result (178/178, including 763 relocation sites) covered
+initialized bytes and relocation sites, not the complete contract below. The
+native checks have not established acceptance. The former blanket alignment
+mismatch was a reader bug: BFD's default was not encoded candidate evidence.
+It is now an unavailable check, not a proven difference. Likewise,
+the earlier six-member 2.8 negative control is a byte/relocation result, not a
+strict whole-object verdict. These distinctions must not be normalized away.
 
 ## Current state
 
@@ -74,7 +79,11 @@ no masking, folding or wildcards:
 | Undefined externals | name |
 | COMMON | name and size |
 
-It reports every difference and returns MATCH only when there are none.
+It reports every witnessed difference and returns MATCH only when every required
+check is established and there are no differences. Unencoded ECOFF alignment is
+`null`, not BFD's in-memory default. Required checks without evidence appear in
+`unresolved`; otherwise-equal objects yield `UNDETERMINED`, never acceptance.
+A real byte, section, symbol or relocation difference still yields `MISMATCH`.
 
 #### Configuration
 
@@ -143,6 +152,10 @@ It reports every difference and returns MATCH only when there are none.
   - comparator negative controls: a flipped byte, a moved relocation, a changed
     relocation kind, a renamed section, a changed alignment, a missing or extra
     symbol, a different COMMON size;
+  - unavailable ECOFF alignment does not become a fabricated mismatch or a
+    wildcard MATCH; genuine differences still fail in its presence;
+  - LNK right-first wire operands preserve subtraction/division order and full
+    trees; `constant - symbol` cannot masquerade as a positive ELF reference;
   - failure of the pairing validation;
   - removal of `inputRewrites`: the schema rejects the key.
 - An opt-in real-project check, guarded like

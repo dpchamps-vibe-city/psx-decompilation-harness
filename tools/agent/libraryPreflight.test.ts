@@ -10,7 +10,9 @@ import { libraryMembers, libraryTargetKey } from "../lib/libraryTargets.js";
 import { readRelocatableObject, objectFunctions } from "../lib/relocatableObject.js";
 import { libraryTuStatus, readLibraryTu } from "../lib/libraryTranslationUnit.js";
 import { compileSource } from "./decompToolchain.js";
-import { splitLibrary, measureLibraryFunction, prepareLibraryFunction } from "./libraryTarget.js";
+import { splitLibrary, measureLibraryFunction, prepareLibraryFunction, checkLibrary, writeLibraryGraph } from "./libraryTarget.js";
+import { planPark } from "../../.pi/extensions/psx-decomp/autoloop/park.js";
+import { eligible } from "../../.pi/extensions/shared/call-graph.js";
 import { preflightLibraryFunction, checkLibrarySplits } from "./libraryPreflight.js";
 import { classifyLibraryCode } from "./libraryCodeClass.js";
 
@@ -20,13 +22,14 @@ function fixture(t: { after: (cleanup: () => void) => void }, addressTaken = fal
   const root = mkdtempSync(join(tmpdir(), "psx-library-e2e-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const config = JSON.parse(readFileSync(join(ROOT, "toolchain.json"), "utf8"));
+  config.compiler.source = { origin: "harness", path: config.compiler.source };
   for (const name of Object.keys(config.tools) as ToolName[]) config.tools[name] = configuredTool(name, ROOT);
   config.tools.m2c = prepareM2c(ROOT).script;
   config.includeDirs = ["include", "sdk/include"]; config.profiles = {}; config.containerProfiles = {};
   config.flags.cpp.unshift("-nostdinc");
   config.flags.cc1 = config.flags.cc1.map((f: string) => f === "-G8" ? "-G0" : f);
   config.flags.as = config.flags.as.map((f: string) => f === "-G8" ? "-G0" : f);
-  config.assembler = { kind: "gas", inputRewrites: ["move-addu"] };
+  config.assembler = { kind: "gas" };
   config.sdk.headers = { origin: "project", path: "sdk/include" };
   mkdirSync(join(root, "include")); mkdirSync(join(root, "sdk/include/sys"), { recursive: true });
   mkdirSync(join(root, "sdk/INCLUDE/SYS"), { recursive: true });
@@ -52,7 +55,7 @@ function fixture(t: { after: (cleanup: () => void) => void }, addressTaken = fal
   const create = () => {
     const source = join(root, "original.c"); writeFileSync(source, originalC);
     const artifacts = compileSource(source, join(root, "seed"), "original", { containerKind: "exe", assemble: false });
-    const asm = readFileSync(artifacts.assembly, "utf8").replace(/^\s*move\s+([^,\n]+),([^\n#]+)/gm, "\taddu $1,$2,$0");
+    const asm = readFileSync(artifacts.assembly, "utf8");
     const helpers = addressTaken
       ? `\n.set noreorder\n.text\n.local private_helper\nprivate_helper:\naddiu $v0,$zero,7\njr $ra\nnop\n.local bios_entry\nbios_entry:\naddiu $v0,$zero,9\njr $ra\nnop\n.data\n.globl hooks\nhooks:\n.word 0,0\n.word 7\n`
       : `\n.set noreorder\n.text\n.local private_helper\nprivate_helper:\naddiu $v0,$a0,7\njr $ra\nnop\n.local bios_entry\nbios_entry:\nand $t2,$t2,$zero\nori $t2,$t2,0xb0\nand $t1,$t1,$zero\njr $t2\nori $t1,$t1,0x18\njr $ra\nnop\n.data\n.word 7\n`;
@@ -87,8 +90,10 @@ test("end-to-end: configured headers, relocation-aware splits, production C subs
     const { member, key, bytes, candidate } = f.create();
     assert(member.object.sections.get(".text")!.offset > 0, "nonzero ELF file base exercises the relocated-call bug");
     assert.equal(classifyLibraryCode(member.object, member.functions[0]!), undefined, "ordinary caller stays eligible");
-    assert.equal(classifyLibraryCode(member.object, member.functions[2]!)?.kind, "bios-dispatch", "private BIOS veneer is not queued as ordinary C");
+    assert.equal(classifyLibraryCode(member.object, member.functions[2]!)?.kind, "bios-dispatch", "private BIOS veneer retains platform-macro evidence");
     splitLibrary();
+    const graph = writeLibraryGraph();
+    assert.ok(graph.functions.every(fn => fn.libraryStub && fn.handwritten === false && eligible(fn)), "C stub targets are not excluded by the code classifier");
     const manifest = readLibraryTu(member, f.root);
     assert.equal(manifest.parts.filter(p => p.symbol && p.symbol !== "__library_member_data").length, 3);
     const sourceDir = dirname(join(f.root, member.source)), entryStub = readFileSync(join(sourceDir, "entry.c"));
@@ -109,6 +114,18 @@ test("end-to-end: configured headers, relocation-aware splits, production C subs
     assert.equal(readFileSync(join(sourceDir, "entry.c"), "utf8"), candidate);
     const liveC = await preflightLibraryFunction(key);
     assert.equal(liveC.memberComparison!.verdict, "match", JSON.stringify(liveC));
+    assert.equal(eligible(writeLibraryGraph().functions.find(fn => fn.name === key)!), false, "a C definition is not a stub target");
+    const attempt = candidate.replace("return 0;", "return 9;");
+    assert.notEqual(attempt, candidate);
+    const park = await planPark({ projectRoot: f.root, runtimeDir: join(f.root, "build/park"), functionName: key, committedSource: entryStub.toString(), attemptSource: attempt, reason: "escalation-exhausted", reachedTier: "test", notePath: "notes/test.md", parkedAt: "2026-10-18" });
+    assert.equal(park.preserved, true);
+    writeFileSync(join(sourceDir, "entry.c"), park.source);
+    assert.equal(libraryTuStatus(member, f.root)!.find(p => p.symbol === "entry")!.stub, true);
+    checkLibrary([], f.root);
+    const resumed = await prepareLibraryFunction(key);
+    assert.equal(resumed.packet.primary!.origin, "existing-attempt");
+    assert.ok(resumed.packet.primary!.text.includes("return 9;"), "prep resumes the preserved draft, not m2c");
+    assert.equal(resumed.packet.compilation.status, "succeeded");
     writeFileSync(join(sourceDir, "entry.c"), entryStub);
     // Negative control: matching caller words cannot hide neighboring storage.
     const data = libraryTuStatus(member, f.root)!.find(p => p.symbol === "__library_member_data")!;
@@ -122,8 +139,12 @@ test("end-to-end: configured headers, relocation-aware splits, production C subs
     const beforeAssembly = readFileSync(assemblyData, "utf8");
     const wrongAssembly = beforeAssembly.replace(/\.word\s+0x0*7\b/, ".word 0x8");
     assert.notEqual(wrongAssembly, beforeAssembly); writeFileSync(assemblyData, wrongAssembly);
-    assert.equal(checkLibrarySplits().status, "failed", "split checking rejects wrong neighboring original data");
+    assert.equal(checkLibrarySplits().status, "passed", "fresh split checking does not reuse previously published fragments");
     writeFileSync(assemblyData, beforeAssembly);
+    const listing = join(f.root, member.assembly), beforeListing = readFileSync(listing, "utf8");
+    writeFileSync(listing, beforeListing.replace(/\.word\s+0x0*7\b/, ".word 0x8"));
+    assert.equal(checkLibrarySplits().status, "failed", "fresh split checking rejects wrong neighboring original data");
+    writeFileSync(listing, beforeListing);
     // Re-running splitting neither expands the assignment nor overwrites C.
     splitLibrary(); assert(readFileSync(join(sourceDir, "entry.c")).equals(entryStub));
   });

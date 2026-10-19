@@ -8,7 +8,8 @@ import { getSessionBaseline } from "./session-baseline.ts";
 import { validateFunctionName } from "./shared.ts";
 
 export function registerFinalizeFunctionTool(pi: ExtensionAPI,
-  onPassed?: (name: string, changedFiles: string[], ctx: ExtensionContext) => void): void {
+  onPassed?: (name: string, changedFiles: string[], ctx: ExtensionContext) => void,
+  onMachineVerified?: (ctx: ExtensionContext) => void): void {
   pi.registerTool({
     name: "psx_finalize_function",
     label: "Finalize PSX Function",
@@ -35,7 +36,8 @@ export function registerFinalizeFunctionTool(pi: ExtensionAPI,
          container and the source path the policy scan looks for an overlay's
          translation unit under `src/`, finds nothing, and reports a clean
          function it never opened. */
-      const gate = await finalizeWorkspace({ projectRoot: ctx.cwd, config, functionName: params.functionName, changedFiles, patch, signal });
+      const gate = await finalizeWorkspace({ projectRoot: ctx.cwd, config, functionName: params.functionName, changedFiles, patch, signal,
+        ...(onMachineVerified ? { onMachineVerified: () => onMachineVerified(ctx) } : {}) });
       const scopeNote = preExisting.length
         ? `\nScope gate ignored ${preExisting.length} pre-existing workspace change(s): ${preExisting.join(", ")}`
         : "";

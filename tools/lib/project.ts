@@ -3,7 +3,9 @@ import { projectRoot, contextForProject, assertProjectInput } from "./runtimeCon
  * keeps the existing executable/overlay pipeline. Never infer a library from SDK inputs. */
 import { existsSync, readFileSync, realpathSync, globSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { loadToolchain } from "./toolchain.js";
+import { deepFreeze, loadToolchain } from "./toolchain.js";
+import { readStampedText } from "./contentCache.js";
+import { count } from "./perfCounters.js";
 export const PROJECT_FILE = "project.json";
 export interface LibraryProject {
   schemaVersion: 1;
@@ -17,18 +19,34 @@ export interface LibraryProject {
   toolchainProfile?: string;
   memberProfiles: Record<string, string>;
 }
-function object(value: any, allowed: string[], at: string): void {
+/** `allowed` omitted: any key, only the object shape is checked (open maps). */
+function object(value: any, allowed: string[] | undefined, at: string): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${PROJECT_FILE}: ${at} must be an object`);
+  if (!allowed) return;
   for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new Error(`${PROJECT_FILE}: unknown ${at}.${key}`);
 }
 function paths(value: any, at: string): asserts value is string[] {
   if (!Array.isArray(value) || value.some(p => typeof p !== "string" || !p || p.includes("\0") || isAbsolute(p) || p.split(/[\\/]/).includes("..")))
     throw new Error(`${PROJECT_FILE}: ${at} must contain safe root-relative paths`);
 }
+/* Like loadToolchain: validation is a function of this file's text and the
+ * toolchain profiles it names, so accepted text is neither parsed nor validated
+ * again. The file is still read on every request (once per stamp within a
+ * content-memo scope); callers share one deep-frozen
+ * configuration per text, and any attempt to change it throws. */
+const loadedProjects = new Map<string, { text: string; profiles?: object; project: LibraryProject | null }>();
 export function loadLibraryProject(root = projectRoot()): LibraryProject | null {
   const file = join(root, PROJECT_FILE);
   if (!existsSync(file)) return null;
-  const p = JSON.parse(readFileSync(file, "utf8"));
+  const text = readStampedText(file), key = resolve(root), prior = loadedProjects.get(key);
+  /* Only an accepted library manifest read the toolchain's profiles. */
+  if (prior?.text === text && (!prior.project || prior.profiles === loadToolchain(root).profiles)) return prior.project;
+  const project = validateLibraryProject(JSON.parse(text), root);
+  loadedProjects.set(key, { text, ...(project ? { profiles: loadToolchain(root).profiles } : {}), project: deepFreeze(project) });
+  return project;
+}
+function validateLibraryProject(p: any, root: string): LibraryProject | null {
+  count("project.validate");
   object(p, ["$schema", "schemaVersion", "target", "headers", "selection", "verification", "views", "output", "toolchainProfile", "memberProfiles"], "config");
   if (p.schemaVersion !== 1) throw new Error(`${PROJECT_FILE}: unsupported schemaVersion`);
   object(p.target, ["kind", "format", "archives", "standaloneObjects"], "target");
@@ -54,7 +72,7 @@ export function loadLibraryProject(root = projectRoot()): LibraryProject | null 
     const o = p.verification.originals; object(o, ["format", "archives", "objects", "map"], "verification.originals");
     if (o.format !== "psyq-lnk") throw new Error(`${PROJECT_FILE}: originals format must be psyq-lnk`);
     o.archives ??= []; o.objects ??= []; paths(o.archives, "originals.archives"); paths(o.objects, "originals.objects");
-    object(o.map, Object.keys(o.map ?? {}), "originals.map");
+    object(o.map, undefined, "originals.map");
     for (const [id, raw] of Object.entries(o.map)) {
       const m = raw as any; object(m, m?.archive ? ["archive", "ordinal"] : ["object"], `originals.map.${id}`);
       paths([m.archive ?? m.object], `originals.map.${id}`);
@@ -64,7 +82,7 @@ export function loadLibraryProject(root = projectRoot()): LibraryProject | null 
   if (p.target.format === "elf-ar" && p.verification.mode === "original-object" && !p.verification.originals) throw new Error(`${PROJECT_FILE}: original-object mode requires an originals mapping`);
   if (p.target.format === "psyq-lib" && p.verification.mode !== "original-object") throw new Error(`${PROJECT_FILE}: psyq-lib requires original-object verification`);
   if (p.views !== undefined) {
-    object(p.views, ["elf"], "views"); object(p.views.elf, Object.keys(p.views.elf ?? {}), "views.elf"); paths(Object.values(p.views.elf), "views.elf");
+    object(p.views, ["elf"], "views"); object(p.views.elf, undefined, "views.elf"); paths(Object.values(p.views.elf), "views.elf");
   }
   if (p.target.format === "psyq-lib" && !p.views) throw new Error(`${PROJECT_FILE}: psyq-lib requires explicit content-checked ELF views`);
   p.output ??= { sourceDir: "src/libraries" }; object(p.output, ["sourceDir", "sourceLayout", "inputRoot"], "output"); paths([p.output.sourceDir], "output.sourceDir");
@@ -75,7 +93,7 @@ export function loadLibraryProject(root = projectRoot()): LibraryProject | null 
     paths([p.output.inputRoot], "output.inputRoot");
     if (/[*?\[{]/.test(p.output.inputRoot)) throw new Error(`${PROJECT_FILE}: output.inputRoot must name a directory, not a glob`);
   }
-  p.memberProfiles ??= {}; object(p.memberProfiles, Object.keys(p.memberProfiles), "memberProfiles");
+  p.memberProfiles ??= {}; object(p.memberProfiles, undefined, "memberProfiles");
   const profiles = loadToolchain(root).profiles;
   for (const name of [...Object.values(p.memberProfiles), ...(p.toolchainProfile !== undefined ? [p.toolchainProfile] : [])]) {
     if (typeof name !== "string" || !Object.hasOwn(profiles, name)) throw new Error(`${PROJECT_FILE}: unknown toolchain profile ${String(name)}`);

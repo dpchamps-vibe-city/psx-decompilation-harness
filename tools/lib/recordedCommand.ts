@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createWriteStream, mkdirSync, readFileSync } from "node:fs";
 import { finished } from "node:stream/promises";
 import { join } from "node:path";
+import { countSpawn } from "./perfCounters.js";
 
 export interface CommandRecord {
   command: string;
@@ -18,6 +19,7 @@ export interface CommandRecord {
 /** Fixed argv, bounded wall time, complete streams including failed commands. */
 export async function recordedCommand(command: string, args: string[], cwd: string, directory: string,
   label: string, signal?: AbortSignal, timeoutMs = 120_000, ownProcessGroup = true): Promise<CommandRecord> {
+  countSpawn(command, args);
   mkdirSync(directory, { recursive: true });
   const stdout = join(directory, `${label}.stdout`);
   const stderr = join(directory, `${label}.stderr`);

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { CommandResult } from "./types.ts";
+import { countSpawn } from "../../../tools/lib/perfCounters.js";
 
 export interface RunOptions {
   cwd: string;
@@ -11,6 +12,8 @@ export interface RunOptions {
   stdoutFile?: string;
   stderrFile?: string;
   maxCaptureBytes?: number;
+  /** Each complete stdout line, as it arrives. */
+  onStdoutLine?: (line: string) => void;
 }
 
 function appendBounded(current: string, chunk: Buffer, maxBytes: number): string {
@@ -21,6 +24,7 @@ function appendBounded(current: string, chunk: Buffer, maxBytes: number): string
 }
 
 export async function runCommand(command: string, args: string[], options: RunOptions): Promise<CommandResult> {
+  countSpawn(command, args);
   const started = Date.now();
   const maxBytes = options.maxCaptureBytes ?? 2 * 1024 * 1024;
   if (options.stdoutFile) await mkdir(dirname(options.stdoutFile), { recursive: true });
@@ -68,7 +72,13 @@ export async function runCommand(command: string, args: string[], options: RunOp
       timer.unref();
     }
 
+    let pendingLine = "";
     child.stdout?.on("data", (chunk: Buffer) => {
+      if (options.onStdoutLine) {
+        const lines = (pendingLine + chunk.toString("utf8")).split("\n");
+        pendingLine = lines.pop()!;
+        for (const line of lines) options.onStdoutLine(line);
+      }
       stdout = appendBounded(stdout, chunk, maxBytes);
       if (options.stdoutFile) stdoutChunks.push(Buffer.from(chunk));
     });

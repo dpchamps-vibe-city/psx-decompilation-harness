@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { libraryMemberById, libraryTargetKey, requireLibraryFunction } from "../../../../tools/lib/libraryTargets.js";
 import { libraryModulePart, libraryTuStatus } from "../../../../tools/lib/libraryTranslationUnit.js";
 import { installedScriptArgs } from "../../../../tools/lib/installedScripts.js";
-import { FOLD_STATUS, recordFoldCleanup, type FoldReport } from "../../../../tools/agent/foldLibraryTu.js";
+import { FOLD_STATUS, foldRefusal, recordFoldCleanup, type FoldReport } from "../../../../tools/agent/foldLibraryTu.js";
 import { runCommand } from "../../shared/process.ts";
 import { workspaceChangedFiles } from "../../shared/workspace.ts";
 import { runGate } from "../../shared/gates.ts";
@@ -17,6 +17,9 @@ export interface FoldOutcome { memberId: string; written: boolean; module?: stri
 
 export async function foldMatchedMember(projectRoot: string, target: string, run: typeof runCommand = runCommand): Promise<FoldOutcome> {
   const { member } = requireLibraryFunction(target, projectRoot);
+  /* The fold command's own first step: a member that cannot fold yet is
+     refused before anything is staged, so the refusal needs no process. */
+  if (foldRefusal(member, projectRoot)) return { memberId: member.id, written: false };
   const result = await run(process.execPath, installedScriptArgs("tools/agent/library.ts", ["fold", "--member", member.id, "--write", "--json"], projectRoot),
     { cwd: projectRoot, timeoutMs: 900_000 });
   const line = result.stdout.split("\n").reverse().find(l => l.startsWith(FOLD_STATUS));

@@ -5,6 +5,7 @@ import { configuredDependencyScanner, executablePath } from "./toolchain.js";
 import { fileDigest } from "./contentCache.js";
 import { projectRoot } from "./runtimeContext.js";
 import { resolve } from "node:path";
+import { count } from "./perfCounters.js";
 export function dependencyPaths(text: string, root: string): string[] {
   const first = text.replace(/\\\r?\n/g, " ").split("\n")[0] ?? "";
   const colon = first.indexOf(":");
@@ -17,6 +18,7 @@ export function dependencyScannerIdentity(root = projectRoot()) {
   return { command, path, sha256: fileDigest(path) };
 }
 export function scanDependencies(input: string, flags: string[], root = projectRoot()): string {
+  count("spawn"); count("spawn:dependency-scan");
   return execFileSync(configuredDependencyScanner(root), [...flags, "-M", "-MG", input],
     { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }

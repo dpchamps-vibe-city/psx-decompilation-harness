@@ -14,6 +14,11 @@ import {
   workspaceChangedFiles,
 } from "../../shared/workspace.ts";
 import { withLoopExemptions } from "./state.ts";
+import { buildInputs, inputIdentity } from "../tools/prepared-attempt.ts";
+import { digest, snapshot, withFreshContentMemo } from "../../../../tools/lib/contentCache.js";
+import { count } from "../../../../tools/lib/perfCounters.js";
+import { loadLibraryProject } from "../../../../tools/lib/project.js";
+import { libraryVerificationKey } from "../../../../tools/agent/libraryTarget.js";
 import type { LoopState } from "./types.ts";
 
 /**
@@ -54,7 +59,7 @@ export function gateConfig(projectRoot: string, state: LoopState): AutodecompCon
 
 export async function isMatched(ctx: OracleContext, functionName: string): Promise<MatchVerdict> {
   ctx.signal?.throwIfAborted();
-  const diff = finalizedDiff(ctx.projectRoot, functionName, gateConfig(ctx.projectRoot, ctx.state)) ??
+  const diff = await finalizedDiff(ctx.projectRoot, functionName, gateConfig(ctx.projectRoot, ctx.state)) ??
     await runFunctionDiff(ctx.projectRoot, functionName, 120_000, ctx.signal);
   return { matched: diff.exact, diff };
 }
@@ -99,9 +104,10 @@ export async function scopedLoopChanges(
   };
 }
 
-export async function finalize(ctx: OracleContext, functionName: string): Promise<FinalizeVerdict> {
+/** `changes`: the window's changed files, when the caller has just computed them and nothing has run since. */
+export async function finalize(ctx: OracleContext, functionName: string, changes?: { changedFiles: string[]; patch: string }): Promise<FinalizeVerdict> {
   const config = gateConfig(ctx.projectRoot, ctx.state);
-  const { changedFiles, patch } = await loopChangedFiles(ctx);
+  const { changedFiles, patch } = changes ?? await loopChangedFiles(ctx);
   const gate = await finalizeWorkspace({ projectRoot: ctx.projectRoot, config, functionName, changedFiles, patch, signal: ctx.signal });
   return { passed: gate.pass, gate, changedFiles: (await loopChangedFiles(ctx)).changedFiles };
 }
@@ -122,9 +128,10 @@ export async function finalize(ctx: OracleContext, functionName: string): Promis
 export async function introducedForbiddenConstructs(
   ctx: OracleContext,
   functionName: string,
+  changes?: { changedFiles: string[]; patch: string },
 ): Promise<PolicyFinding[]> {
   const config = gateConfig(ctx.projectRoot, ctx.state);
-  const { changedFiles, patch } = await loopChangedFiles(ctx);
+  const { changedFiles, patch } = changes ?? await loopChangedFiles(ctx);
   const policy = checkSourcePolicy({
     projectRoot: ctx.projectRoot,
     config,
@@ -175,9 +182,73 @@ export async function nextTarget(
   skip: Set<string>,
   defer: Set<string> = new Set(),
 ): Promise<string | undefined> {
-  const graph = await rebuildCallGraph(projectRoot).catch(() => loadCallGraph(projectRoot));
+  const graph = loadLibraryProject(projectRoot) ? await currentLibraryGraph(projectRoot)
+    : await rebuildCallGraph(projectRoot).catch(() => loadCallGraph(projectRoot));
   const eligible = graph.functions.filter(
     (entry) => !entry.decompiled && entry.handwritten === false && entry.libraryStub !== false && !entry.dead && !skip.has(entry.name),
   );
   return (eligible.find((entry) => !defer.has(entry.name)) ?? eligible[0])?.name;
+}
+
+/**
+ * Everything a library call graph is computed from: the build inputs, the ELF
+ * views, the accepted records, the backlog preprocessing receipts and the
+ * harness that verifies records. Equal identities mean an equal graph.
+ */
+export function libraryGraphInputs(projectRoot: string): string {
+  return withFreshContentMemo(() => {
+    const project = loadLibraryProject(projectRoot)!;
+    return digest(JSON.stringify({ build: inputIdentity(buildInputs(projectRoot)),
+      views: snapshot(projectRoot, Object.values(project.views?.elf ?? {})),
+      derived: snapshot(projectRoot, ["build/libraries/verified", "build/libraries/nonmatchings"]),
+      harness: libraryVerificationKey(projectRoot, loadConfig(projectRoot).sourcePolicy) }));
+  });
+}
+
+/* At most one graph rebuild runs ahead of selection, started once a function's
+   agent turn has passed finalization, so it overlaps the loop's own checks,
+   commit and fold. Selection uses it only if the graph inputs are unchanged. */
+let prefetched: { root: string; inputs: string; abort: AbortController; done: Promise<boolean> } | undefined;
+let lastGood: { root: string; inputs: string } | undefined;
+
+export function prefetchLibraryGraph(projectRoot: string): void {
+  if (prefetched || !loadLibraryProject(projectRoot)) return;
+  const abort = new AbortController(), inputs = libraryGraphInputs(projectRoot);
+  /* The inputs must also be unchanged when the rebuild ends: a change and
+     revert during it would otherwise leave the graph built on neither. */
+  prefetched = { root: projectRoot, inputs, abort, done: rebuildCallGraph(projectRoot, 120_000, abort.signal)
+    .then(() => libraryGraphInputs(projectRoot) === inputs, () => false) };
+}
+
+/** Stop and await any graph rebuild running ahead; no process outlives the loop. */
+export async function cancelLibraryGraphPrefetch(): Promise<void> {
+  const pending = prefetched;
+  prefetched = undefined;
+  if (!pending) return;
+  pending.abort.abort();
+  await pending.done;
+}
+
+async function currentLibraryGraph(projectRoot: string) {
+  const pending = prefetched;
+  prefetched = undefined;
+  if (pending) {
+    const built = await pending.done, inputs = libraryGraphInputs(projectRoot);
+    if (built && pending.root === projectRoot && pending.inputs === inputs) {
+      count("graph.prefetch.hit");
+      lastGood = { root: projectRoot, inputs };
+      return loadCallGraph(projectRoot);
+    }
+    count("graph.prefetch.miss");
+  }
+  const inputs = libraryGraphInputs(projectRoot);
+  try {
+    const graph = await rebuildCallGraph(projectRoot);
+    lastGood = { root: projectRoot, inputs };
+    return graph;
+  } catch (error) {
+    /* The previous graph stands only for the inputs it was built from. */
+    if (lastGood?.root === projectRoot && lastGood.inputs === inputs) return loadCallGraph(projectRoot);
+    throw error;
+  }
 }

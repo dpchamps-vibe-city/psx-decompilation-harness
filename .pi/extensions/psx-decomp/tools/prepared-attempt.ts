@@ -9,6 +9,7 @@ import { loadContainers } from "../../../../tools/lib/container.ts";
 import { libraryInputFiles, loadLibraryProject } from "../../../../tools/lib/project.js";
 import { buildToolInputs } from "../../../../tools/build/buildInputs.js";
 import { snapshot } from "../../../../tools/lib/contentCache.js";
+import { count } from "../../../../tools/lib/perfCounters.js";
 import { packetOpening, packetEvidence, type PreparationPacket } from "../../../../tools/agent/campaign/packet.ts";
 
 export interface PreparedAttempt { packet: PreparationPacket; path: string }
@@ -27,6 +28,7 @@ export function persistAttempt(root: string, attempt: PreparedAttempt): void {
 }
 
 export function buildInputs(root: string): Record<string, string> {
+  count("buildInputs");
   const inputs: Record<string, string> = {};
   const visit = (path: string) => {
     if (!existsSync(path)) return;
@@ -51,6 +53,11 @@ export function buildInputs(root: string): Record<string, string> {
 }
 export const inputIdentity = (inputs: Record<string, string>) => hashText(JSON.stringify(Object.entries(inputs).sort(([a], [b]) => a.localeCompare(b))));
 export const sameInputs = (a: Record<string, string>, b: Record<string, string>) => inputIdentity(a) === inputIdentity(b);
+/** A completion still describes the tree when the inputs it verified have the
+ * identity of `current`. Persisted completions carry only that identity (the
+ * map is a content-addressed sidecar); older records still carry the map. */
+export const completionCurrent = (completion: Pick<Completion, "inputs" | "verifiedIdentity">, current: Record<string, string>) =>
+  (completion.inputs ? inputIdentity(completion.inputs) : completion.verifiedIdentity) === inputIdentity(current);
 export interface Completion {
   origin: "static" | "agent";
   /** Matching rung that produced the source; absent for static/legacy records. */
@@ -58,7 +65,8 @@ export interface Completion {
   /** Actual model that completed the notes-only turn, not the source author. */
   documentationModel?: string;
   verifiedIdentity: string;
-  inputs: Record<string, string>;
+  /** The verified inputs; absent once persisted (see completionCurrent). */
+  inputs?: Record<string, string>;
   changedFiles: string[];
   /** Static matches retain evidence without dispatching a model for notes. */
   documentation: "pending" | "passed" | "skipped";
@@ -123,12 +131,12 @@ export function recordsFileGroupings(root: string): boolean {
  * `document` resolves true on success, or with the reason it did not succeed. */
 export async function documentCompletion(root: string, completion: Completion,
   document: () => Promise<true | false | string>): Promise<Completion> {
-  if (!sameInputs(completion.inputs, buildInputs(root))) return { ...completion, verification: "invalidated", documentation: "pending", error: "verified build inputs changed; finalization must be rerun" };
+  if (!completionCurrent(completion, buildInputs(root))) return { ...completion, verification: "invalidated", documentation: "pending", error: "verified build inputs changed; finalization must be rerun" };
   if (completion.documentation === "passed" || completion.documentation === "skipped") return completion;
   let outcome: true | false | string = false;
   try { outcome = await document(); } catch (failure) { outcome = String(failure); }
   /* Even an aborted/failed role may have edited a header before it stopped. */
-  if (!sameInputs(completion.inputs, buildInputs(root))) return { ...completion, verification: "invalidated", documentation: "pending", error: "documentation changed build inputs; finalization must be rerun" };
+  if (!completionCurrent(completion, buildInputs(root))) return { ...completion, verification: "invalidated", documentation: "pending", error: "documentation changed build inputs; finalization must be rerun" };
   return outcome === true ? { ...completion, verification: "passed", documentation: "passed", error: undefined } :
     { ...completion, documentation: "pending", error: typeof outcome === "string" ? outcome : "the documentation turn did not complete" };
 }

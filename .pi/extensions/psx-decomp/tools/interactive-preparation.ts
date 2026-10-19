@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { prepareAttempt, attemptStaticFinalization, buildInputs, sameInputs, inputIdentity, documentCompletion, recordsFileGroupings, type Completion } from "./prepared-attempt.ts";
+import { prepareAttempt, attemptStaticFinalization, buildInputs, completionCurrent, inputIdentity, documentCompletion, recordsFileGroupings, type Completion } from "./prepared-attempt.ts";
 import { finalize } from "../autoloop/oracles.ts";
 import { groupingsMessage } from "../autoloop/prompts.ts";
 import { getSessionBaseline } from "./session-baseline.ts";
@@ -23,7 +23,7 @@ export async function prepareInteractive(root: string, name: string, ctx: Extens
   const path = completionPath(root, name);
   if (existsSync(path)) {
     const prior = JSON.parse(readFileSync(path, "utf8")) as Completion;
-    if (sameInputs(prior.inputs, buildInputs(root))) return { handoff: "", completion: prior };
+    if (completionCurrent(prior, buildInputs(root))) return { handoff: "", completion: prior };
   }
   await waitForPreparationIdle(ctx, signal);
   const attempt = await prepareAttempt(root, name, signal);

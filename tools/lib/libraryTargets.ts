@@ -1,7 +1,8 @@
 import { projectRoot, assertProjectInput, contextForProject } from "./runtimeContext.js";
 import { fileDigest } from "./contentCache.js";
+import { count } from "./perfCounters.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { globSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { hash, readAr, readPsyqLib } from "./psyqMembers.js";
@@ -23,8 +24,35 @@ export interface LibraryMember {
   viewObject?: RelocatableObject;
   bytes: Buffer; object: RelocatableObject; functions: ReturnType<typeof objectFunctions>;
 }
+/* The inventory is a pure function of the configuration and the bytes of the
+ * inputs it names. A process keeps the last one per accepted configuration and
+ * root, and reuses it only while every input's content digest recomputes equal.
+ * Members are shared read-only data, as within a metadata scope; the array is
+ * the caller's own. A configuration built by the caller is parsed as given. */
+const inventories = new WeakMap<LibraryProject, Map<string, { fingerprint: string; members: LibraryMember[] }>>();
+/* The same input checks a parse makes, then each input's real location and
+ * content: a symlink swapped in with identical bytes is still a different input. */
+function inventoryFingerprint(project: LibraryProject, root: string): string {
+  const originals = project.verification.originals, context = contextForProject(root);
+  const patterns = originals ? [...originals.archives, ...originals.objects] : [];
+  const views = Object.values(project.views?.elf ?? {}), originalFiles = patterns.flatMap(p => globSync(p, { cwd: root }).sort());
+  for (const path of [...views, ...originalFiles]) assertProjectInput(path, context);
+  const files = [...libraryInputFiles(project, root).map(i => i.path), ...originalFiles, ...views];
+  return files.map(path => { const absolute = resolve(root, path); return `${path}\0${existsSync(absolute) ? realpathSync(absolute) : ""}\0${fileDigest(absolute)}`; }).join("\n");
+}
 export function libraryMembers(root = projectRoot(), project = loadLibraryProject(root)): LibraryMember[] {
   if (!project) throw new Error("No relocatable-library target configured in project.json");
+  if (project !== loadLibraryProject(root)) return parseLibraryMembers(root, project);
+  let byRoot = inventories.get(project);
+  if (!byRoot) inventories.set(project, byRoot = new Map());
+  const key = resolve(root), fingerprint = inventoryFingerprint(project, root), prior = byRoot.get(key);
+  if (prior?.fingerprint === fingerprint) { count("inventory.reuse"); return [...prior.members]; }
+  const members = parseLibraryMembers(root, project);
+  byRoot.set(key, { fingerprint, members });
+  return [...members];
+}
+function parseLibraryMembers(root: string, project: LibraryProject): LibraryMember[] {
+  count("inventory.parse");
   const result: LibraryMember[] = [], originals = transitionalOriginals(project, root), idsSeen = new Set<string>();
   const archiveMembers = new Map<string, string>();
   const standaloneMembers = new Map<string, string>();
@@ -104,6 +132,7 @@ const metadata = new AsyncLocalStorage<Map<string, LibraryIndex>>();
 function indexMembers(members: LibraryMember[]): LibraryIndex {
   const prior = indexes.get(members);
   if (prior) return prior;
+  count("inventory.index");
   const index: LibraryIndex = { members, functions: new Map(), exports: new Map(), sources: new Map(), locals: new Map(), offsets: new Map() };
   const add = (map: Map<string, LibraryFunction[]>, key: string, value: LibraryFunction) => {
     const values = map.get(key); if (values) values.push(value); else map.set(key, [value]);

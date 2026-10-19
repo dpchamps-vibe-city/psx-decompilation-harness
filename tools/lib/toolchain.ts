@@ -5,7 +5,8 @@ import { installedDependency } from "./installedScripts.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
-import { fileDigest } from "./contentCache.js";
+import { fileDigest, readStampedText } from "./contentCache.js";
+import { count } from "./perfCounters.js";
 import { loadLibraryProject } from "./project.js";
 import { referenceHeaderCopy } from "./referenceHeaders.js";
 import { fileOverrideFlags } from "./flagOverrides.js";
@@ -88,19 +89,21 @@ export function assertAssemblerSmallData(selection: Pick<AssemblerSelection, "ki
 }
 /* Validation is a function of the file's text alone, so text already accepted
  * for a root is neither validated nor parsed again. The file is still read on
- * every request. Callers share one deep-frozen configuration per text: any
- * attempt to change it throws instead of leaking into the next caller. */
+ * every request (once per stamp within a content-memo scope). Callers share
+ * one deep-frozen configuration per text: any attempt to change it throws
+ * instead of leaking into the next caller. */
 const loadedToolchains = new Map<string, { text: string; config: ToolchainConfig }>();
-const deepFreeze = <T>(value: T): T => {
+export const deepFreeze = <T>(value: T): T => {
   if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.freeze(value); Object.values(value).forEach(deepFreeze); }
   return value;
 };
 export function loadToolchain(root = projectRoot()): ToolchainConfig {
   let text: string;
-  try { text = readFileSync(join(root, TOOLCHAIN_FILE), "utf8"); }
+  try { text = readStampedText(join(root, TOOLCHAIN_FILE)); }
   catch (error) { throw new Error(`Cannot load ${join(root, TOOLCHAIN_FILE)}: ${String(error)}`); }
   const key = resolve(root), prior = loadedToolchains.get(key);
   if (prior?.text === text) return prior.config;
+  count("toolchain.validate");
   const config = deepFreeze(validateToolchain(text, root));
   loadedToolchains.set(key, { text, config });
   return config;

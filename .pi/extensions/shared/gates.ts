@@ -1,6 +1,6 @@
 import { installedScriptArgs } from "../../../tools/lib/installedScripts.js";
 import { basename, extname } from "node:path";
-import type { AutodecompConfig, DiffResult, GateResult, WorkMode } from "./types.ts";
+import type { AutodecompConfig, CommandResult, DiffResult, GateResult, WorkMode } from "./types.ts";
 import { runCommand } from "./process.ts";
 import { checkSourcePolicy } from "./source-policy.ts";
 import { Timings } from "../../../tools/lib/contentCache.js";
@@ -55,6 +55,11 @@ export async function runFunctionDiff(
     maxCaptureBytes: 4 * 1024 * 1024,
     signal,
   });
+  return diffResultFromCommand(functionName, command);
+}
+
+/** A function diff's verdict, read from diffFunc.ts output however it ran. */
+export function diffResultFromCommand(functionName: string, command: CommandResult): DiffResult {
   const output = [command.stdout, command.stderr].filter(Boolean).join("\n");
   const { matchedInstructions, totalInstructions, matchPercent, verdict } = parseFunctionDiffSummary(output);
   const countLine = output.match(/target:\s*(\d+)\s+instrs,\s*candidate:\s*(\d+)\s+instrs/);
@@ -205,6 +210,9 @@ async function scopedGate(options: {
   runBuild?: boolean;
   /** Only supplied by the finalizer after validating its own receipt/snapshot. */
   machineVerification?: Pick<GateResult, "diff" | "build">;
+  /** Runs the function diff and, when it is exact, the member check in place of
+   * the separate processes; same order, same failures. */
+  machineRunner?: (activeMembers: string[]) => Promise<{ diff: DiffResult; build?: CommandResult }>;
   comprehensiveDiagnostics?: boolean;
   signal?: AbortSignal;
 }): Promise<GateResult> {
@@ -242,7 +250,12 @@ async function scopedGate(options: {
 
   const proceed = () => !cancelled() && (!failures.length || options.comprehensiveDiagnostics);
   let diff: DiffResult | undefined = options.machineVerification?.diff;
-  if (proceed() && !options.machineVerification && options.functionName && options.mode !== "project-refinement") {
+  let ran: { diff: DiffResult; build?: CommandResult } | undefined;
+  if (proceed() && !options.machineVerification && options.machineRunner && options.functionName && options.mode !== "project-refinement") {
+    ran = await timings.measure("machine-verification", () => options.machineRunner!(activeMembers));
+    diff = ran.diff;
+    if (!diff.exact) failures.push(functionDiffFailure(diff));
+  } else if (proceed() && !options.machineVerification && options.functionName && options.mode !== "project-refinement") {
     diff = await timings.measure("function-diff", () => runFunctionDiff(options.projectRoot, options.functionName!, 60_000, options.signal, options.functionContainer));
     if (!diff.exact) failures.push(functionDiffFailure(diff));
   } else if (proceed() && options.mode === "project-refinement") {
@@ -253,7 +266,7 @@ async function scopedGate(options: {
     }
   }
 
-  const build = options.machineVerification?.build ?? (options.runBuild === false || !proceed() ? undefined :
+  const build = options.machineVerification?.build ?? (ran ? ran.build : options.runBuild === false || !proceed() ? undefined :
     await timings.measure(library ? "relocatable-members" : "linked-images", () => runBuildCheck(options.projectRoot, 5 * 60_000, options.signal, activeMembers)));
   if (build && build.code !== 0) failures.push(`${library ? "Active/previously verified library member" : "Full build"} verification failed with exit code ${build.code}`);
   cancelled();

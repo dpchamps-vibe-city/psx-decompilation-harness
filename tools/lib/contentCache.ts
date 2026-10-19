@@ -4,10 +4,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
+import { count } from "./perfCounters.js";
 
 export const digest = (value: string | Buffer): string => createHash("sha256").update(value).digest("hex");
 const contentMemo = new AsyncLocalStorage<Map<string, { stamp: string; hash: string }>>();
 export function withContentMemo<T>(task: () => T): T { return contentMemo.getStore() ? task() : contentMemo.run(new Map(), task); }
+/** A scope that inherits no earlier scope's observations: a guard recomputes inside it from
+ * the files now (reusing only ctime-settled digests, which are content-equivalent). */
+export function withFreshContentMemo<T>(task: () => T): T { return contentMemo.run(new Map(), task); }
 const invocationValues = new WeakMap<object, Map<string, unknown>>();
 /** A pure result computed once per content-memo scope (one invocation). The key
  * must carry everything the result depends on, including the text it read.
@@ -20,15 +24,38 @@ export function invocationMemo<T>(key: string, compute: () => T): T {
   if (values.has(key)) return values.get(key) as T;
   const value = compute(); values.set(key, value); return value;
 }
+const stampOf = (stat: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }): string =>
+  [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+const fileStamp = (path: string): string => stampOf(statSync(path, { bigint: true }));
+const hashed = (bytes: Buffer): string => { count("digest.files"); count("digest.bytes", bytes.length); return digest(bytes); };
+/* Stat data short-circuits re-hashing only behind a ctime guard (the racy-index
+ * rule): a digest outlives its scope only for a file whose status had not
+ * changed for SETTLED_NS before it was read. Any later write, even inside one
+ * coarse timestamp tick, then carries a newer ctime and is hashed again. Within
+ * a scope, the scope's own observations are reused as before. */
+const SETTLED_NS = 2_000_000_000n;
+const settled = new Map<string, { stamp: string; hash: string }>();
 export function fileDigest(path: string): string {
   if (!existsSync(path)) return "absent";
-  const memo = contentMemo.getStore();
-  if (!memo) return digest(readFileSync(path));
-  const stat = statSync(path, { bigint: true });
-  const stamp = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
-  const prior = memo.get(path);
-  if (prior?.stamp === stamp) return prior.hash;
-  const hash = digest(readFileSync(path)); memo.set(path, { stamp, hash }); return hash;
+  const stat = statSync(path, { bigint: true }), stamp = stampOf(stat);
+  const memo = contentMemo.getStore(), prior = memo?.get(path) ?? settled.get(path);
+  if (prior?.stamp === stamp) { count("digest.reuse"); return prior.hash; }
+  const readAt = BigInt(Date.now()) * 1_000_000n;
+  const hash = hashed(readFileSync(path));
+  memo?.set(path, { stamp, hash });
+  if (stat.ctimeNs < readAt - SETTLED_NS) settled.set(path, { stamp, hash });
+  return hash;
+}
+/** A file's text. Within a content-memo scope it is read again only when the
+ * file's stamp changes, the rule fileDigest uses; outside one, always read. */
+export function readStampedText(path: string): string {
+  const store = contentMemo.getStore();
+  if (!store) return readFileSync(path, "utf8");
+  let values = invocationValues.get(store);
+  if (!values) invocationValues.set(store, values = new Map());
+  const stamp = fileStamp(path), key = `text\0${path}`, prior = values.get(key) as { stamp: string; text: string } | undefined;
+  if (prior?.stamp === stamp) return prior.text;
+  const text = readFileSync(path, "utf8"); values.set(key, { stamp, text }); return text;
 }
 export function filesUnder(path: string): string[] {
   if (!existsSync(path)) return [];

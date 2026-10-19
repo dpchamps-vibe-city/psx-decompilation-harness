@@ -144,12 +144,14 @@ total to ~26%. Phase 6 also cuts in-turn tool time. In one 45-minute session,
 
 ## Progress
 
-- [ ] D1–D5 decided
-- [ ] Phase 0: measurement and baseline
-- [ ] Phase 1: one verification per finalization window
-- [ ] Phase 2: verification key and record writes
-- [ ] Phase 3: selection
-- [ ] Phase 4: preparation
-- [ ] Phase 5: unified gate
-- [ ] Phase 6: resident worker
+Measured results and what remains: [results-2026-10-19.md](results-2026-10-19.md).
+
+- [x] D1–D5 decided (2026-10-19): D1-A, D2-A, D3 no resident worker, D4 separate-disk bench, D5 closure key
+- [x] Phase 0: counters, production `timings.jsonl`, synthetic fixture, budget tests, loop replay (0.5/0.7 as bench-side scripts)
+- [x] Phase 1: library receipt (1.1), shared changed-files reading (1.2), slim state (1.5)
+- [ ] Phase 2: closure key and completeness test done (2.1, 2.2); 2.3/2.4 open
+- [ ] Phase 3: 3.1–3.3 done; 3.4/3.5 open
+- [ ] Phase 4: D1-A, overlapped diagnostics, single hashing route; 4.4–4.6 open
+- [ ] Phase 5: one gate process (5.1–5.3, staged publication); shared compile and compile cache open
+- [ ] Phase 6: resident worker (declined, D3)
 - [ ] Phase 7: pipelining

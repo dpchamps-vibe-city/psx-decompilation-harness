@@ -12,6 +12,7 @@ import { registerDiagnosticTools } from "./tools/diagnostics.ts";
 import { registerExplainDiffTool } from "./tools/explain-diff.ts";
 import { registerExportContextTool } from "./tools/export-context.ts";
 import { registerFinalizeFunctionTool } from "./tools/finalize-function.ts";
+import { prefetchLibraryGraph } from "./autoloop/oracles.ts";
 import { registerFuzzVariantsTool } from "./tools/fuzz-variants.ts";
 import { registerAutoloopCommands } from "./autoloop/commands.ts";
 import { loadLoopConfig } from "./autoloop/config.ts";
@@ -197,6 +198,10 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
   registerFinalizeFunctionTool(pi, (name, files, ctx) => {
     const root = discoverProjectRoot(ctx.cwd);
     if (!loopActive()) documentationFor(root).start(name, agentCompletion(root, files), ctx);
+  }, (ctx) => {
+    /* Under the loop, the next selection's graph starts as soon as this
+       function's machine verification passes; it never runs outside a loop. */
+    if (loopActive()) prefetchLibraryGraph(discoverProjectRoot(ctx.cwd));
   });
   registerFuzzVariantsTool(pi);
   registerM2cTool(pi);

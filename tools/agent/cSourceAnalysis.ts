@@ -28,6 +28,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { digest, invocationMemo } from "../lib/contentCache.js";
 import { children, declaratorName, field, namedChildren, parseC, walk, type Node } from "./residual-source-search/tree-sitter-c.ts";
 
 export interface IncludeAsmSite {
@@ -63,7 +64,12 @@ function danglingDirective(node: Node): string | undefined {
   return text && ["#endif", "#else", "#elif"].includes(text) ? text : undefined;
 }
 
+/** The report is a function of the text alone: one parse per text per
+ * invocation (content-memo scope), and each caller gets its own copy. */
 export function analyzeCSource(source: string): CSourceReport {
+  return structuredClone(invocationMemo(`analyze-c-source\0${digest(source)}`, () => parseCSourceReport(source)));
+}
+function parseCSourceReport(source: string): CSourceReport {
   const tree = parseC(source);
   const root = tree.rootNode;
   const reasons: string[] = [];

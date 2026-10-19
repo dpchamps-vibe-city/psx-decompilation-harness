@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import type { AutodecompConfig } from "../../shared/types.ts";
 import type { ApprovalRecord, LoopConfig, LoopState, ParkRecord } from "./types.ts";
+import { inputIdentity, type Completion } from "../tools/prepared-attempt.ts";
+import { count } from "../../../../tools/lib/perfCounters.js";
 
 export function statePath(config: LoopConfig): string {
   return join(config.runtimeDir, "state.json");
@@ -22,11 +24,36 @@ export function readState(config: LoopConfig): LoopState {
   }
 }
 
+/* A completion's verified input map is persisted once, content-addressed by its
+   identity, and the state keeps the identity only: the state no longer grows by
+   a whole-tree map per match. A record whose map and identity disagree stays as
+   it is. Older states with inline maps load unchanged and slim on their next write. */
+const persisted = new WeakSet<Completion>();
+function persistedCompletion(config: LoopConfig, completion: Completion): Completion {
+  if (!completion.inputs) return completion;
+  if (!persisted.has(completion)) {
+    if (inputIdentity(completion.inputs) !== completion.verifiedIdentity) return completion;
+    const sidecar = join(config.runtimeDir, "inputs", `${completion.verifiedIdentity}.json`);
+    if (!existsSync(sidecar)) {
+      mkdirSync(dirname(sidecar), { recursive: true });
+      const temp = `${sidecar}.${process.pid}.tmp`;
+      writeFileSync(temp, `${JSON.stringify(completion.inputs)}\n`);
+      renameSync(temp, sidecar);
+    }
+    persisted.add(completion);
+  }
+  const { inputs: _verified, ...slim } = completion;
+  return slim;
+}
+
 export function writeState(config: LoopConfig, state: LoopState): void {
   const path = statePath(config);
   mkdirSync(dirname(path), { recursive: true });
-  const temp = `${path}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`);
+  const stored: LoopState = state.completions ? { ...state, completions: Object.fromEntries(Object.entries(state.completions)
+    .map(([name, completion]) => [name, persistedCompletion(config, completion)])) } : state;
+  const temp = `${path}.tmp`, text = `${JSON.stringify(stored, null, 2)}\n`;
+  count("state.write"); count("state.write.bytes", text.length);
+  writeFileSync(temp, text);
   renameSync(temp, path);
 }
 

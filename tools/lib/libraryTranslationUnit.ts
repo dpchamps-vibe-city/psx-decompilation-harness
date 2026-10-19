@@ -14,6 +14,7 @@ import { parseC } from "../agent/residual-source-search/tree-sitter-c.js";
 import { digest as fileTextDigest, fileDigest, invocationMemo, writeIfChanged } from "./contentCache.js";
 import { classifyLibraryCode } from "../agent/libraryCodeClass.js";
 import { projectRoot } from "./runtimeContext.js";
+import { count } from "./perfCounters.js";
 
 /** A C part defines one function (`symbol`) or shared declarations/data. An
  * assembly part is the member's ONE `.s` source and lists every original
@@ -76,11 +77,13 @@ export function libraryAssemblyInput(tu: LibraryAssemblyTu, outputDirectory: str
   writeIfChanged(input, paths.map(p => `#include ${JSON.stringify(p)}\n`).join(""));
   return input;
 }
-export function libraryAssemblyDependencies(tu: LibraryAssemblyTu, context: FlagContext, root: string): string[] {
+/** `scan` answers `-M -MG` for one input; callers with a validated cache pass it. */
+export function libraryAssemblyDependencies(tu: LibraryAssemblyTu, context: FlagContext, root: string,
+  scan: (input: string, flags: string[]) => string[] = (input, flags) => dependencyPaths(scanDependencies(input, flags, root), root)): string[] {
   const asFlags = configuredFlags("as", context, root);
   const directories = asFlags.flatMap((f, i) => f === "-I" ? [asFlags[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []).concat(root);
   const input = libraryAssemblyInput(tu, join(root, "build/libraries/drivers", context.id ?? "assembly"));
-  const files: string[] = tu.source.endsWith(".ASM") ? dependencyPaths(scanDependencies(input, configuredAssemblyCppFlags(context, root), root), root).filter(p => p !== input || input === tu.source) : [];
+  const files: string[] = tu.source.endsWith(".ASM") ? scan(input, configuredAssemblyCppFlags(context, root)).filter(p => p !== input || input === tu.source) : [];
   const pending = [tu.source], visited = new Set<string>();
   while (pending.length) {
     const file = pending.shift()!;
@@ -289,6 +292,7 @@ export interface LibraryTuPartStatus { path: string; symbol?: string; source: st
 /** One row per C part; one row per function of an assembly part. */
 export function libraryTuStatus(member: LibraryMember, root: string, replacement?: { symbol: string; source: string }): LibraryTuPartStatus[] | undefined {
   if (!isDirectoryTu(member)) return undefined;
+  count("tu.status");
   return readLibraryTu(member, root).parts.flatMap((part): LibraryTuPartStatus[] => {
     if (isAssemblyPart(part)) {
       if (replacement) throw new Error(`${member.id} is an assembly translation unit; C candidates do not apply`);

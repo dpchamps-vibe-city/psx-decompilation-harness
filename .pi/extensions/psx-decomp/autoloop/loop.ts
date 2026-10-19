@@ -1,4 +1,4 @@
-import { prepareAttempt, attemptStaticFinalization, buildInputs, documentCompletion, recordsFileGroupings, sameInputs, inputIdentity, type Completion, type PreparedAttempt } from "../tools/prepared-attempt.ts";
+import { prepareAttempt, attemptStaticFinalization, buildInputs, completionCurrent, documentCompletion, recordsFileGroupings, inputIdentity, type Completion, type PreparedAttempt } from "../tools/prepared-attempt.ts";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
@@ -25,6 +25,8 @@ import {
   isMatched,
   loopChangedFiles,
   nextTarget,
+  cancelLibraryGraphPrefetch,
+  prefetchLibraryGraph,
   scopedLoopChanges,
   type OracleContext,
 } from "./oracles.ts";
@@ -57,6 +59,15 @@ import {
 } from "./prompts.ts";
 import { isNotesPath, restoreDrift, snapshotFiles } from "./scope-guard.ts";
 import { readState, recordApproval, recordPark, writeState } from "./state.ts";
+import { clearLibraryReceipts, libraryReceiptMembers } from "../tools/library-receipt.ts";
+import { Timings } from "../../../../tools/lib/contentCache.js";
+import { appendFileSync } from "node:fs";
+
+/* Per-function harness phase timings, appended to <runtimeDir>/timings.jsonl:
+   every production run is also a measurement (plans/optimization §0.2). */
+let phases: Timings | undefined;
+const timed = <T>(phase: string, task: () => Promise<T>): Promise<T> => phases ? phases.measure(phase, task) : task();
+const timedSync = <T>(phase: string, task: () => T): T => phases ? phases.measureSync(phase, task) : task();
 import { waitForTurn, type TurnGate } from "./turn-gate.ts";
 import type {
   FunctionOutcome,
@@ -587,6 +598,8 @@ async function remeasure(deps: LoopDeps, functionName: string): Promise<string |
  * — full build included — passes.
  */
 export async function runFunction(deps: LoopDeps, state: LoopState, functionName: string): Promise<{ state: LoopState; outcome: FunctionOutcome }> {
+  /* A finalization receipt never crosses functions. */
+  clearLibraryReceipts();
   if (loadLibraryProject(deps.projectRoot)) {
     const { member } = requireLibraryFunction(functionName, deps.projectRoot);
     if (libraryAssemblyTu(member, deps.projectRoot)) throw new Error("The C autoloop never reconstructs assembly");
@@ -620,7 +633,7 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
   const completed = current.completions?.[functionName];
   /* A prep-led explicit selection obeys the same role boundary as the picker:
      old documentation does not bypass preparation. */
-  if (deps.config.ladder[0]?.role !== "prep" && completed && sameInputs(completed.inputs, buildInputs(deps.projectRoot))) {
+  if (deps.config.ladder[0]?.role !== "prep" && completed && completionCurrent(completed, buildInputs(deps.projectRoot))) {
     current = await documentMatch(deps, current, functionName, completed);
     if (current.completions?.[functionName]?.verification === "invalidated") return { state: current,
       outcome: { kind: "environment-broken", functionName, detail: "Documentation changed verified build inputs; rerun finalization." } };
@@ -649,8 +662,8 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
       changedFiles: result.completed.changedFiles, documentation: result.completed.documentation } };
   };
   try {
-    const prepared = await prepareAttempt(deps.projectRoot, functionName, signal);
-    const accepted = await finalizePrepared(prepared);
+    const prepared = await timed("preparation", () => prepareAttempt(deps.projectRoot, functionName, signal));
+    const accepted = await timed("static-finalization", () => finalizePrepared(prepared));
     if (accepted) return accepted;
   } catch (error) { preparedOpening = `Preparation could not complete: ${String(error)}. Preserve current source; investigate the named input failure.`; }
   if (deps.flag.aborted) return { state: current, outcome: { kind: "aborted", functionName } };
@@ -717,11 +730,18 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
             : escalationMessage(functionName, tier.label, lastReport, handoff, prepHandoff ? preparedOpening : "", prepHandoff);
 
       if (!(await turn(deps, message))) return { state: current, outcome: { kind: "aborted", functionName } };
+      /* The agent's own finalization passed in this process: the next
+         selection's graph can be built while the loop checks this one. */
+      if (libraryReceiptMembers(deps.projectRoot, functionName)) prefetchLibraryGraph(deps.projectRoot);
 
       /* Policy comes before the match verdict: a match bought with forbidden
        * source is not a match this project accepts. */
-      const findings = await introducedForbiddenConstructs(oracle(current), functionName);
+      /* One reading of the window's changes serves the policy check and the
+         finalize gate; any adjudication below may edit files, so it is dropped then. */
+      let changes: Awaited<ReturnType<typeof loopChangedFiles>> | undefined = await timed("changed-files", () => loopChangedFiles(oracle(current)));
+      const findings = await timed("forbidden-constructs", () => introducedForbiddenConstructs(oracle(current), functionName, changes));
       if (findings.length > 0) {
+        changes = undefined;
         lastFindings = findings;
         const review = await adjudicate(deps, functionName, findings, tierIndex);
         if (deps.flag.aborted) return { state: current, outcome: { kind: "aborted", functionName } };
@@ -773,7 +793,7 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
       }
 
       setStatus(deps, `◎ ${functionName} · oracle`);
-      const match = await isMatched(oracle(current), functionName);
+      const match = await timed("is-matched", () => isMatched(oracle(current), functionName));
       if (!match.matched) {
         /* The verdict already decided; the residual is what the next turn
          * should steer by, so it is read only when there is a next turn. */
@@ -802,14 +822,14 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
         continue;
       }
 
-      const gate = await finalize(oracle(current), functionName);
+      const gate = await timed("finalize", () => finalize(oracle(current), functionName, changes));
       if (gate.passed) {
         notify(deps, `${functionName} matched and finalized on ${tier.label}`, "info");
-        const inputs = buildInputs(deps.projectRoot);
-        current = await documentMatch(deps, current, functionName, { origin: "agent", tier: tier.label, verifiedIdentity: inputIdentity(inputs), verification: "passed", inputs, changedFiles: gate.changedFiles, documentation: "pending" });
+        const inputs = timedSync("build-inputs", () => buildInputs(deps.projectRoot));
+        current = await timed("document-match", () => documentMatch(deps, current, functionName, { origin: "agent", tier: tier.label, verifiedIdentity: inputIdentity(inputs), verification: "passed", inputs, changedFiles: gate.changedFiles, documentation: "pending" }));
         if (current.completions?.[functionName]?.verification === "invalidated") return { state: current,
           outcome: { kind: "environment-broken", functionName, detail: "Documentation changed verified build inputs; rerun finalization." } };
-        const changedFiles = (await loopChangedFiles(oracle(current))).changedFiles;
+        const changedFiles = (await timed("changed-files", () => loopChangedFiles(oracle(current)))).changedFiles;
         return {
           state: current,
           outcome: { kind: "matched", functionName, tier: tier.label, changedFiles, documentation: current.completions?.[functionName]?.documentation ?? "pending" },
@@ -908,6 +928,13 @@ async function closeOut(
   );
 }
 
+function flushPhases(deps: LoopDeps, item: { functionName: string; outcome: string } | undefined): void {
+  if (!phases || !phases.phases.length) return;
+  const record = { at: new Date().toISOString(), ...(item ?? {}), harnessMs: Math.round(phases.phases.reduce((n, p) => n + p.durationMs, 0)),
+    wallMs: Math.round(phases.totalMs), phases: phases.phases.map(p => ({ phase: p.phase, ms: Math.round(p.durationMs) })) };
+  try { appendFileSync(join(deps.config.runtimeDir, "timings.jsonl"), JSON.stringify(record) + "\n"); } catch { /* observation only */ }
+}
+
 export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promise<FunctionOutcome[]> {
   /* The loop forgives its own leftovers as it goes, and it does so on its own
    * copy: what it stops charging to the next function is not thereby forgiven
@@ -920,6 +947,7 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
   const outcomes: FunctionOutcome[] = [];
 
   let state = readState(deps.config);
+  let timedItem: { functionName: string; outcome: string } | undefined;
   const skip = new Set(Object.keys(state.parked));
   /* Functions a park has implicated: same suspected translation unit, or a
      residual signature the parked function carried. Deferred rather than
@@ -932,12 +960,14 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
 
       /* Each function starts on a clean conversation; the first one keeps
        * whatever the user was doing when they started the loop. */
-      if (index > 0) await clearContext(deps);
+      flushPhases(deps, timedItem);
+      phases = new Timings(); timedItem = undefined;
+      if (index > 0) await timed("clear-context", () => clearContext(deps));
 
       /* A folded module whose text has not passed cleanup is a work item of its
          own, ahead of new targets, like pending documentation. */
       const pendingCleanup = deps.config.autoFold && loadLibraryProject(deps.projectRoot)
-        ? pendingFoldCleanups(deps.projectRoot).find((member) => !skip.has(`fold-cleanup:${member.id}`)) : undefined;
+        ? timedSync("fold-cleanup-scan", () => pendingFoldCleanups(deps.projectRoot)).find((member) => !skip.has(`fold-cleanup:${member.id}`)) : undefined;
       if (pendingCleanup && !(index === 0 && options.firstTarget)) {
         skip.add(`fold-cleanup:${pendingCleanup.id}`);
         const cleaned = await cleanFoldedMember(deps, pendingCleanup.id);
@@ -957,7 +987,7 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
         : Object.entries(state.completions ?? {}).find(([name, c]) => c.documentation === "pending" && !skip.has(name))?.[0];
       const target = index === 0 && options.firstTarget
         ? options.firstTarget
-        : pendingDocumentation ?? await nextTarget(deps.projectRoot, skip, defer);
+        : pendingDocumentation ?? await timed("selection", () => nextTarget(deps.projectRoot, skip, defer));
       if (!target) {
         notify(deps, "No remaining clean-C decompilation targets.", "info");
         break;
@@ -967,6 +997,7 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
       const run = await runFunction(deps, state, target);
       state = run.state;
       outcomes.push(run.outcome);
+      timedItem = { functionName: target, outcome: run.outcome.kind };
       if (run.outcome.kind === "aborted") break;
       /* Unverified edits are in the tree; the next function must not start on them. */
       if (run.outcome.kind === "environment-broken") {
@@ -980,7 +1011,7 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
        * sweeps it up under that function's subject line. */
       if (run.outcome.kind === "matched" && deps.config.commitOnMatch) {
         setStatus(deps, `◎ ${target} · commit`);
-        const commit = await commitMatchedFunction(deps.projectRoot, target, run.outcome.tier, run.outcome.changedFiles, state.completions?.[target]);
+        const commit = await timed("commit", () => commitMatchedFunction(deps.projectRoot, target, run.outcome.tier, run.outcome.changedFiles, state.completions?.[target]));
         if (commit.committed) {
           run.outcome.commit = commit.detail;
           notify(deps, `Committed ${target} as ${commit.detail}`, "info");
@@ -995,7 +1026,7 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
       /* A member whose last target just matched folds into one module. */
       if (run.outcome.kind === "matched" && deps.config.autoFold && loadLibraryProject(deps.projectRoot)) {
         setStatus(deps, `◎ ${target} · fold`);
-        const folded = await foldMatchedMember(deps.projectRoot, target);
+        const folded = await timed("fold", () => foldMatchedMember(deps.projectRoot, target));
         if (folded.written) {
           notify(deps, `Folded ${folded.memberId} into ${folded.module}`, "info");
           const cleaned = await cleanFoldedMember(deps, folded.memberId);
@@ -1031,6 +1062,8 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
       }
     }
   } finally {
+    flushPhases(deps, timedItem); phases = undefined;
+    await cancelLibraryGraphPrefetch();
     writeState(deps.config, state);
     /* Stopping the loop hands the session back to the user mid-turn: the message
      * they typed is what stopped it, and it is being answered right now by the

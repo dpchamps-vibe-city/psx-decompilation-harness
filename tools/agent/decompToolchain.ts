@@ -1,4 +1,5 @@
 import { projectRoot } from "../lib/runtimeContext.js";
+import { count, countSpawn } from "../lib/perfCounters.js";
 import { assertAssemblySource } from "../lib/assemblyPolicy.js";
 import { assemble, assembleAsync, assemblerIdentity, captureAssemblerExpansion as captureExpansion } from "../lib/assembler.js";
 export type { AssemblerExpansion } from "../lib/assembler.js";
@@ -153,6 +154,7 @@ function commandError(tool: string, error: any): Error {
 }
 
 export function runTool(command: string, args: string[], cwd: string = projectRoot()): string {
+  countSpawn(command, args);
   try {
     return execFileSync(command, args, {
       cwd,
@@ -177,6 +179,7 @@ export function runToolCapturing(
   args: string[],
   cwd: string = projectRoot(),
 ): { stdout: string; stderr: string } {
+  countSpawn(command, args);
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf-8",
@@ -194,6 +197,7 @@ export function runToolAsync(
   cwd: string = projectRoot(),
   signal?: AbortSignal,
 ): Promise<string> {
+  countSpawn(command, args);
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"], signal });
     const stdout: Buffer[] = [];
@@ -215,6 +219,7 @@ export function runToolAsyncCapturingStderr(
   cwd: string = projectRoot(),
   signal?: AbortSignal,
 ): Promise<string> {
+  countSpawn(command, args);
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"], signal });
     const stdout: Buffer[] = [];
@@ -425,7 +430,11 @@ export function sourceDependencyFiles(source: string, context?: FlagContext, roo
   const flags = context ?? sourceFlagContext(absoluteSource, root);
   const member = flags?.kind === "library" ? libraryMemberById(flags.id!, root) : undefined;
   const assemblyTu = member ? libraryAssemblyTu(member, root) : undefined;
-  if (member && assemblyTu) return [...new Set([absoluteSource, resolve(root, member.source), ...libraryAssemblyDependencies(assemblyTu, flags!, root)])];
+  if (member && assemblyTu) return [...new Set([absoluteSource, resolve(root, member.source), ...libraryAssemblyDependencies(assemblyTu, flags!, root, (scanned, scanFlags) => {
+    const files = cppDependencies(scanned, scanFlags, root, []);
+    if (!files) throw new Error("cpp did not emit a dependency rule");
+    return files;
+  })])];
   const input = member && isDirectoryTu(member) ? libraryDependencyInput(member, root) : absoluteSource;
   const files = cppDependencies(input, configuredFlags("cpp", flags, root), root, member && isDirectoryTu(member) ? [resolve(root, dirname(member.source))] : []);
   if (!files) return [absoluteSource];
@@ -452,8 +461,11 @@ function cppDependencies(input: string, flags: string[], root: string, includedF
   const membership = (files: string[] | null) => digest(JSON.stringify(includeMembership(search, listed(files).map(file => basename(file)))));
   type Recorded = { files: string[] | null; inputs: Record<string, string>; membership: string };
   const prior = readCache<Recorded>(path, key);
-  if (prior && sameSnapshot(prior.inputs, snapshot(root, listed(prior.files))) && prior.membership === membership(prior.files))
+  if (prior && sameSnapshot(prior.inputs, snapshot(root, listed(prior.files))) && prior.membership === membership(prior.files)) {
+    count("dependencies.hit");
     return prior.files ? [...prior.files] : undefined;
+  }
+  count("dependencies.miss");
   const started = Date.now(), before = JSON.stringify(search.map(dir => filesUnder(dir)));
   const text = scanDependencies(input, flags, root).replace(/\\\n/g, " ");
   const colon = text.indexOf(":");
@@ -516,6 +528,7 @@ export function compileSource(
     containerId?: string;
   } = {},
 ): CompileArtifacts {
+  count("compile");
   const absoluteSource = isAbsolute(source) ? source : join(projectRoot(), source);
   const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(projectRoot(), outputDir);
   mkdirSync(absoluteOutput, { recursive: true });
@@ -610,6 +623,7 @@ export async function compileSourceAsync(
     containerId?: string;
   } = {},
 ): Promise<CompileArtifacts> {
+  count("compile");
   const absoluteSource = isAbsolute(source) ? source : join(projectRoot(), source);
   const absoluteOutput = isAbsolute(outputDir) ? outputDir : join(projectRoot(), outputDir);
   mkdirSync(absoluteOutput, { recursive: true });

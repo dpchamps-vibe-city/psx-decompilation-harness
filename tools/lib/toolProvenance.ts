@@ -1,6 +1,6 @@
 /** Acceptance records identify the bytes that execute, not launcher names. */
 import { spawnSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { fileDigest } from "./contentCache.js";
 import { configuredTool, configuredCppFrontend, configuredCompilerSource, executablePath, loadToolchain, type ToolName, type FlagContext } from "./toolchain.js";
@@ -8,14 +8,18 @@ import { contextForProject, inRuntimeContext, projectRoot, resolveOwnedPath } fr
 import { assemblerIdentity } from "./assembler.js";
 import { verifyCompilerBinding } from "../agent/compiler-source/index.js";
 const linked = new Map<string, string[]>();
+function elfMagic(path: string): boolean {
+  const magic = Buffer.alloc(4), fd = openSync(path, "r");
+  try { return readSync(fd, magic, 0, 4, 0) === 4 && magic.toString("hex") === "7f454c46"; } finally { closeSync(fd); }
+}
 export function executedToolIdentity(name: ToolName, root = projectRoot(), command = configuredTool(name, root, { prepare: false })) {
   const path = executablePath(command, root);
   if (!path) throw new Error(`Missing executed tool ${name}: ${command}`);
-  const sha256 = fileDigest(path), bytes = readFileSync(path), key = [sha256, path, process.env.LD_LIBRARY_PATH ?? "", process.env.LD_PRELOAD ?? ""].join("\0");
+  const sha256 = fileDigest(path), key = [sha256, path, process.env.LD_LIBRARY_PATH ?? "", process.env.LD_PRELOAD ?? ""].join("\0");
   let dependencies = linked.get(key);
   if (!dependencies) {
     dependencies = [];
-    if (bytes.toString("hex", 0, 4) === "7f454c46") {
+    if (elfMagic(path)) {
       const result = spawnSync("ldd", [path], { encoding: "utf8" });
       const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
       if (/not found/.test(text)) throw new Error(`${name}: unresolved linked library: ${text.trim()}`);

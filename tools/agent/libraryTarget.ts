@@ -22,18 +22,24 @@ import { libraryDataObjects, lnkSymbolOrder, m2cGlobalDefinitions, renderDataDra
 import { retainHandwrittenAssembly } from "./retainHandwrittenAssembly.js";
 import { libraryFunctionTarget } from "../lib/targetAdapter.js";
 import { digest, fileDigest, filesUnder, snapshot, withContentMemo } from "../lib/contentCache.js";
+import { count } from "../lib/perfCounters.js";
 import { recordedCommand, commandText } from "../lib/recordedCommand.js";
 import { compileSource, compileSourceAsync, configuredToolchainIdentity, loadFlagOverrides, preprocessOnly, rejectionFromDiagnostics, runTool, sourceDependencyFiles } from "./decompToolchain.js";
+import { withPreprocessorMetadata } from "./preprocessedCache.js";
+import { verificationClosure } from "../lib/verificationClosure.js";
 import { extractSignaturesFromSource } from "./sdkTypes.js";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { preservedAttempt } from "./cSourceAnalysis.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
 import { prepareM2c } from "../build/prepareM2c.js";
 import { packetOpening, packetEvidence, type PreparationPacket } from "./campaign/packet.js";
+import { detectFunctionMacroIdentity } from "../diagnostics/macroIdentity.js";
 import { sourceConstructFindings } from "../../.pi/extensions/shared/source-policy.js";
 import { loadConfig } from "../../.pi/extensions/shared/config.js";
-const hashFile = (path: string) => existsSync(path) ? digest(readFileSync(path)) : "absent";
-const acceptedPath = (root: string, member: LibraryMember) => join(root, "build/libraries/verified", `${member.id}.json`);
+/* One hashing route: the content memo and its ctime-settled reuse. */
+const hashFile = fileDigest;
+/** A member's accepted (whole-member match) record. */
+export const acceptedPath = (root: string, member: Pick<LibraryMember, "id">) => join(root, "build/libraries/verified", `${member.id}.json`);
 function backlogInputs(member: LibraryMember, root: string): string[] {
   if (!isDirectoryTu(member) || !existsSync(join(root, member.source))) return [];
   return libraryTuStatus(member, root)!.filter(p => p.stub && p.form === "c").flatMap(p => libraryAssemblyInputs(member, p.symbol!, root));
@@ -115,6 +121,7 @@ export function libraryBuildIdentities(root = projectRoot()) {
     return compilers.get(key)!;
   };
   const identity = (member: LibraryMember): string => {
+    count("verification.identity");
     const objects = libraryObjectInputs(member, root, project);
     const context = libraryContext(member.id, root, project), cpp = configuredFlags("cpp", context, root);
     const dirs = cpp.flatMap((f, i) => f === "-I" ? [cpp[i + 1]!] : f.startsWith("-I") ? [f.slice(2)] : []);
@@ -150,7 +157,9 @@ export function isLibraryMemberVerified(member: LibraryMember, root = projectRoo
   return verifiedLibraryMembers([member], root).get(member.id)!;
 }
 export function verifiedLibraryMembers(members: LibraryMember[], root = projectRoot()): Map<string, boolean> {
-  return withContentMemo(() => {
+  count("verification.batch");
+  /* Include-search membership is walked once for the batch and re-checked when it closes. */
+  return withContentMemo(() => withPreprocessorMetadata(() => {
     const batch = libraryBuildIdentities(root), key = libraryVerificationKey(root, loadConfig(root).sourcePolicy);
     const verified = new Map(members.map(member => {
       try {
@@ -159,7 +168,7 @@ export function verifiedLibraryMembers(members: LibraryMember[], root = projectR
     }));
     batch.assertUnchanged();
     return verified;
-  });
+  }));
 }
 
 function compileMember(member: LibraryMember, source = member.source, root = projectRoot(), key = member.id) {
@@ -494,16 +503,8 @@ export function checkLibrary(args: string[], root = projectRoot()): void {
  * compiled, compared and audited the member, and the policy it was audited under. */
 export function libraryVerificationKey(root: string, policy: unknown): string {
   const harness = contextForProject(root).harnessRoot;
-  const files = [...implementationFiles(join(harness, "tools")), ...filesUnder(join(harness, "tools/vendor/tree-sitter-c")),
-    ...implementationFiles(join(harness, ".pi/extensions/shared")), join(harness, "package-lock.json")];
-  return digest(JSON.stringify({ policy, harness: files.map(f => [relative(harness, f), fileDigest(f)]) }));
-}
-function implementationFiles(directory: string): string[] {
-  if (!existsSync(directory)) return [];
-  return readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).flatMap(entry => {
-    if (entry.isDirectory()) return ["vendor", "node_modules", "__pycache__"].includes(entry.name) ? [] : implementationFiles(join(directory, entry.name));
-    return entry.name.endsWith(".test.ts") ? [] : [join(directory, entry.name)];
-  });
+  return digest(JSON.stringify({ policy, closure: "verification-closure-v1",
+    harness: verificationClosure(harness).map(f => [f, fileDigest(join(harness, f))]) }));
 }
 function recordedMatch(member: LibraryMember, identity: string, key: string, root: string): boolean {
   try {
@@ -547,6 +548,11 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
     } catch { /* No prior draft. Failed/empty generation never publishes this pointer. */ }
   }
   const directory = join(root, "build/preparation", key, `${Date.now()}-${process.pid}`); mkdirSync(directory, { recursive: true });
+  /* The read-before-definition scan needs only the target's assembly, written
+     above; it runs alongside generation and compilation. */
+  const readBeforeDefinition = fn.generated ? undefined
+    : recordedCommand(process.execPath, currentScriptArgs("tools/agent/scanReadBeforeDef.ts", [key, "--json"]), root, directory, "read-before-definition", options.signal);
+  readBeforeDefinition?.catch(() => undefined);
   const paths = [...memberInputPaths(member, root), member.assembly, `build/libraries/nonmatchings/${member.id}`,
     target.context.types, target.context.functions,
     ...(options.contextFile ? [options.contextFile] : [])];
@@ -666,19 +672,21 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   // Preserve the same diagnostic handoff fields as the image adapter. These
   // tools already consume normalized targets; no format-specific agent steps.
   // Function diagnostics have nothing to read in a finishing target's data or symbol order.
-  for (const [script, label] of fn.generated ? [] : [["scanReadBeforeDef.ts", "read-before-definition"], ["triage.ts", "triage"]]) {
+  // The handoff renders macro identity, so it is computed here; full triage
+  // (idiom precedents, symptom findings) is psx_triage, on demand.
+  const unknown = (subject: string, error: unknown, attempted: string) => packet.discovery.unknowns.push({ subject, strength: "unknown", constraints: [], evidence: [member.assembly],
+    missing: String(error), attempted, bound: "selected function/TU", stoppedBecause: "diagnostic failed", inspectNext: [relative(root, directory)] });
+  if (readBeforeDefinition) {
     try {
-      const args = [key, "--json", ...(label === "triage" && packet.primary ? ["--src", packet.primary.path] : [])];
-      const result = await recordedCommand(process.execPath, currentScriptArgs(`tools/agent/${script}`, args), root, directory, label!, options.signal);
+      const result = await readBeforeDefinition;
       packet.discovery.preflight.push(result);
       if (result.status !== 0) throw new Error(commandText(result));
-      const report = JSON.parse(readFileSync(result.stdout, "utf8"));
-      if (label === "read-before-definition") packet.discovery.readBeforeDefinition = report;
-      else { packet.discovery.macroIdentity = report.macroIdentity; packet.discovery.report = { ...packet.discovery.report as object, findings: report.findings }; }
-    } catch (error) {
-      packet.discovery.unknowns.push({ subject: label!, strength: "unknown", constraints: [], evidence: [member.assembly],
-        missing: String(error), attempted: `shared ${script}`, bound: "selected function/TU", stoppedBecause: "diagnostic failed", inspectNext: [relative(root, directory)] });
-    }
+      packet.discovery.readBeforeDefinition = JSON.parse(readFileSync(result.stdout, "utf8"));
+    } catch (error) { unknown("read-before-definition", error, "shared scanReadBeforeDef.ts"); }
+    try {
+      packet.discovery.macroIdentity = detectFunctionMacroIdentity(key);
+      packet.discovery.report = { ...packet.discovery.report as object, triage: "on demand: psx_triage" };
+    } catch (error) { unknown("macro-identity", error, "shared macro identity"); }
   }
   if (fn.inferredSize) packet.discovery.unknowns.push({ subject: key, strength: "conditional", constraints: [], evidence: [member.assembly],
     missing: "NOTYPE/size-zero symbol extent is inferred. Function-local diagnostics retain that uncertainty; only the whole-member oracle can certify this TU.",

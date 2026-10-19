@@ -10,6 +10,7 @@ import { readLnk } from "./objectFormats/lnk.js";
 import type { NativeObject } from "./objectFormats/model.js";
 import type { RelocatableObject } from "./relocatableObject.js";
 import type { LibraryProject } from "./project.js";
+import { count } from "./perfCounters.js";
 export interface OriginalMember { input: string; ordinal: number; member: string; bytes: Buffer; sha256: string; inputHash: string; object: NativeObject }
 export function originalMemberId(input: string, ordinal?: number): string {
   const stem = basename(input).replace(/\.[^.]+$/, "").toLowerCase();
@@ -46,6 +47,7 @@ export function transitionalOriginals(project: LibraryProject, root: string): Ma
   return result;
 }
 export function validateElfView(original: NativeObject, view: RelocatableObject): void {
+  count("elfView.validate");
   const types = { REFHALF: 1, REFWORD: 2, JMPADDR: 4, REFHI: 5, REFLO: 6, GPREL: 7, LITERAL: 8 };
   const originalSites = original.relocations.map(r => `${r.section}:${r.offset}:${types[r.kind]}`).sort(), viewSites = view.relocations.map(r => `${r.section}:${r.offset}:${r.type}`).sort();
   if (JSON.stringify(originalSites) !== JSON.stringify(viewSites)) throw new Error("ELF correspondence: relocation sites/kinds differ");
@@ -53,8 +55,15 @@ export function validateElfView(original: NativeObject, view: RelocatableObject)
     const v = view.sections.get(s.name);
     if (!v && !s.size) continue; // Empty format declarations contain no view storage.
     if (!v || s.size !== v.size || (s.kind === "bss") !== (v.type === 8)) throw new Error(`ELF correspondence: ${s.name} storage differs`);
+    // Each byte's first covering relocation in record order, as a find() would pick it.
+    const cover = new Int32Array(s.data.length).fill(-1);
+    original.relocations.forEach((r, index) => {
+      if (r.section !== s.name) return;
+      const end = Math.min(s.data.length, r.offset + (r.kind === "REFHALF" || ["REFHI", "REFLO", "GPREL", "LITERAL"].includes(r.kind) ? 2 : 4));
+      for (let i = Math.max(0, r.offset); i < end; i++) if (cover[i] === -1) cover[i] = index;
+    });
     for (let i = 0; i < s.data.length; i++) {
-      const reloc = original.relocations.find(r => r.section === s.name && i >= r.offset && i < r.offset + (r.kind === "REFHALF" || ["REFHI", "REFLO", "GPREL", "LITERAL"].includes(r.kind) ? 2 : 4));
+      const reloc = cover[i] === -1 ? undefined : original.relocations[cover[i]!];
       if (!reloc && s.data[i] !== v.data[i]) throw new Error(`ELF correspondence: ${s.name}+${i} unrelocated byte differs`);
       if (reloc?.kind === "JMPADDR" && i === reloc.offset + 3 && (s.data[i]! & 0xfc) !== (v.data[i]! & 0xfc)) throw new Error(`ELF correspondence: ${s.name}+${i} opcode differs`);
     }

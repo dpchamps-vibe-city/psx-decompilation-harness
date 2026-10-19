@@ -12,7 +12,7 @@ import { loadFunctionSpans, loadSymbolIndex } from "../lib/symbolIndex.js";
 import { readGroups, type FileGroup } from "../agent/fileGroupings.js";
 import { hex } from "./macroInstructions.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
-import { libraryMembers, libraryTargetKey, resolveLibraryCall, withLibraryMetadata } from "../lib/libraryTargets.js";
+import { libraryTargetKey, resolveLibraryCall, scopedLibraryMembers, withLibraryMetadata } from "../lib/libraryTargets.js";
 import { resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { configuredAssembler, configuredFlags, configuredSdkHeaders, type FlagContext } from "../lib/toolchain.js";
 import { deriveRepoMacroEncodings, type RepoEncodingReport } from "./macroEncodings.js";
@@ -66,11 +66,13 @@ export interface MacroIdentityReport {
  * disassembler table, bounded by configured text. Never decode overlay data
  * (random data readily manufactures COP2 instructions). Invalid/truncated
  * function extents are findings; they are not silently clamped. */
-export function loadMacroFunctions(containers: readonly Container[]): { functions: MacroFunction[]; findings: CensusFinding[] } {
+/** `memberId` limits library functions to one member; calls still resolve
+ * against the whole inventory. */
+export function loadMacroFunctions(containers: readonly Container[], memberId?: string): { functions: MacroFunction[]; findings: CensusFinding[] } {
   const functions: MacroFunction[] = [], findings: CensusFinding[] = [];
   if (loadLibraryProject()) {
-    const members = libraryMembers();
-    for (const member of members) {
+    const members = scopedLibraryMembers();
+    for (const member of memberId === undefined ? members : members.filter(m => m.id.toLowerCase() === memberId)) {
       if (!member.functions.length && [...member.object.sections.values()].some(s => (s.flags & 4) && s.size))
         findings.push({ container: member.id, function: null, reason: "Executable member has no identifiable function extent" });
       for (const fn of member.functions) {
@@ -225,8 +227,9 @@ function detectMacroIdentitiesScoped(options: MacroIdentityOptions): MacroIdenti
 
 /** Target-byte push for triage; works identically for C and INCLUDE_ASM sources. */
 export function detectFunctionMacroIdentity(functionName: string): { function: MacroFunctionReport; encodingToolchains: RepoEncodingReport[] } | null {
-  const containers = loadLibraryProject() ? [] : loadContainers();
-  const loaded = loadMacroFunctions(containers);
+  const library = loadLibraryProject(), containers = library ? [] : loadContainers();
+  const owner = library && functionName.includes("::") ? functionName.slice(0, functionName.indexOf("::")).toLowerCase() : undefined;
+  const loaded = loadMacroFunctions(containers, owner);
   const fn = loaded.functions.find(f => f.name.toLowerCase() === functionName.toLowerCase());
   if (!fn) return null;
   const container = containers.find(c => c.id === fn.container);

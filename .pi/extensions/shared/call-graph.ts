@@ -76,8 +76,8 @@ export function functionPaths(projectRoot: string, name: string): {
   return { container: target.owner.id, source: target.source, includeAsmPath: target.includeAsm.folder };
 }
 
-export async function rebuildCallGraph(projectRoot: string, timeoutMs = 120_000): Promise<CallGraph> {
-  const result = await runCommand(process.execPath, installedScriptArgs("tools/agent/callGraph.ts", [], projectRoot), { cwd: projectRoot, timeoutMs });
+export async function rebuildCallGraph(projectRoot: string, timeoutMs = 120_000, signal?: AbortSignal): Promise<CallGraph> {
+  const result = await runCommand(process.execPath, installedScriptArgs("tools/agent/callGraph.ts", [], projectRoot), { cwd: projectRoot, timeoutMs, ...(signal ? { signal } : {}) });
   if (result.code !== 0) throw new Error(`Call graph regeneration failed:\n${result.stderr || result.stdout}`);
   return loadCallGraph(projectRoot);
 }

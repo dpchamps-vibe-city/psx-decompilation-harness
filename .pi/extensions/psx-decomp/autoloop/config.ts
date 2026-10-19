@@ -34,6 +34,7 @@ export const DEFAULT_LOOP_CONFIG: Omit<LoopConfig, "runtimeDir"> = {
   updateFileGroupings: true,
   commitOnMatch: true,
   commitOnPark: true,
+  autoFold: false,
   approvalsDir: "notes/human-needed-approvals",
 };
 
@@ -112,6 +113,7 @@ export const LOOP_CONFIG_FIELDS = [
   "updateFileGroupings",
   "commitOnMatch",
   "commitOnPark",
+  "autoFold",
   "runtimeDir",
   "approvalsDir",
   "integration",
@@ -180,6 +182,7 @@ export function loadLoopConfig(projectRoot: string): LoopConfig {
         : Boolean(raw.updateFileGroupings),
     commitOnMatch: raw.commitOnMatch === undefined ? DEFAULT_LOOP_CONFIG.commitOnMatch : Boolean(raw.commitOnMatch),
     commitOnPark: raw.commitOnPark === undefined ? DEFAULT_LOOP_CONFIG.commitOnPark : Boolean(raw.commitOnPark),
+    autoFold: raw.autoFold === undefined ? DEFAULT_LOOP_CONFIG.autoFold : Boolean(raw.autoFold),
     runtimeDir: isAbsolute(runtimeDir) ? runtimeDir : resolve(projectRoot, runtimeDir),
     approvalsDir,
   };

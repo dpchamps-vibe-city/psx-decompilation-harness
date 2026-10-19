@@ -288,6 +288,13 @@ test("member oracle folds references to symbols defined in the same object into 
     const offsetOriginal = assemble("offset-original", prefix(body(".Lhelper").replace("helper:\n", ".Lhelper:\nhelper:\n")));
     const offsetCandidate = assemble("offset-candidate", prefix(body("helper")));
     assert.equal(compareRelocatableFunctionObjects(readRelocatableObject(offsetOriginal), readRelocatableObject(offsetCandidate), "entry").verdict, "match");
+    // A private helper the original never named may be renamed in a module:
+    // only then is the candidate's function at the same coordinate that helper.
+    const renamed = readRelocatableObject(assemble("renamed-helper", body("helper").replaceAll("helper", "grow_heap")));
+    assert.throws(() => compareRelocatableFunctionObjects(readRelocatableObject(symbolic), renamed, "helper"), /does not define helper/);
+    const helper = compareRelocatableFunctionObjects(readRelocatableObject(symbolic), renamed, "helper", undefined, true);
+    assert.equal(helper.verdict, "match");
+    assert.equal(helper.candidateWords.length, helper.targetWords.length);
     assert.equal(compareRelocatableObjects(sectionRelative, assemble("wrong-target", body("helper+4"))).verdict, "mismatch", "a different link-time address is not hidden");
     assert.equal(compareRelocatableObjects(sectionRelative, assemble("moved", body("helper").replace("helper:\njr $31\nnop\n", "helper:\njr $31\nnop\nnop\n"))).verdict, "mismatch", "moving the definition changes bytes and symbol values");
     assert.equal(compareRelocatableObjects(sectionRelative, assemble("weak", body("helper").replace(".globl helper", ".weak helper"))).verdict, "mismatch", "a weak definition can bind elsewhere; its symbol stays symbolic");

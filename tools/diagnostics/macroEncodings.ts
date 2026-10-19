@@ -1,4 +1,4 @@
-import { projectRoot } from "../lib/runtimeContext.js";
+import { HARNESS_ROOT, projectRoot } from "../lib/runtimeContext.js";
 /** Project-owned GTE command encoding oracle. Discover the GAS definitions
  * included by a real common.h compile, then compile probes with the SAME
  * cpp -> configured cc1 -> configured assembler pipeline as production C. No foreign
@@ -12,6 +12,7 @@ import { configuredAssembler, configuredFlags, type AssemblerSelection, type Fla
 import { libraryContext } from "../lib/project.js";
 import { elf32SectionSizes } from "../lib/elfSections.js";
 import type { CommandEncodingEvidence, MacroTemplate, TemplateLibrary } from "./macroTemplates.js";
+import { DMPSX_VERSION, dmpsxCommand } from "../lib/stages/psyqDmpsx.js";
 
 const digest = (bytes: string | Buffer): string => createHash("sha256").update(bytes).digest("hex");
 const projectPath = (path: string): string => relative(projectRoot(), path).split("\\").join("/");
@@ -135,12 +136,48 @@ function substitutionLiteral(template: MacroTemplate, statement: string): string
   return template.blocks.map(b => b.instructions.map(p => p.op === "literal-word" ? statement : p.literal).join(";"));
 }
 
+/** The period chain keeps the SDK's INLINE_C placeholder words through the
+ * assembler; the declared DMPSX stage rewrites them in the object. That stage's
+ * table, not a GAS macro probe, is the production encoding, and the candidate
+ * calls the SDK macro unchanged. */
+function deriveDmpsxMacroEncodings(library: TemplateLibrary, containerKind: FlagContext["kind"], flagContext: FlagContext, containerId?: string): { library: TemplateLibrary; report: RepoEncodingReport } {
+  const stage = join(HARNESS_ROOT, "tools/lib/stages/psyqDmpsx.ts"), stageSha256 = digest(readFileSync(stage));
+  const diagnostics = [...library.diagnostics], accepted = new Map<number, number>();
+  for (const template of library.templates) {
+    const command = commandOf(template);
+    if (!command) continue;
+    let word: number | undefined;
+    try { word = dmpsxCommand(command.from); } catch { word = undefined; }
+    if (word === undefined) diagnostics.push({ header: template.header, macro: template.macro, line: template.line, reason: `DMPSX has no command for SDK placeholder 0x${command.from.toString(16)}; not translated` });
+    else accepted.set(command.from, word);
+  }
+  const statement = `psyq-dmpsx v${DMPSX_VERSION}`;
+  const templates = library.templates.map(template => {
+    const encodingEvidence = [...template.encodingEvidence];
+    const blocks = template.blocks.map(block => ({ ...block, instructions: block.instructions.map(p => {
+      const to = p.op === "literal-word" && typeof p.args[0]?.value === "number" ? accepted.get(p.args[0].value) : undefined;
+      if (to === undefined) return p;
+      const from = p.args[0]!.value as number;
+      if (!encodingEvidence.some(e => e.from === from)) encodingEvidence.push({ header: template.header, headerSha256: template.headerSha256, line: template.line, macro: template.macro,
+        from, to, assemblerStatement: statement, finalizer: "psyq-dmpsx", containerKind: flagContext.kind, probeObject: projectPath(stage), probeObjectSha256: stageSha256, probeOffset: 0 });
+      return { ...p, op: "cop2", args: [{ kind: "word" as const, value: to }] };
+    }) }));
+    return { ...template, blocks, encodingEvidence };
+  });
+  const report: RepoEncodingReport = { containerKind, ...(containerId ? { containerId } : {}), toolchain: configuredToolchainIdentity(flagContext), assembler: configuredAssembler(flagContext),
+    cppFlags: configuredFlags("cpp", flagContext), cc1Flags: configuredFlags("cc1", flagContext), asFlags: configuredFlags("as", flagContext), includes: [],
+    probeSource: projectPath(stage), probeAssembly: projectPath(stage), probeObject: statement, probeObjectSha256: stageSha256,
+    commands: [...accepted].map(([from, word]) => ({ statement: `0x${from.toString(16)}`, word, offset: 0 })), reconstructionHeaders: [] };
+  return { library: { templates, diagnostics }, report };
+}
+
 /** Pure transforms are intentionally insufficient here: command encodings must
  * have passed the actual project compiler/assembler path for this flag column.
  * Artifacts land only under build/. Failure is fatal, never a foreign fallback. */
 export function deriveRepoMacroEncodings(library: TemplateLibrary, containerKind: FlagContext["kind"] = "exe", containerId?: string): { library: TemplateLibrary; report: RepoEncodingReport } {
   if (library.templates.some(t => t.encodingEvidence.length)) throw new Error("Production encoding derivation requires raw header templates, not previously translated libraries");
   const flagContext: FlagContext = containerKind === "library" ? libraryContext(containerId!) : { kind: containerKind, ...(containerId ? { id: containerId } : {}) };
+  if (configuredAssembler(flagContext).postAssembly.includes("psyq-dmpsx")) return deriveDmpsxMacroEncodings(library, containerKind, flagContext, containerId);
   const ownerOptions = { containerKind, ...(containerId ? { containerId } : {}) };
   const base = join(projectRoot(), "build/macroIdentity/repo-encodings", containerKind, containerId ?? "default");
   mkdirSync(base, { recursive: true });

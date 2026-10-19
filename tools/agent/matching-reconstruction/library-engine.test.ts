@@ -56,7 +56,7 @@ test("BIOS fingerprint is structural, checks the delay slot, and never requests 
   assert.throws(() => executeFunction(insns), (error: unknown) => error instanceof UnsupportedTarget && error.category === "bios-veneer");
   const findings = biosVeneerFindings(insns);
   assert.equal(findings[0]!.severity, "blocker");
-  assert.ok(findings[0]!.evidence.some(line => line.includes("not a request to retain INCLUDE_ASM")));
+  assert.ok(findings[0]!.evidence.some(line => line.includes("never translated to C") && line.includes("requests no assembly exception")));
   for (const changed of ["a0000a240800e0033900092400000000", "d0000a24080040013900092400000000",
     "a0000a24080040013900042400000000", "a0000a24080040010000000000000000"]) {
     assert.equal(recognizeBiosVeneer(decodeBytes(Buffer.from(changed, "hex"), 0)), undefined);

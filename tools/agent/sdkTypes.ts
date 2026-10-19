@@ -21,7 +21,6 @@ import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { configuredSdkHeaders } from "../lib/toolchain.js";
 import { walkActiveC } from "./cSourceAnalysis.js";
-import { biosFunctionProjection } from "../lib/biosFunctionMacro.js";
 import { loadLibraryProject } from "../lib/project.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
 import { parseC, walk, children, namedChildren, field, isTrivia, subtreeIsBroken, type Node } from "./residual-source-search/tree-sitter-c.js";
@@ -261,7 +260,7 @@ export function extractSignaturesFromSource(source: string): ExtractedSignature[
   const found: ExtractedSignature[] = [];
   let tree;
   try {
-    tree = parseC(biosFunctionProjection(source).source);
+    tree = parseC(source);
   } catch {
     return found;
   }

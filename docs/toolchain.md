@@ -135,7 +135,11 @@ are rejected, including symbolic words and invalid instruction encodings. The
 exceptions are recognized SDK placeholders with DMPSX declared and printable
 `.ascii`/`.asciz` text. Literal `#if 0` attempts are preserved but not audited as
 active source. Backlog status comes from TU manifests, not `.NON_MATCHING`
-symbols. These source checks do not apply to generated reference listings.
+symbols. These source checks do not apply to generated reference listings or
+the exact hash-bound original extractions explicitly retained with
+`npm run library -- retain-handwritten --write`. Retention copies the established
+unpreprocessed `.ASM` inputs unchanged and keeps generated CPP drivers and `.s`
+outputs under `build/`; it is not an assembly-reconstruction workflow.
 
 Acceptance checks configured `toolPins` (SHA-256 plus optional recipe digest)
 and the configured compiler's source/binary binding on every run. Native

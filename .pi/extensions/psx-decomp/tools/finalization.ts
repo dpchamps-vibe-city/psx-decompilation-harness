@@ -8,7 +8,7 @@ import { Timings } from "../../../../tools/lib/contentCache.js";
 import type { ExportResult } from "../../../../tools/agent/contextExport.js";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
 import { libraryMembers, libraryTargetKey, requireLibraryFunction, withLibraryMetadata } from "../../../../tools/lib/libraryTargets.js";
-import { libraryFunctionSource, libraryMembersOwning } from "../../../../tools/lib/libraryTranslationUnit.js";
+import { LIBRARY_GENERATED_PARTS, libraryFunctionSource, libraryMembersOwning } from "../../../../tools/lib/libraryTranslationUnit.js";
 import { compilerInputs, consumeReceipt, contextIsCompilerIndependent, publishReceipt, verificationOutputs } from "./verification-receipt.ts";
 
 /** One authoritative route. Machine work can be reused only across unchanged
@@ -33,8 +33,10 @@ export async function finalizeWorkspace(options: {
        (the input guard makes several per checked member) re-reads and re-parses
        every input object. */
     return withLibraryMetadata(async () => {
-      const sources = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), libraryFunctionSource(m, f.name)])));
-      const containers = Object.fromEntries(members.flatMap(m => m.functions.map(f => [libraryTargetKey(m, f.name), m.id])));
+      // Finishing targets (the generated data/symbol parts) resolve like functions.
+      const names = (m: (typeof members)[number]) => [...m.functions.map(f => f.name), ...Object.keys(LIBRARY_GENERATED_PARTS)];
+      const sources = Object.fromEntries(members.flatMap(m => names(m).map(n => [libraryTargetKey(m, n), libraryFunctionSource(m, n)])));
+      const containers = Object.fromEntries(members.flatMap(m => names(m).map(n => [libraryTargetKey(m, n), m.id])));
       const target = requireLibraryFunction(options.functionName, options.projectRoot);
       const active = [...new Set([target.member.id, ...libraryMembersOwning(members, options.changedFiles, options.projectRoot).map(m => m.id)])];
       const checkedMembers = libraryVerificationMembers(active, options.projectRoot, members);

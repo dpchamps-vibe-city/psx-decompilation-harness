@@ -411,6 +411,17 @@ export function groupingsMessage(functionName: string): string {
   ].join("\n");
 }
 
+export function foldCleanupMessage(memberId: string, modulePath: string, original: string): string {
+  return [
+    `/skill:psx-fold-cleanup Target: ${memberId} (${modulePath}). Cleanup role, not solver role.`,
+    `${modulePath} is ${original}, folded verbatim from its per-function parts. It rebuilds the original object byte for byte.`,
+    "Make it read like the source its authors wrote without changing a byte of the object.",
+    `Edit only ${modulePath}. Any other edit is restored and fails the cleanup. Do not commit.`,
+    `After each change run \`npm run library -- check --member ${memberId}\` and undo anything that loses VERDICT: MATCH.`,
+    "Finish with a short reply. The refinement gate then re-verifies the member; a failure reverts the module to the verbatim fold.",
+  ].join("\n");
+}
+
 export function reviewMessage(functionName: string, findings: PolicyFinding[], sourcePath = `src/${functionName}.c`): string {
   return [
     `Policy review for ${functionName}. A lower escalation tier introduced source constructs the`,

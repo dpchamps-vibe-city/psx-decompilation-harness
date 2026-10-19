@@ -104,3 +104,11 @@ test("command arguments select a target, a limit, or a subcommand", () => {
   assert.equal(parseArgs("--max=0").action, "usage");
   assert.equal(parseArgs("--nonsense").action, "usage");
 });
+
+test("auto-fold is off unless a project turns it on", () => {
+  const off = projectWith({ ladder: [{ provider: "p", model: "m" }], singleTier: true }), on = projectWith({ ladder: [{ provider: "p", model: "m" }], singleTier: true, autoFold: true });
+  try {
+    assert.equal(loadLoopConfig(off.dir).autoFold, false);
+    assert.equal(loadLoopConfig(on.dir).autoFold, true);
+  } finally { off.cleanup(); on.cleanup(); }
+});

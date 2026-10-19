@@ -43,8 +43,9 @@ Three things end the work:
 - you hit something only a human can decide — a non-macro allowlist entry or
   another policy exception not covered by the evidence gate; or
 - a witnessed input/build blocker or original-word target classification prevents
-  clean-C reconstruction (for example, a BIOS assembly veneer whose implementation
-  is in ROM, not this object). An engine capability refusal alone is not proof.
+  clean-C reconstruction (for example, a BIOS call veneer: hand-written assembly
+  that stays its retained extraction and is never translated to C). An engine
+  capability refusal alone is not proof.
 
 Evidence-backed operation macros are a solution route, not a human-decision
 stop. Agents may create shared definitions in project include files when strong
@@ -372,6 +373,11 @@ poisons every later reading:
   arithmetic where the SDK has a macro is a reconstruction error, not a style
   choice. Restore the operation boundary before reading allocation or
   scheduling at all — see `psx_reference sdk`.
+- **GTE operations.** COP2 instructions in a C member came from INLINE_C
+  `gte_*` macro calls (the packet's detected-header-macro section names them;
+  the draft's `M2C_*C2`/`M2C_GTE_*` pseudo-calls mark each step). A DMPSX
+  toolchain rewrites the macros' placeholder words after assembly, so call the
+  SDK macros unchanged and never hand-encode a COP2 word.
 
 ## Finish
 

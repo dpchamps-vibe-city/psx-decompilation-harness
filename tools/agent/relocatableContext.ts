@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { configuredFlags, configuredTool } from "../lib/toolchain.js";
 import { libraryMembers, requireLibraryFunction, withLibraryMetadata } from "../lib/libraryTargets.js";
-import { isDirectoryTu, libraryAssemblyTu, libraryTuStatus } from "../lib/libraryTranslationUnit.js";
+import { isDirectoryTu, isLibraryGeneratedSymbol, libraryAssemblyTu, libraryTuStatus } from "../lib/libraryTranslationUnit.js";
 import { libraryFunctionTarget, resolveFunctionTarget } from "../lib/targetAdapter.js";
 import { measureLibraryFunction, libraryBuildIdentities } from "./libraryTarget.js";
 import { prepareM2c } from "../build/prepareM2c.js";
@@ -41,9 +41,9 @@ function exportRelocatableContextScoped(name: string, root: string, dryRun: bool
   const includesGeneratedContext = /#\s*\d+\s+"[^"]*build\/libraries\/context\//.test(preprocessed);
   if (!guard.parses || guard.includeAsm.length || includesGeneratedContext || findings.length || comparison.verdict !== "match")
     return skipped(`clean C and a fresh ${target.verification.scope} MATCH required (${comparison.verdict}; ${findings.map(f => f.message).join("; ")})`);
-  const completed = isDirectoryTu(member) ? new Set(libraryTuStatus(member, root)!.filter(p => p.symbol && !p.stub).map(p => p.symbol)) : new Set(member.functions.map(fn => fn.name));
+  const completed = isDirectoryTu(member) ? new Set(libraryTuStatus(member, root)!.filter(p => p.symbol && !p.stub && !isLibraryGeneratedSymbol(p.symbol)).map(p => p.symbol)) : new Set(member.functions.map(fn => fn.name));
   const pairs = extractSignaturesFromSource(preprocessed).filter(p => completed.has(p.name));
-  if ([...completed].filter(n => n !== "__library_member_data").some(name => !pairs.some(p => p.name === name))) return skipped("inventoried function definition missing");
+  if ([...completed].some(name => !pairs.some(p => p.name === name))) return skipped("inventoried function definition missing");
   const index = emptyDeclarationIndex();
   indexDeclarations(index, preprocessed, artifacts.preprocessed, member.id, "source-local");
   // Take types from the compiler's actual scope, not prototypes that conflict
@@ -65,7 +65,7 @@ function exportRelocatableContextScoped(name: string, root: string, dryRun: bool
       for (const [path, text] of contents) { mkdirSync(dirname(path), { recursive: true }); writeIfChanged(path, text); }
       const m2c = prepareM2c(root);
       // Validate the published context, not m2c's ability to decompile an
-      // already matched function (BIOS tail jumps are intentionally macros).
+      // already matched function (retained hand-written functions are not C).
       const output = runTool(configuredTool("python", root), [m2c.script, ...configuredFlags("m2c", target.flags, root), "--no-cache",
         "--dump-typemap", "--context", target.context.types, "--context", target.context.functions, target.assembly.translationUnit], root);
       if (output.includes("Syntax error when parsing C context")) throw new Error(output);

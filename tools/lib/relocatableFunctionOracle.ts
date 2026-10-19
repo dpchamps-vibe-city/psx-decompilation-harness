@@ -39,9 +39,11 @@ export function relocatableAddend(o: RelocatableObject, r: ObjectRelocation): nu
   }
   return signed(word);
 }
-export function relocatableFunctionWords(object: RelocatableObject, symbol: string, base?: number, extent?: number): RenderedWord[] {
-  const fn = objectFunctions(object).find(f => f.name === symbol);
-  if (!fn) throw new Error(`Object does not define ${symbol}`);
+/** `definedAs` is the name `object` defines the function under when it differs
+ * from the target's: words still render under the target's name. */
+export function relocatableFunctionWords(object: RelocatableObject, symbol: string, base?: number, extent?: number, definedAs = symbol): RenderedWord[] {
+  const fn = objectFunctions(object).find(f => f.name === definedAs);
+  if (!fn) throw new Error(`Object does not define ${definedAs}`);
   const size = extent ?? fn.size, section = object.sections.get(fn.section)!;
   if (size < 0 || fn.offset + size > section.size) throw new Error(`Invalid code extent for ${symbol}`);
   const bytes = section.data.subarray(fn.offset, fn.offset + size);
@@ -103,7 +105,7 @@ export function compareRelocatableFunction(name: string, objectPath: string, can
   // already-identical assembly into a function-local mismatch.
   const extent = fn.inferredSize && memberComparison.verdict === "match" ? fn.size : undefined;
   const { targetWords, candidateWords, rawTargetWords, rawCandidateWords, ...comparison } =
-    compareRelocatableFunctionObjects(member.object, object, fn.name, extent);
+    compareRelocatableFunctionObjects(member.object, object, fn.name, extent, fn.discovery !== undefined);
   const status = libraryTuStatus(member, projectRoot(), candidateSource && resolve(projectRoot(), candidateSource) !== resolve(projectRoot(), member.source) ? { symbol: fn.name, source: candidateSource } : undefined);
   const memberStub = !status && analyzeCSource(readFileSync(resolve(projectRoot(), candidateSource ?? member.source), "utf8")).includeAsm.length > 0;
   if (status?.some(s => s.symbol === fn.name && s.stub) || !status && memberStub) comparison.verdict = "stub";
@@ -114,14 +116,19 @@ export function compareRelocatableFunction(name: string, objectPath: string, can
       `Function-local diagnostics do not certify the owning TU; whole-member verdict: ${memberStub ? "STUB" : memberComparison.verdict.toUpperCase()}.`] };
 }
 /** The exact same proven relocation equivalence as whole-member acceptance.
- * Original-word readers above stay raw; only this comparison view is folded. */
-export function compareRelocatableFunctionObjects(original: RelocatableObject, candidate: RelocatableObject, symbol: string, extent?: number) {
+ * Original-word readers above stay raw; only this comparison view is folded.
+ * `unnamed`: the original never named this private helper (its name is a code
+ * coordinate), so a folded module may rename it; the candidate's function at
+ * the same coordinate is then that helper. */
+export function compareRelocatableFunctionObjects(original: RelocatableObject, candidate: RelocatableObject, symbol: string, extent?: number, unnamed = false) {
   const fn = objectFunctions(original).find(f => f.name === symbol);
   if (!fn) throw new Error(`Object does not define ${symbol}`);
+  const functions = objectFunctions(candidate), definedAs = unnamed && !functions.some(f => f.name === symbol)
+    ? functions.find(f => f.section === fn.section && f.offset === fn.offset)?.name ?? symbol : symbol;
   const rawTargetWords = relocatableFunctionWords(original, symbol);
-  const rawCandidateWords = relocatableFunctionWords(candidate, symbol, fn.offset, extent);
+  const rawCandidateWords = relocatableFunctionWords(candidate, symbol, fn.offset, extent, definedAs);
   const native = !!(original.native || candidate.native);
   const targetWords = relocatableFunctionWords(native ? original : canonicalizeDefinedReferences(original), symbol);
-  const candidateWords = relocatableFunctionWords(native ? candidate : canonicalizeDefinedReferences(candidate), symbol, fn.offset, extent);
+  const candidateWords = relocatableFunctionWords(native ? candidate : canonicalizeDefinedReferences(candidate), symbol, fn.offset, extent, definedAs);
   return { ...compareWords(targetWords, candidateWords), targetWords, candidateWords, rawTargetWords, rawCandidateWords };
 }

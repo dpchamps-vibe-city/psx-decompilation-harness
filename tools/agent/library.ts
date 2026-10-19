@@ -6,6 +6,10 @@ import { loadLibraryProject } from "../lib/project.js";
 import { prepareLibraryFunction, measureLibraryFunction, renderLibraryComparison, runLibraryTask } from "./libraryTarget.js";
 import { preflightLibraryFunction, checkLibrarySplits } from "./libraryPreflight.js";
 import { migrateMemberIds } from "./migrateMemberIds.js";
+import { retainHandwrittenAssembly } from "./retainHandwrittenAssembly.js";
+import { libraryCodeClassCensus, renderCodeClassCensus } from "./libraryCodeClasses.js";
+import { reformLibraryTus } from "./reformLibraryTu.js";
+import { FOLD_STATUS, foldLibraryTus } from "./foldLibraryTu.js";
 
 export async function main(args: string[]): Promise<void> {
   const [task, ...rest] = args;
@@ -17,10 +21,51 @@ export async function main(args: string[]): Promise<void> {
       "npm run library -- diff MEMBER::SYMBOL [--src FILE]\n" +
       "npm run library -- check [--member ID | --accepted]\n" +
       "npm run library -- migrate-member-ids [--write] [--json] (dry-run by default)\n" +
+      "npm run library -- retain-handwritten [--write] [--json] (verbatim extraction; no assembly reconstruction)\n" +
+      "npm run library -- code-classes [--json] (read-only hand-written fingerprint census and its validation gate)\n" +
+      "npm run library -- reform [--member ID ...] [--write] [--json] (assembly TU of a GCC-compiled member -> C parts; dry-run by default)\n" +
+      "npm run library -- fold [--member ID ... | --all-ready] [--write] [--json] (finished C TU -> one module; check by default)\n" +
       "check without scope verifies EVERY configured member; --accepted is only an environment guard.");
     return;
   }
   if (!loadLibraryProject()) throw new Error("Configure a relocatable-library target in project.json first; see docs/library-targets.md");
+  if (task === "retain-handwritten") {
+    if (rest.some(a => !["--write", "--json"].includes(a))) throw new Error("retain-handwritten accepts only --write and --json");
+    const report = retainHandwrittenAssembly(rest.includes("--write"));
+    console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : `${report.written ? "Retained" : "Dry run:"} ${report.members.length} handwritten-assembly members (${report.members.reduce((n, m) => n + m.functions.length, 0)} functions); extracted files are copied unchanged, not reconstructed.`);
+    return;
+  }
+  if (task === "fold") {
+    const ids = rest.flatMap((a, i) => a === "--member" ? [rest[i + 1] ?? ""] : []);
+    if (rest.some((a, i) => !["--write", "--json", "--member", "--all-ready"].includes(a) && rest[i - 1] !== "--member") || ids.some(id => !id || id.startsWith("--")))
+      throw new Error("fold accepts --member ID (repeatable), --all-ready, --write and --json");
+    const report = foldLibraryTus(rest.includes("--write"), ids);
+    console.log(rest.includes("--json") ? FOLD_STATUS + JSON.stringify(report) : [
+      `${report.written ? "Fold" : "Fold check"}: ${report.members.filter(m => m.verdict === "match").length}/${report.members.length} modules rebuild the original object${report.written ? `; ${report.members.filter(m => m.written).length} written` : ""}`,
+      ...report.members.map(m => `  ${m.written ? "FOLDED" : m.refused ? "REFUSED" : m.verdict === "match" ? "READY" : "MISMATCH"}\t${m.id}\t${m.module}${m.refused ? `\t${m.refused}` : ""}`),
+    ].join("\n"));
+    if (report.members.some(m => m.verdict && m.verdict !== "match")) process.exitCode = 1;
+    return;
+  }
+  if (task === "reform") {
+    const ids = rest.flatMap((a, i) => a === "--member" ? [rest[i + 1] ?? ""] : []);
+    if (rest.some((a, i) => !["--write", "--json", "--member"].includes(a) && rest[i - 1] !== "--member") || ids.some(id => !id || id.startsWith("--")))
+      throw new Error("reform accepts --member ID (repeatable), --write and --json");
+    const report = reformLibraryTus(rest.includes("--write"), ids);
+    console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : [
+      `${report.written ? "Reformed" : "Dry run:"} ${report.members.length} assembly TUs of GCC-compiled members into C parts`,
+      ...report.members.map(m => `  ${m.id}: removes ${m.removed.join(", ")}${report.written ? `; parts ${m.parts.join(", ")}; retained ${m.retained.join(", ") || "none"}` : ""}`),
+      ...(report.written && report.members.length ? ["Run `npm run graph` (or split) to refresh the call graph."] : []),
+    ].join("\n"));
+    return;
+  }
+  if (task === "code-classes") {
+    if (rest.some(a => a !== "--json")) throw new Error("code-classes accepts only --json");
+    const census = libraryCodeClassCensus();
+    console.log(rest.includes("--json") ? JSON.stringify(census, null, 2) : renderCodeClassCensus(census));
+    if (census.failures.length) process.exitCode = 1;
+    return;
+  }
   if (task === "migrate-member-ids") {
     if (rest.some(a => !["--write", "--json"].includes(a))) throw new Error("migrate-member-ids accepts only --write and --json");
     const report = migrateMemberIds(rest.includes("--write"));

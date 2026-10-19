@@ -89,6 +89,14 @@ async function commitFiles(projectRoot: string, files: string[], message: string
   return { committed: true, detail: head.code === 0 ? head.stdout.trim() : "committed" };
 }
 
+export async function commitFoldedMember(projectRoot: string, memberId: string, paths: string[]): Promise<CommitResult> {
+  return commitFiles(projectRoot, paths, `fold ${memberId}`);
+}
+
+export async function commitCleanedMember(projectRoot: string, memberId: string, paths: string[]): Promise<CommitResult> {
+  return commitFiles(projectRoot, paths, `clean ${memberId}`);
+}
+
 export async function commitMatchedFunction(
   projectRoot: string,
   functionName: string,

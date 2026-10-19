@@ -182,7 +182,7 @@ records carry `form: "assembly"`; progress and the call graph count these
 functions separately from clean C (`sourceForm`), and the C loop's picker never
 selects them. Comments can be annotated freely; in original-object mode, label
 birth order can affect symbol IDs and must still pass the hash check. See the
-process in [handwritten-assembly.md](handwritten-assembly.md#from-classification-to-source-the-general-process).
+process in [handwritten-assembly.md](handwritten-assembly.md#retaining-classified-handwritten-assembly).
 
 ID migration walks the configured autoloop runtime directory as well as project
 files; it refuses an active/stale `active.json` lock, symlinks, unmapped IDs and
@@ -194,7 +194,9 @@ under the new IDs before resuming. The loop creates its lock while running and r
 it on shutdown. Stop it before migration; do not remove a live loop's lock.
 
 Reference stubs are original-derived extraction artifacts, never reconstructed
-source or compiler-output repairs. All listings stay under `build/`. ECOFF
+source or compiler-output repairs. Listings normally stay under `build/`.
+An explicit `retain-handwritten --write` retains the assembler-ready extraction
+for already-classified native assembly TUs as described below. ECOFF
 extraction preserves symbolic patch operands; no `.reloc` tables, tail repairs
 or synthetic storage exports are emitted. SDK register/GTE operations are
 preprocessed with receipts binding source/header hashes, flags and cpp. Ordinary
@@ -214,9 +216,84 @@ only on extraction, never on reconstructed source or production compiler output.
 An assembly backlog tracks just the generated `.include`s and any disabled
 attempt, with `backlog: true`. C backlogs use one-line INCLUDE_ASM parts,
 including the symbol part. Neither form emits `.NON_MATCHING` symbols. Every
-generated part prevents TU completion; none is an autoloop target. `check-splits`
+generated part prevents TU completion. The generated parts become member-finishing
+autoloop targets, `MEMBER::__library_member_data` once every function part is C or
+retained (data-only members at once), then `MEMBER::__library_member_symbols` once
+the data is C too. Their preparation skips the function diagnostics: the data
+draft is m2c's global definitions over the member listing, headed by each original
+object's section, size and linkage; the symbol-order draft is a comment, so the
+member must reproduce its LNK symbol IDs from the C itself, and the packet carries
+the original-versus-rebuilt symbol order. The whole member's hash is the oracle. `check-splits`
 checks fresh extraction in an isolated diagnostic directory, not existing stubs.
 Unknown extraction cases fail closed; they do not authorize source rewriting.
+
+### Retained handwritten extraction
+
+`npm run library -- retain-handwritten [--write] [--json]` previews or retains
+already-classified assembly-backlog members. It copies the existing unpreprocessed
+assembly inputs **byte-for-byte** to `handwritten.ASM` and
+`handwritten-symbols.ASM` beside the TU manifest. A generated CPP include driver
+under `build/` puts declarations first, then production CPP produces `.s` under
+`build/`. The assembler and declared stages are unchanged. No instructions,
+labels or data are rewritten, and preprocessed `.s` files are not retained in
+source. Existing source files and disabled attempts are preserved; only a bare
+obsolete backlog wrapper is removed.
+
+The assembly part carries `handwritten: { kind: "original-extraction",
+format: "assembler-with-cpp", originalSha256,
+declarations: { path, sha256 }, assembly: { path, sha256 } }`.
+Its hashes bind both retained files to that native original. Inspection rejects
+edited files, escaped paths and redirected includes; ordinary splitting preserves
+the retained representation. The C loop still excludes every assembly TU and
+its graph marks retained functions with `retainedHandwrittenAssembly: true`.
+The extraction remains `backlog: true` to avoid claiming recovered author source
+or reconstructed C. That status is not a request for an agent to rewrite it.
+
+### Folded modules
+
+Once every part of a C TU is final (real C, or a retained hand-written function)
+and no generated part is extraction, the TU can fold into **one module per
+original object**: `npm run library -- fold [--member ID ... | --all-ready]
+[--write] [--json]`. The module joins the parts verbatim in manifest order, the
+exact inverse of the per-function split; generated parts reduced to comments drop
+out, and retained functions stay their canonical INCLUDE_ASM lines. It is named
+after the original object (`QSORT.OBJ` → `qsort.c`) and its manifest has one part:
+`{ "path": "qsort.c", "symbols": [...], "retainedFunctions": { ... } }`. The
+module must define exactly its non-retained functions and is the TU's only part.
+
+The default is a check: the module is staged under `build/libraries/fold/<id>/`
+and built through the production chain, and it must reproduce the original object
+hash. `--write` then replaces the parts, re-verifies the member and restores every
+file on any failure; `build/libraries/fold-migration.json` records each fold.
+Folded functions stay decompiled. Parking, preparation and private-entry
+extension refuse a folded module, `split` leaves it alone, and the source policy
+exempts only its retained INCLUDE_ASM lines. With the loop option `"autoFold":
+true`, the autoloop folds a member as soon as its last target matches and commits
+the fold under `fold <member>` when `commitOnMatch` is set (harness default off).
+
+A library project has no per-match documentation role. That role records which
+original translation unit a function belongs to (`notes/file-groupings.md`), and
+a library member's object already names its unit, so the loop skips the turn
+and records the match's documentation as `skipped`, whatever
+`updateFileGroupings` says. Linked-image projects keep the role unless that
+option is `false`.
+
+A fold is followed by a **cleanup role**, built like the documentation role
+for linked images: a cleared conversation, the documentation tools and the
+`psx-fold-cleanup` skill. It makes the module read like its authors' source
+(fold debris, decompiler names, template headers and types, comments) without
+changing a byte of the object. Every function the object names keeps its name.
+A private helper the object never named (`func_<offset>`, found by a call or
+address relocation) may be renamed: its target identity in `tu.json` stays the
+offset name, and the per-function diff finds it in the candidate at the same
+code offset. It may edit only the module; anything else it
+touches is restored and fails the cleanup. A cleanup is kept only when the
+module is still a valid fold and the refinement gate passes: source policy,
+every function's byte diff, and the member plus every previously verified
+member byte-exact. The manifest then records `cleanedSha256`, the module text
+that passed. A failed cleanup leaves the verbatim fold in place. A folded module
+without a current marker (including one folded by hand) is pending cleanup, and
+the loop takes it ahead of new targets and commits it as `clean <member>`.
 
 For C members, the production preprocessor receives a generated ordered include driver
 under `build/`: **one GCC translation unit**, with the same private globals,
@@ -297,9 +374,8 @@ separates this single-function assignment from the whole-member oracle: neighbor
 and shared storage are context, not additional decompilation assignments. Mutable
 initializers remain in the data fragment rather than being emitted in the draft.
 Existing real C and edited build drafts are preserved; raw m2c output/diagnostics
-survive failure. Automatic staging accepts generated C, including approved
-SDK-typed platform-macro bindings, but may replace only an unchanged, committed
-exclusive function stub. A fresh, exact prepared result is staged and finalized
+survive failure. Automatic staging accepts generated C but may replace only an
+unchanged, committed exclusive function stub. A fresh, exact prepared result is staged and finalized
 through the normal whole-TU route before any matching-model dispatch, including
 prep-led ladders. Refreshed prep results receive the same shortcut. Source policy,
 scope, whole-member verification and context publication still have to pass;
@@ -339,8 +415,9 @@ attempt, and none of these setup checks establishes C completion.
 The synthetic regression exercises the same production route with a size-zero
 export, relocation-only private helper, seven-word BIOS veneer, neighboring
 data and DOS-cased headers; negative controls cover header casing and differing
-neighbor data. Private BIOS veneers are classified from original words, not
-queued as ordinary C or granted new assembly-policy exceptions.
+neighbor data. Private BIOS veneers are fingerprinted from original words and
+recorded as retained hand-written functions, so they are never queued as C or
+granted assembly-policy exceptions.
 
 ## Oracle, gates and progress
 
@@ -414,8 +491,22 @@ object exemptions. Legacy monolithic member checking still requires complete C.
 Library call graphs use member/symbol coordinates, never invented VRAM. Calls
 are conservative unambiguous `R_MIPS_26` edges; unresolved relationships are not
 liveness evidence. C autoloop targets are exactly the stub functions of C TUs,
-minus parked entries; assembly TUs are always `handwritten: "asm"`. Classification
-can attach platform-macro evidence but does not exclude C stub targets.
+minus parked entries and retained functions; assembly TUs are always
+`handwritten: "asm"`.
+
+A function of a C member whose original words carry a hand-written fingerprint
+(`tools/agent/libraryCodeClass.ts`: BIOS dispatch, syscall/COP0/ABI-register
+helpers, an inline BIOS call, or an instruction GCC never emits outside an asm
+statement) was an `asm()` body in the original C file. Split records it in the
+part as `"retained": { "kind": "handwritten-assembly", "evidence": <class>,
+"originalSha256": <original hash> }`. The flag is add-only and explicit in git;
+every manifest read recomputes the evidence, and a retained part must stay its
+canonical `INCLUDE_ASM` extraction. The graph marks it `handwritten: "asm"` with
+`retainedClass`. COP2 (GTE) words are never a fingerprint: Sony wrote GTE code in
+C with INLINE_C macros. `npm run library -- code-classes [--json]` is the
+read-only census and validation gate: no fingerprint may fall on C source or on a
+GTE function. Progress reports `translationComplete` members, whose every part is
+C or retained hand-written assembly, beside strictly complete C members.
 
 Parking restores the pre-attempt text of changed neighboring parts and the
 selected function's canonical stub, preserving safe attempts under park headers

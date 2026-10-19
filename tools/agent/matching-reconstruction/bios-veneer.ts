@@ -42,5 +42,5 @@ export function recognizeBiosVeneer(insns: DecodedInsn[]): BiosVeneer | undefine
 export function describeBiosVeneer(veneer: BiosVeneer): string {
   return `BIOS dispatch veneer: tail-jump to 0x${veneer.vector.toString(16)} with $t1=0x${veneer.selector.toString(16)}, preserving incoming arguments and $ra. ` +
     "The production clean-C compiler has no supported operation for this fixed-register BIOS calling convention. " +
-    "This is an unsupported clean-C target, not a request to retain INCLUDE_ASM or grant an assembly exception; it remains unreconstructed.";
+    "It is hand-written assembly: it stays its retained original extraction and is never translated to C. This requests no assembly exception or reconstruction.";
 }

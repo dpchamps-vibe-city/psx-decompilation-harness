@@ -34,6 +34,8 @@ export interface CommandEncodingEvidence {
   from: number;
   to: number;
   assemblerStatement: string;
+  /** Set when a post-assembly stage, not an assembler substitution, encodes the SDK placeholder. */
+  finalizer?: "psyq-dmpsx";
   containerKind: "exe" | "overlay" | "library";
   probeObject: string;
   probeObjectSha256: string;

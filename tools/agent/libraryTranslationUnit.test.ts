@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { LibraryMember } from "../lib/libraryTargets.js";
 import { planLibraryTu, writeLibraryTu, extendLibraryBacklog } from "./librarySources.js";
-import { inspectLibraryPart, libraryAssemblyTu, libraryCompileInput, librarySourceFiles, libraryTuStatus, readLibraryTu } from "../lib/libraryTranslationUnit.js";
+import { inspectLibraryPart, libraryAssemblyTu, libraryCompileInput, libraryFunctionSource, librarySourceFiles, libraryTuStatus, readLibraryTu } from "../lib/libraryTranslationUnit.js";
 import { libraryAssemblyParts } from "../lib/libraryAssembly.js";
 import { compareRelocatableObjects, readRelocatableObject, objectFunctions } from "../lib/relocatableObject.js";
 import { HARNESS_ROOT } from "../lib/runtimeContext.js";
@@ -205,15 +205,6 @@ test("private split refuses real C, missing original functions and unlisted edit
   }
 });
 
-test("canonical BIOS definition stays one function fragment, not generated instructions", () => {
-  const f = fixture();
-  try {
-    const source = '#include "library/psx_bios_tailjump.h"\nPSX_BIOS_FUNCTION(int, first, (int arg), 0xa0, 0x39);\n' + f.stub("second");
-    const plan = planLibraryTu(f.member, source);
-    assert.equal(plan.files.get("first.c")!.trim(), "PSX_BIOS_FUNCTION(int, first, (int arg), 0xa0, 0x39);");
-  } finally { rmSync(f.root, { recursive: true, force: true }); }
-});
-
 test("assembly translation unit: one .s part lists every original function, is inspected for backlog markers and has no C candidates", () => {
   const f = fixture();
   try {
@@ -250,4 +241,90 @@ test("assembly translation unit: one .s part lists every original function, is i
     assert.throws(() => inspectLibraryPart(source + "nonmatching third, 8\n", part), /backlog markers/);
     assert.equal(inspectLibraryPart(source.replace("first:\n", "glabel first\n"), part).stub, false, "macro.inc label spellings define the symbol too");
   } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("a retained hand-written function stays its stub, and its flag must agree with the original words", () => {
+  const root = mkdtempSync(join(tmpdir(), "psx-retained-tu-"));
+  try {
+    const data = Buffer.alloc(24);
+    [0x0000000c /* syscall */, 0x03e00008, 0, 0x24020001, 0x03e00008, 0].forEach((word, i) => data.writeUInt32LE(word, i * 4));
+    const member = { id: "lib_0123456789abcdef_1", source: "src/lib/kernel/tu.json", sha256: "a".repeat(64),
+      functions: [{ name: "first", section: ".text", offset: 0, size: 12 }, { name: "second", section: ".text", offset: 12, size: 12 }],
+      object: { flags: 0, symbols: [], relocations: [], sections: new Map([[".text", { data, flags: 6, size: 24 }]]) } } as unknown as LibraryMember;
+    const directory = join(root, dirname(member.source)); mkdirSync(directory, { recursive: true });
+    const stub = (name: string) => `INCLUDE_ASM("build/libraries/nonmatchings/${member.id}", ${name});\n`;
+    writeFileSync(join(directory, "first.c"), stub("first")); writeFileSync(join(directory, "second.c"), stub("second"));
+    const flag = { kind: "handwritten-assembly", evidence: "gcc-impossible", originalSha256: "a".repeat(64) };
+    const write = (parts: unknown[]) => writeFileSync(join(root, member.source), JSON.stringify({ schemaVersion: 1, member: member.id, parts }));
+    write([{ path: "first.c", symbol: "first", retained: flag }, { path: "second.c", symbol: "second" }]);
+    const row = libraryTuStatus(member, root)!.find(p => p.symbol === "first")!;
+    assert.equal(row.stub, true); assert.equal(row.retained, "gcc-impossible");
+    for (const [parts, message] of [
+      [[{ path: "first.c", symbol: "first", retained: { ...flag, evidence: "bios-dispatch" } }, { path: "second.c", symbol: "second" }], /disagrees with the original words/],
+      [[{ path: "first.c", symbol: "first" }, { path: "second.c", symbol: "second", retained: flag }], /no hand-written fingerprint/],
+      [[{ path: "first.c", symbol: "first", retained: { ...flag, originalSha256: "b".repeat(64) } }, { path: "second.c", symbol: "second" }], /invalid retained/],
+      [[{ path: "first.c", symbol: "first", retained: { ...flag, note: "x" } }, { path: "second.c", symbol: "second" }], /invalid retained/],
+    ] as Array<[unknown[], RegExp]>) {
+      write(parts);
+      assert.throws(() => libraryTuStatus(member, root), message);
+    }
+    write([{ path: "first.c", symbol: "first", retained: flag }, { path: "second.c", symbol: "second" }]);
+    writeFileSync(join(directory, "first.c"), "void first(void) {}\n");
+    assert.throws(() => libraryTuStatus(member, root), /must stay its original INCLUDE_ASM extraction/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a folded module is the TU's only part, defines exactly its non-retained functions and splits back verbatim", () => {
+  const root = mkdtempSync(join(tmpdir(), "psx-module-tu-"));
+  try {
+    const data = Buffer.alloc(24);
+    [0x0000000c /* syscall */, 0x03e00008, 0, 0x24020001, 0x03e00008, 0].forEach((word, i) => data.writeUInt32LE(word, i * 4));
+    const member = { id: "lib_0123456789abcdef_2", source: "src/lib/kernel/tu.json", sha256: "a".repeat(64), member: "KERNEL.OBJ",
+      functions: [{ name: "first", section: ".text", offset: 0, size: 12 }, { name: "second", section: ".text", offset: 12, size: 12 }],
+      object: { flags: 0, symbols: [], relocations: [], sections: new Map([[".text", { data, flags: 6, size: 24 }]]) } } as unknown as LibraryMember;
+    const directory = join(root, dirname(member.source)); mkdirSync(directory, { recursive: true });
+    const retained = { kind: "handwritten-assembly", evidence: "gcc-impossible", originalSha256: "a".repeat(64) };
+    const shared = '#include "include_asm.h"\n', first = `INCLUDE_ASM("build/libraries/nonmatchings/${member.id}", first);\n`, second = "int second(void) { return 1; }\n";
+    const write = (text: string, parts: unknown[]) => { writeFileSync(join(directory, "kernel.c"), text); writeFileSync(join(root, member.source), JSON.stringify({ schemaVersion: 1, member: member.id, parts })); };
+    const module = { path: "kernel.c", symbols: ["first", "second"], retainedFunctions: { first: retained } };
+    write(shared + first + second, [module]);
+    const rows = libraryTuStatus(member, root)!;
+    assert.deepEqual(rows.map(r => [r.symbol, r.stub, r.retained]), [["first", true, "gcc-impossible"], ["second", false, undefined]]);
+    assert.equal(libraryFunctionSource(member, "second", root), "src/lib/kernel/kernel.c", "a function resolves to the module that defines it");
+    for (const [text, parts, message] of [
+      [shared + first + second, [module, { path: "_shared-0.h" }], /only part/],
+      [shared + first + second + "int third(void) { return 3; }\n", [module], /define exactly its non-retained functions/],
+      [shared + first, [module], /define exactly its non-retained functions/],
+      [shared + first + second.replace("return 1;", "return 1;") + `INCLUDE_ASM("build/libraries/nonmatchings/${member.id}", second);\n`, [module], /define exactly|only retained/],
+      [shared + "int first(void) { return 0; }\n" + second, [module], /define exactly its non-retained functions|only retained/],
+    ] as Array<[string, unknown[], RegExp]>) {
+      write(text, parts);
+      assert.throws(() => libraryTuStatus(member, root), message);
+    }
+    const plan = planLibraryTu(member, shared + first + second);
+    assert.equal(plan.files.get("_shared-0.h"), shared);
+    assert.equal(plan.files.get("first.c"), first);
+    assert.equal(plan.files.get("second.c"), second, "splitting a module reproduces its parts verbatim");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a folded module may rename a private helper the object never named, never a named function", () => {
+  const root = mkdtempSync(join(tmpdir(), "psx-module-rename-"));
+  try {
+    const member = { id: "lib_0123456789abcdef_3", source: "src/lib/heap/tu.json", sha256: "b".repeat(64), member: "HEAP.OBJ",
+      functions: [{ name: "entry", section: ".text", offset: 0, size: 12 },
+        { name: "func_0000000C", section: ".text", offset: 12, size: 12, inferredSize: true, discovery: { kind: "call-relocation", sites: [] } }],
+      object: { flags: 0, symbols: [], relocations: [], sections: new Map() } } as unknown as LibraryMember;
+    const directory = join(root, dirname(member.source)); mkdirSync(directory, { recursive: true });
+    writeFileSync(join(root, member.source), JSON.stringify({ schemaVersion: 1, member: member.id, parts: [{ path: "heap.c", symbols: ["entry", "func_0000000C"] }] }));
+    const module = (entry: string, helper: string) => `static int ${helper}(void);\nint ${entry}(void) { return ${helper}(); }\nint ${helper}(void) { return 1; }\n`;
+    for (const helper of ["func_0000000C", "grow_heap"]) {
+      writeFileSync(join(directory, "heap.c"), module("entry", helper));
+      assert.deepEqual(libraryTuStatus(member, root)!.map(r => r.symbol), ["entry", "func_0000000C"], `${helper}: target identities stay the object's coordinates`);
+    }
+    writeFileSync(join(directory, "heap.c"), module("start", "grow_heap"));
+    assert.throws(() => libraryTuStatus(member, root), /keeping the object's names \(entry\); only private helpers may be renamed/);
+    writeFileSync(join(directory, "heap.c"), module("entry", "grow_heap") + "static int spare(void) { return 2; }\n");
+    assert.throws(() => libraryTuStatus(member, root), /define exactly its non-retained functions/, "a rename never adds a function");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

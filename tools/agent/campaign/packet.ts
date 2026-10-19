@@ -1,12 +1,11 @@
 import type { CommandRecord } from "../../lib/recordedCommand.js";
-import { BIOS_FUNCTION_MACRO } from "../../lib/biosFunctionMacro.js";
 import type { DeclarationIndex, Declaration } from "../declarationContext.js";
 import type { detectFunctionMacroIdentity } from "../../diagnostics/macroIdentity.js";
 import { compilerAnalysisSummary, type CompilerAnalysisSupport } from "../../lib/compilerAnalysis.js";
 
 /** Common handoff core. A draft's existence is independent of its compilability. */
 export interface PacketSource {
-  origin: "existing-attempt" | "m2c" | "reconstruction" | "platform-macro";
+  origin: "existing-attempt" | "m2c" | "reconstruction" | "generated-part";
   path: string;
   sha256: string;
   text: string;
@@ -27,7 +26,7 @@ export interface UnknownFact {
 export interface PreparationPacket {
   schemaVersion: 1;
   preparationState?: "running" | "complete";
-  preparationScope?: "function" | "translation-unit";
+  preparationScope?: "function" | "translation-unit" | "member-finishing";
   performance?: { phases: import("../../lib/contentCache.js").PhaseTiming[]; totalMs: number; cache: "hit" | "miss"; reason: string };
   diagnosticsIdentity?: string;
   identity: {
@@ -48,7 +47,7 @@ export interface PreparationPacket {
   discovery: { unknowns: UnknownFact[]; report: unknown; priorExperiments: string[]; preflight: CommandRecord[];
     compilerAnalysis?: CompilerAnalysisSupport;
     macroIdentity?: ReturnType<typeof detectFunctionMacroIdentity>;
-    platformMacros?: import("../biosSyscall.js").BiosSyscallEvidence[];
+    finishing?: { kind: "data" | "symbols"; report: string };
     readBeforeDefinition?: { findings: Array<{ guidance?: string; register: string; vram: string }>; staticChain: import("../../diagnostics/nestedFunctionScan.js").ChainRow | null; censusComplete: boolean | null };
     staticChain?: import("../staticChainInjection.js").ChainInjection;
     propagation?: { graph: string; report: string; input: string; graphComplete: boolean; convergence: string; visited: number; facts: number; steps: number } };
@@ -58,15 +57,18 @@ export interface PreparationPacket {
 const MACRO_CALL_POLICY = "Policy exception for this function: you may call the detected header macros (including reported compatible alternatives), even when they expand to assembly. This permits macro calls only, not handwritten assembly, register pinning, new stubs or allowlist changes. Candidate calls remain oracle-unverified; resolve operands and header vintage, then verify the complete function.";
 
 function macroOpening(packet: PreparationPacket): string {
-  if (packet.discovery.platformMacros?.length) return packet.discovery.platformMacros.map(m =>
-    `Supported platform macro: ${m.macro === BIOS_FUNCTION_MACRO ? `${m.macro} binding (vector 0x${m.vector!.toString(16)}, selector ${m.selector})` : `${m.macro}(${m.selector})`} from ${m.header}. Signature witnessed in ${m.signatureHeader}: ${m.signature}\n` +
-    `Project sourcePolicy.${m.policy ?? "allowBiosSyscallMacro"} explicitly permits this canonical operation. Macro calls only; no raw function assembly, register pinning, redefinitions or INCLUDE_ASM. Whole-member verification remains mandatory.`
-  ).join("\n");
   const report = packet.discovery.macroIdentity?.function;
   if (!report) return "Header asm-macro detection unavailable; no macro policy exception.";
   if (!report.tiling.length) return `Header asm-macro detection: no template matches (${report.cop2.count} COP2 instructions); no macro policy exception.`;
   const names = [...new Set(report.tiling.flatMap(t => [t.macro, ...t.alternatives.map(a => a.macro)]))];
   return `Detected header asm macros: ${names.slice(0, 8).join(", ")}${names.length > 8 ? `; ${names.length - 8} more in evidence.md` : ""}.\n${MACRO_CALL_POLICY}\nSee evidence.md for matched sites, headers, operands, alternatives and production encodings; unmatched regions are not exempt.`;
+}
+
+function finishingOpening(packet: PreparationPacket): string {
+  const order = packet.discovery.finishing ? ` Original vs rebuilt symbol order: ${packet.discovery.finishing.report}.` : "";
+  return packet.identity.symbol === "__library_member_data"
+    ? "Assignment: write this member's data, now the generated `_data.c` extraction, as C definitions. Every function is already C or retained. Place each definition where the original source had it, before the functions that use it (in a `_shared-N.h` part when needed); global or static, const, initialized, zero or COMMON, types and alignment all decide the bytes. Read-only strings a function uses are usually string literals in that function, not separate definitions. The whole member's hash is the oracle." + order
+    : "Assignment: replace the generated `_symbols.c` declaration part with nothing: its draft is a comment. Symbol IDs must then come from the C itself, in the order definitions, statics and first external references appear. Reorder declarations and definitions across the member's parts until the IDs agree; do not add symbols the original lacks." + order;
 }
 
 function chainOpening(packet: PreparationPacket): string {
@@ -89,13 +91,14 @@ export function packetOpening(packet: PreparationPacket, packetPath: string): st
     ...(packet.preparationScope === "function" ? [
       `Assignment: decompile only ${packet.identity.symbol ?? packet.identity.functionName}. The draft must define only this function. Neighboring functions and shared storage are context, not additional assignments.`,
       "The harness substitutes this fragment into the ordered production TU automatically. Whole-TU verification does not broaden your assignment: preserve neighboring function/data fragments; do not rewrite them to compensate for this function's mismatch. Evidence-backed shared declarations may be updated when needed.",
-    ] : packet.preparationScope === "translation-unit" ? ["Legacy source layout: the measured draft represents the entire owning TU; preserve all neighboring functions and globals."] : []),
+    ] : packet.preparationScope === "translation-unit" ? ["Legacy source layout: the measured draft represents the entire owning TU; preserve all neighboring functions and globals."]
+      : packet.preparationScope === "member-finishing" ? [finishingOpening(packet)] : []),
     `Generation: ${packet.generation.status}; compilation: ${packet.compilation.status}; comparison: ${packet.comparison.status}; finalization: ${packet.finalization.status}.`,
     links,
     ...(packet.discovery.compilerAnalysis ? [compilerAnalysisSummary(packet.discovery.compilerAnalysis)] : []),
     `Prior experiments: ${packet.discovery.priorExperiments.join("; ") || "none recorded"}. Read recorded bounds before repeating an experiment.`,
     ...(packet.verification ? [`Verification scope: ${packet.verification.scope}; oracle: ${packet.verification.mode}.`] : []),
-    ...(packet.discovery.macroIdentity || packet.discovery.platformMacros?.length ? [macroOpening(packet)] : []),
+    ...(packet.discovery.macroIdentity ? [macroOpening(packet)] : []),
     ...(packet.discovery.readBeforeDefinition ? [chainOpening(packet)] : []),
     ...(packet.discovery.propagation ? [`Type propagation: ${packet.discovery.propagation.convergence}, ${packet.discovery.propagation.visited} original functions; graph ${packet.discovery.propagation.graphComplete ? "closed" : "coverage incomplete"}. Constraints/provenance: ${packet.discovery.propagation.report}; actual m2c input: ${packet.discovery.propagation.input}.`] : []),
     ...(packet.comparison.report ? [`Comparison report: ${packet.comparison.report}. Compilation, exactness and finalization are separate claims.`] : []),
@@ -131,7 +134,9 @@ export function packetEvidence(packet: PreparationPacket): string {
       `### 0x${t.start.toString(16)}–0x${t.end.toString(16)}: ${t.macro}\nHeader: ${t.header}:${t.line} (${t.vintage}; sha256 ${t.headerSha256})\nOracle-unverified call: \`${t.candidateC}\``,
       ...t.operands.map(o => `- Operand ${o.parameter}: ${o.machine} → ${o.expression ?? "unresolved"} (${o.resolution})`),
       ...t.alternatives.map(a => `- Also compatible: \`${a.candidateC}\` from ${a.header}:${a.line} (${a.vintage}; sha256 ${a.headerSha256})`),
-      ...t.encodingEvidence.map(e => `- Required production encoding: ${e.assemblerStatement} from ${e.header}:${e.line}; probe ${e.probeObject}. Do not use the raw SDK .word placeholder.`),
+      ...t.encodingEvidence.map(e => e.finalizer === "psyq-dmpsx"
+        ? `- Production encoding: ${e.assemblerStatement} finalizes the placeholder of ${e.header}:${e.line} after assembly. Call the SDK macro unchanged.`
+        : `- Required production encoding: ${e.assemblerStatement} from ${e.header}:${e.line}; probe ${e.probeObject}. Do not use the raw SDK .word placeholder.`),
     ]) ?? []),
     ...(packet.discovery.macroIdentity?.encodingToolchains.map(e => `Production encoding probe (${e.containerKind}): ${e.probeObject}\nVintage substitution headers: ${e.reconstructionHeaders.map(h => `${h.vintage}: ${h.path}`).join("; ") || "none"}`) ?? []),
     ...packet.integration.blockers.map((b) => `- Blocker: ${b}`),

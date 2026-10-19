@@ -63,12 +63,16 @@ export interface LoopConfig {
   clearContextBetween: boolean;
   /** Capture matching-tier exit interviews; prep always has its own handoff. */
   handoffSummary: boolean;
-  /** Give agent-authored matches a notes-only turn; static matches skip model documentation. */
+  /** Give agent-authored matches a notes-only turn; static matches and library
+   * projects (whose objects name each unit) skip model documentation. */
   updateFileGroupings: boolean;
   /** Commit each byte-exact, finalized function before moving to the next one. */
   commitOnMatch: boolean;
   /** Commit each parked function before moving to the next one. */
   commitOnPark: boolean;
+  /** Fold a library member into one module once its last target matches; the
+   * fold re-verifies the member and commits with commitOnMatch. */
+  autoFold: boolean;
   /** Where durable loop state is written (absolute). */
   runtimeDir: string;
   /** Directory for documents that need a human decision (project-relative). */

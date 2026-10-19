@@ -256,7 +256,9 @@ export function formatMacroIdentityReport(report: MacroIdentityReport, all = fal
     if (f.tiling.length) lines.push("  Candidate C — ORACLE-UNVERIFIED macro islands; not a complete function:", ...f.candidateC.statements.map(s => `    ${s}`));
     for (const tile of f.tiling) {
       lines.push(`  ${hex(tile.start)}–${hex(tile.end)} ${tile.macro} [${tile.header}:${tile.line}; ${tile.vintage}] nops absorbed=${tile.nopsAbsorbed}, compiler gaps=${tile.gaps.length}`, `    CANDIDATE: ${tile.candidateC}`);
-      for (const e of tile.encodingEvidence) lines.push(`    PRODUCTION ENCODING: ${hex(e.from)} → ${hex(e.to)} via '${e.assemblerStatement}' from ${e.header}:${e.line}; ${e.containerKind} probe ${e.probeObject}+${e.probeOffset}. Candidate requires this GAS substitution, not the raw SDK .word.`);
+      for (const e of tile.encodingEvidence) lines.push(e.finalizer === "psyq-dmpsx"
+        ? `    PRODUCTION ENCODING: ${hex(e.from)} → ${hex(e.to)} by ${e.assemblerStatement} after assembly (placeholder from ${e.header}:${e.line}). Call the SDK macro unchanged.`
+        : `    PRODUCTION ENCODING: ${hex(e.from)} → ${hex(e.to)} via '${e.assemblerStatement}' from ${e.header}:${e.line}; ${e.containerKind} probe ${e.probeObject}+${e.probeOffset}. Candidate requires this GAS substitution, not the raw SDK .word.`);
       for (const b of tile.operands) lines.push(`    ${b.parameter}=${b.machine} → ${b.expression ?? "unresolved"} (${b.resolution})`);
       for (const alt of tile.alternatives) lines.push(`    ALSO COMPATIBLE: ${alt.macro} [${alt.header}:${alt.line}; ${alt.vintage}] ${alt.candidateC}`);
     }

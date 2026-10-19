@@ -371,3 +371,20 @@ test("CLI is import-safe, --help needs no binary scan, and unknown arguments fai
   const report = detectMacroIdentities({ functions: [fn(bytes(0x03e00008, 0), "clean")], library: sdk, resolveCommands: false });
   assert.ok(!formatMacroIdentityReport(report).includes("fixture:clean")); assert.ok(formatMacroIdentityReport(report, true).includes("fixture:clean"));
 });
+
+test("under a DMPSX toolchain the stage's table encodes INLINE_C placeholders and the SDK macro is used unchanged", t => {
+  const f = projectFixture(t);
+  f.toolchain.assembler = { kind: "gas", objectFormat: "ecoff", postAssembly: ["psyq-dmpsx", "psyq-lnk"] };
+  f.toolchain.flags.as = ["-EL", "-G0", "-mips1"];
+  f.put("toolchain.json", JSON.stringify(f.toolchain));
+  // Harness-authored INLINE_C-shaped placeholders (the documented DMPSX protocol), no SDK text.
+  const library = extractMacroTemplates([{ path: "inline_fixture.h", source:
+    '#define gte_rtps() __asm__ volatile ("nop; nop; .word 0x0000007f")\n#define gte_unknown() __asm__ volatile ("nop; nop; .word 0x0003ffff")\n' }]);
+  const encoded = fixtureContext(f.root, () => deriveRepoMacroEncodings(library, "exe"));
+  const rtps = encoded.library.templates.find(tpl => tpl.macro === "gte_rtps")!;
+  assert.ok(rtps.blocks.some(b => b.instructions.some(i => i.op === "cop2" && i.args[0]?.value === 0x4a180001)), "RTPS command word from the DMPSX table");
+  assert.equal(rtps.encodingEvidence[0]!.finalizer, "psyq-dmpsx");
+  assert.ok(encoded.library.diagnostics.some(d => d.macro === "gte_unknown" && /DMPSX has no command/.test(d.reason)));
+  assert.deepEqual(encoded.report.reconstructionHeaders, [], "no GAS substitution header: the SDK macro stays as written");
+  assert.ok(!existsSync(join(f.root, "build/macroIdentity/repo-encodings")), "no assembler probe under the period chain");
+});

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { prepareAttempt, attemptStaticFinalization, buildInputs, sameInputs, inputIdentity, documentCompletion, type Completion } from "./prepared-attempt.ts";
+import { prepareAttempt, attemptStaticFinalization, buildInputs, sameInputs, inputIdentity, documentCompletion, recordsFileGroupings, type Completion } from "./prepared-attempt.ts";
 import { finalize } from "../autoloop/oracles.ts";
 import { groupingsMessage } from "../autoloop/prompts.ts";
 import { getSessionBaseline } from "./session-baseline.ts";
@@ -123,6 +123,11 @@ export function interactiveDocumentation(pi: ExtensionAPI, root: string): {
     if (completion.documentation === "skipped" || completion.origin === "static") {
       saveInteractiveCompletion(root, name, { ...completion, documentation: "skipped", error: undefined });
       ctx.ui.notify(`${name} matched and finalized automatically; no model turn needed.`, "info");
+      return;
+    }
+    if (!recordsFileGroupings(root)) {
+      saveInteractiveCompletion(root, name, { ...completion, documentation: "skipped", error: undefined });
+      ctx.ui.notify(`${name} finalized; a library member's object already names its unit, so there are no grouping notes.`, "info");
       return;
     }
     if (!ctx.model) { ctx.ui.notify(`${name} finalized; documentation pending (no model available).`, "warning"); return; }

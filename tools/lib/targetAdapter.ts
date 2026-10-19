@@ -51,7 +51,7 @@ export function libraryFunctionTarget(member: LibraryMember, fn: LibraryMember["
     translationUnit: { source: member.source, functions: member.functions.map(f => libraryTargetKey(member, f.name)) },
     verification: { scope: "translation-unit", mode: project.verification.mode },
     context: { types: `build/libraries/context/${member.id}/types.h`, functions: `build/libraries/context/${member.id}/functions.h`, compilerHeaders: project.headers.context },
-    capabilities: { linkedImageAnalysis: false, functionInstructionView: true, automaticSingleStubStaging: isDirectoryTu(member) || member.functions.length === 1 } };
+    capabilities: { linkedImageAnalysis: false, functionInstructionView: !fn.generated, automaticSingleStubStaging: isDirectoryTu(member) || member.functions.length === 1 } };
 }
 
 function imageFunctionTarget(name: string, root: string): FunctionTarget {

@@ -326,7 +326,7 @@ export function corpusCandidates(): CorpusCandidate[] {
   const owners = new Map(members.flatMap(member => member.functions.map(fn => [libraryTargetKey(member, fn.name), member] as const)));
   const verified = library ? verifiedLibraryMembers(members) : new Map<string, boolean>();
   for (const entry of graph.functions) {
-    if (entry.dead || entry.handwritten === "asm") continue;
+    if (entry.dead || entry.handwritten === "asm" || "finishing" in entry) continue;
     if (library) {
       const member = owners.get(entry.name);
       if (!member) throw new Error(`Unknown library function: ${entry.name}; regenerate the call graph`);

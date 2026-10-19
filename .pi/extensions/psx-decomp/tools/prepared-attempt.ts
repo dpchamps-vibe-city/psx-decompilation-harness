@@ -111,6 +111,13 @@ export async function attemptStaticFinalization(options: {
   return { handoff: handoff() };
 }
 
+/** The notes turn records which original translation unit a match belongs to
+ * (`notes/file-groupings.md`). A library member's object already names its
+ * unit, so a library project never has that evidence to record. */
+export function recordsFileGroupings(root: string): boolean {
+  return !loadLibraryProject(root);
+}
+
 /** Documentation failure is independent of matching success and resumable.
  * Nothing here commits or resets files, including unauthorized documentation edits.
  * `document` resolves true on success, or with the reason it did not succeed. */

@@ -47,6 +47,20 @@ test("known signatures retain actual types; patched unknown signatures retain AB
   const contextualPatched = patched("later-slot.s", ["-f", "later_slot", "--context", fixtures + "context.c"]);
   assert.equal(prototypesIn(contextualPatched, "raw.c").find((p) => p.kind === "definition")!.parameters, 3);
 });
+test("GTE (COP2) transfers keep CPU data flow and program order; the vendor guesses GTE operands are CPU destinations", () => {
+  const upstream = m2c("gte-cop2.s", ["-f", "gte_flow"]);
+  assert.match(upstream, /unknown instruction: ctc2/);
+  assert.doesNotMatch(upstream, /arg0->unk0/, "upstream drops the loads that feed the GTE");
+  const output = patched("gte-cop2.s", ["-f", "gte_flow"]);
+  assert.doesNotMatch(output, /M2C_ERROR/);
+  assert.match(output, /M2C_CTC2\(arg0->unk0, 0xD\);/);
+  assert.match(output, /M2C_LWC2\(0, /);
+  assert.match(output, /M2C_SWC2\(0xE, arg1 \+ 0x10\);/);
+  const read = output.indexOf("M2C_CFC2(0x1B)"), command = output.indexOf("M2C_GTE_MVMVA(1, 0, 3, 3, 0);");
+  assert.ok(read >= 0 && command > read, "a GTE read is evaluated before the next GTE command");
+  assert.ok(output.indexOf("M2C_GTE_RTPT();") > command);
+});
+
 test("vendored mechanism unit regressions run from the reproducible overlay", () => {
   const overlay = prepareM2c(ROOT);
   execFileSync("python3", ["-m", "unittest", "discover", "-s", "tests/unit"], { cwd: join(overlay.script, ".."), encoding: "utf8" });

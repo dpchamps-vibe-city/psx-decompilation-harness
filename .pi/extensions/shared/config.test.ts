@@ -18,3 +18,12 @@ test("rejects unknown configuration fields", () => {
   writeFileSync(join(root, ".pi", "autoloop.json"), JSON.stringify({ unexpected: true }));
   assert.throws(() => loadConfig(root), /unknown field/);
 });
+
+test("retired BIOS macro approvals are unknown fields, not silently ignored", () => {
+  for (const key of ["allowBiosSyscallMacro", "allowBiosTailJumpMacro"]) {
+    const root = mkdtempSync(join(tmpdir(), "autodecomp-config-"));
+    mkdirSync(join(root, ".pi"));
+    writeFileSync(join(root, ".pi", "autoloop.json"), JSON.stringify({ sourcePolicy: { [key]: false } }));
+    assert.throws(() => loadConfig(root), /sourcePolicy contains unknown field/);
+  }
+});

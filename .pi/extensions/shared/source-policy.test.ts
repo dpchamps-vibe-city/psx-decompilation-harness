@@ -24,40 +24,9 @@ test("allows comments and the narrow empty memory scheduling barrier", () => {
   assert.equal(result.pass, true);
 });
 
-test("loaded BIOS tail transfers require a canonical enable or verified evidence and one destination", () => {
-  const config = structuredClone(DEFAULT_CONFIG);
-  const source = (argumentsText: string) => `void target(void) { PSX_BIOS_TAILJUMP_LOAD(${argumentsText}); }\n`;
-  config.sourcePolicy.allowBiosTailJumpMacro = false;
-  assert(sourceConstructFindings(source("entry_slot"), config).some(finding => finding.kind === "platform-macro"));
-
-  assert.deepEqual(sourceConstructFindings(source("entry_slot"), config, { evidenceMacros: new Map([["PSX_BIOS_TAILJUMP_LOAD", 1]]) }), []);
-  config.sourcePolicy.allowBiosTailJumpMacro = true;
-  for (const argument of ["entry_slot", "entries[0]", "(void *)(address + 4)"])
-    assert.deepEqual(sourceConstructFindings(source(argument), config), [], argument);
-  for (const argumentsText of ["", "entry_slot, other_slot"])
-    assert(sourceConstructFindings(source(argumentsText), config).some(finding => finding.kind === "platform-macro"), argumentsText);
-});
-
-test("loaded BIOS tail transfers remain approval-checked through a forwarding macro", () => {
-  const config = structuredClone(DEFAULT_CONFIG);
-  const source = "#define FORWARD_TRANSFER(destination) PSX_BIOS_TAILJUMP_LOAD(destination)\nvoid target(void) { FORWARD_TRANSFER(entry_slot); }\n";
-  config.sourcePolicy.allowBiosTailJumpMacro = false;
-  assert(sourceConstructFindings(source, config).some(finding => finding.kind === "platform-macro"));
-  config.sourcePolicy.allowBiosTailJumpMacro = true;
-  assert.deepEqual(sourceConstructFindings(source, config), []);
-});
-
-test("loaded BIOS tail-transfer operations cannot be redefined or undefined", () => {
-  const config = structuredClone(DEFAULT_CONFIG);
-  config.sourcePolicy.allowBiosTailJumpMacro = true;
-  for (const directive of [
-    "#define PSX_BIOS_TAILJUMP_LOAD(destination) ((void)0)",
-    '#define PSX_BIOS_TAILJUMP_LOAD(destination) do { register void *p __asm__("$9") = (destination); goto *p; } while (0)',
-    "#undef PSX_BIOS_TAILJUMP_LOAD",
-  ]) {
-    const findings = sourceConstructFindings(`${directive}\nvoid target(void) {}\n`, config);
-    assert(findings.some(finding => finding.kind === "platform-macro" && /Do not (redefine|undefine)/.test(finding.message)), directive);
-  }
+test("a BIOS tail transfer written as a C macro is refused; no configuration flag approves it", () => {
+  const findings = sourceConstructFindings('#define TRANSFER(destination) do { register void *p __asm__("$9") = (destination); goto *p; } while (0)\nvoid target(void) { TRANSFER(entry_slot); }\n', structuredClone(DEFAULT_CONFIG));
+  assert(findings.some(finding => finding.kind === "platform-macro" && /opaque assembly\/control replacement/.test(finding.message)), JSON.stringify(findings));
 });
 
 test("rejects register pinning, embedded assembly, and stubs", () => {
@@ -161,6 +130,13 @@ test("an undecompiled backlog stub is a pending stub; a partial fold is not", ()
   assert.equal(isPendingStub(`/* INCLUDE_ASM is only mentioned here */\n#include "common.h"\n\nINCLUDE_ASM("build/asm/x", target);\n`), true);
   assert.equal(isPendingStub(`#include "common.h"\n\nint helper(void) { return 1; }\nINCLUDE_ASM("build/asm/x", target);\n`), false);
   assert.equal(isPendingStub(`void target(void) {}\n`), false);
+});
+
+test("a parked stub is still pending: its preserved attempt under #if 0 is not code", () => {
+  const parked = `INCLUDE_ASM("build/asm/x", target);\n\n/* PARKED attempt */\n#if 0\n#include "common.h"\nvoid target(void) { if (x) { y(); } }\n#endif\n`;
+  assert.equal(isPendingStub(parked), true);
+  assert.equal(isPendingStub(parked.replace("#if 0", "#if 1")), false);
+  assert.equal(isPendingStub(parked.replace("#endif\n", "")), false, "unbalanced conditionals are not pending stubs");
 });
 
 test("an asm label on a declaration is a symbol rename, not embedded assembly", () => {

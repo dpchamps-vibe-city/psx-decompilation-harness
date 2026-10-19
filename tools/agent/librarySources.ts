@@ -2,8 +2,7 @@ import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync
 import { basename, dirname, join } from "node:path";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { parseC, declaratorName, field } from "./residual-source-search/tree-sitter-c.js";
-import { biosFunctionProjection } from "../lib/biosFunctionMacro.js";
-import { isAssemblyPart, isDirectoryTu, isLibraryGeneratedSymbol, inspectLibraryPart, libraryFunctionFilename, readLibraryTu, type LibraryTuManifest, type LibraryTuPart } from "../lib/libraryTranslationUnit.js";
+import { isAssemblyPart, isDirectoryTu, isLibraryGeneratedSymbol, isModulePart, inspectLibraryPart, libraryFunctionFilename, readLibraryTu, type LibraryTuManifest, type LibraryTuPart } from "../lib/libraryTranslationUnit.js";
 import { libraryInputFiles, type LibraryProject } from "../lib/project.js";
 import type { LibraryMember } from "../lib/libraryTargets.js";
 import { legacyLibrarySource, libraryMemberSource } from "../lib/librarySourceLayout.js";
@@ -64,7 +63,7 @@ export function migrateLibrarySources(members: LibraryMember[], project: Library
 export function planLibraryTu(member: LibraryMember, source: string): { manifest: LibraryTuManifest; files: Map<string, string> } {
   const guard = analyzeCSource(source);
   if (!guard.parses || /\b__(?:FILE|LINE|BASE_FILE|INCLUDE_LEVEL)__\b/.test(source)) throw new Error(`TU split needs source review: ${member.source}`);
-  const projection = biosFunctionProjection(source), tree = parseC(projection.source), files = new Map<string, string>(), parts: LibraryTuPart[] = [];
+  const tree = parseC(source), files = new Map<string, string>(), parts: LibraryTuPart[] = [];
   let cursor = 0, shared = 0;
   const support = (end: number) => {
     const text = source.slice(cursor, end);
@@ -87,7 +86,7 @@ export function planLibraryTu(member: LibraryMember, source: string): { manifest
       support(node.startIndex);
       const path = symbol === "__library_member_data" ? "_data.c" : symbol === "__library_member_symbols" ? "_symbols.c" : libraryFunctionFilename(member, symbol);
       if (files.has(path)) throw new Error(`Duplicate function in TU split: ${symbol}`);
-      const end = projection.sites.find(s => s.valid && s.start === node.startIndex)?.end ?? node.endIndex;
+      const end = node.endIndex;
       const text = source.slice(node.startIndex, end) + "\n", part = { path, symbol };
       inspectLibraryPart(text, part); files.set(path, text); parts.push(part); cursor = end;
     }
@@ -119,6 +118,8 @@ export function extendLibraryBacklog(members: LibraryMember[], root: string): vo
     if (!missing.length) continue;
     const assembly = manifest.parts.find(isAssemblyPart);
     if (assembly) throw new Error(`Private split needs source review: ${member.id}::${missing[0]!.name} belongs to assembly TU ${assembly.path}; label it there and list it in symbols`);
+    const module = manifest.parts.find(isModulePart);
+    if (module) throw new Error(`Private split needs source review: ${member.id}::${missing[0]!.name} falls in folded module ${module.path}; define it there and list it in symbols`);
     const additions = new Map<string, LibraryTuPart[]>();
     for (const fn of missing) {
       const owners = member.functions.filter(f => f.section === fn.section && present.has(f.name)).sort((a, b) => a.offset - b.offset);

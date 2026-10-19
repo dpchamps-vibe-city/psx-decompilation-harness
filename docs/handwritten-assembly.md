@@ -183,70 +183,72 @@ relocations and member ownership, then verify whole outputs with the production
 byte oracle. The heuristic score alone does not establish an exact conversion.
 Shared C operation macros remain a separate [evidence-backed mechanism](macro-evidence.md).
 
-## Reconstruction form
+## Retaining classified handwritten assembly
 
-A member the evidence classes as hand-written is reconstructed as an
-**assembly translation unit**: one `.s` source listed as the only part of its
-`tu.json` with every original function in `symbols`. See
-[library-targets.md](library-targets.md) for the manifest, the inspection rules
-(no backlog markers, `.reloc`, `.incbin` or path includes) and how it is
-assembled and verified. The scanner nominates; the whole-member object oracle
-decides, and such members count under a separate assembly column in progress.
+Classification and extraction are separate. A heuristic nomination does not
+prove handwritten origin, and a successful round trip does not recover the
+original author's source. Settle the classification from independent original
+word/ABI or original-object evidence; do not demote real C because matching is
+hard. Members already represented as assembly TUs stay out of the C loop.
 
-Two facts shape those sources. GNU as 2.42 at `-march=r3000` inserts a nop
-after every `mtc2`/`ctc2` and between `mfc2` and a use of its result, inserts
-none between `lwc2` and a cop2 command, and encodes `move` as `or`; Sony's GTE
-drivers have none of the inserted nops, so they are written `.set noreorder`
-with explicit nops, and the production `move`-to-`addu` rewrite applies to
-`.s` parts as it does to compiler output. A reference to a global defined in
-the same file is emitted by GNU as against the symbol and by the converted
-originals against the section; the oracle folds the two forms together before
-its strict comparison.
+For an explicitly classified native assembly backlog, retain the existing
+assembler-ready extraction **without changing a byte**. `split` does this itself
+for every assembly-origin member (one whose native LNK object numbers its symbols
+from 1, without the compiler's two labels), so a new SDK reaches the retained form
+from `split` alone. The command remains for previews and repairs:
 
-## From classification to source: the general process
+```sh
+npm run library -- retain-handwritten                 # preview
+npm run library -- retain-handwritten --write          # copy existing extraction
+npm run check-all
+```
 
-The scanner's census is a starting point, not the boundary. A project settles
-the boundary per member from the bytes, with markers no compiler output
-carries: the assembler-reserved register used as scratch, a GTE command spaced
-by a single hazard nop (the SDK's C macros emit two or none, and gas adds none
-before a cop2 command), callee-saved registers written without a save, the
-return address or stack pointer loaded from a buffer, privileged or trap
-instructions, a jump through a register other than `$ra`. A member with such a
-function and no compiler-shaped function is an assembly file. Members whose only
-non-C instructions are GTE commands in the SDK macro spacing are C with inline
-macros, and stay in the C queue. Check the result against the product families
-the original library's object names expose: a family split between the two
-forms is a sign the rule is wrong, not that Sony mixed languages.
+The TU form follows the native object's origin. `split` fails closed on an
+assembly TU whose original GCC compiled (symbol IDs from 3) and names the
+remedy: `npm run library -- reform [--member ID ...] [--write]` turns such an
+unedited assembly TU back into the C TU split would have written, records its
+hand-written functions as retained parts, verifies the member, and rolls back on
+any failure. A hand-written function inside a C member (an `asm()` body in the
+original C file) is a retained part of that C TU; see
+[library-targets](library-targets.md).
 
-The steps, each with its own gate:
+The command does not classify new functions, translate instructions, rename
+labels, change delay slots or adjust the toolchain. It accepts only existing
+assembly-backlog TUs with native originals and fresh preprocessing receipts.
+Existing C and non-backlog assembly are untouched. Conflicting destination
+files cause refusal rather than overwrite.
 
-1. **Translate** the disassembly into natural assembler source (symbolic
-   loads, local labels, named GTE commands), trying a reorder-mode form first
-   and falling back to whole-file `.set noreorder`; keep the form that
-   reproduces the bytes under the production assembler and rewrites.
-2. **Install** it as the member's only part and delete the stub parts; refuse
-   to replace real C without review.
-3. **Verify** with the member oracle; records carry `form: "assembly"`, graph
-   entries carry `sourceForm: "assembly"` and `decompiled: true`, so the C loop's
-   picker (`nextTarget`) never selects them.
-4. **Annotate**. Comments, `.L` label names and local data labels are not
-   program identity, so readability work never risks a match and
-   re-verification is its only gate. The recommended shape: a header naming the
-   original library and object, the SDK prototype of every function, a purpose
-   paragraph and a register table; role-named labels; trailing line comments at
-   the points where the code does something. GTE commands should be spelled as
-   the SDK's own assembler header spells them (Sony's `INLINE_A.H`), through a
-   project include that assembles the real cop2 words; gas macro names are
-   case-insensitive, so a macro named `nOP` would capture every plain `nop` and
-   the two-nop forms cannot be reproduced.
-5. **Record the family** in `notes/file-groupings.md` in the form the ledger
-   parser reads (`tools/agent/fileGroupings.ts`): a `## ` heading, a line
-   starting with `Members`, then `- <symbol> (m)` bullets. The loop's park
-   deferral resolves siblings through that parser, and an annotation pass works
-   a family at a time because variants of one driver are copies of one skeleton.
+Each member then contains:
 
-Annotation is not yet a loop role: the picker excludes assembly TUs and the only
-non-solver role is post-match documentation. A project that wants the loop to
-carry the pass needs an annotation queue (a per-entry `annotated` flag derived
-from the file), a family picker, a notes-and-source role with a lint and the
-member oracle as gates, and a separate completion record.
+```text
+handwritten.ASM          verbatim mechanical assembly input, before CPP
+handwritten-symbols.ASM  verbatim mechanical symbol declarations, before CPP
+tu.json                  handwritten provenance, original hash and file hashes
+```
+
+The two `.ASM` files are copied as bytes from the established extraction's
+preprocessor inputs. They are not renamed preprocessed dumps, hand-edited, or
+converted into plausible original source. A generated CPP driver under `build/`
+includes the declarations before the member input; production CPP emits `.s`
+under `build/`, then the unchanged assembler/stages build the object. No generated
+`.s` copy is retained in source. Existing preserved assembly sources are untouched.
+A repeated retention is a no-op; ordinary `split` preserves the retained form.
+
+The manifest's `handwritten.kind: "original-extraction"` and
+`format: "assembler-with-cpp"` explicitly distinguish
+this representation from recovered author source. Both retained file hashes
+and the original-object hash are checked. Source-policy handling is limited to
+those exact hash-bound extraction files, not an exemption for arbitrary assembly
+or raw instruction encodings. Every ordinary source check remains in force.
+
+The manifest retains `backlog: true` as the machine-extraction status: it must
+not be counted as reconstructed C or as recovered assembler source. Graph
+entries remain `handwritten: "asm"` and additionally carry
+`retainedHandwrittenAssembly: true`. These functions are not C translation
+work. Existing disabled attempts are preserved verbatim, uncompiled.
+
+Never rewrite assembly to make a round trip pass, try alternative source forms,
+change an assembler or its flags to fit a member, or rename labels for a match.
+A failed extraction/build is a tooling defect or an unresolved case to report,
+not permission to reconstruct assembly. Annotations and research belong in
+separate notes; retained extraction files remain unchanged.

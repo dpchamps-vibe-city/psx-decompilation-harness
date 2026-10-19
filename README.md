@@ -107,7 +107,8 @@ original-word ABI/context evidence across images and library members. It reports
 advisory candidates with configurable thresholds, protects existing C and emits
 no assembly or policy exemptions. A member the oracle then verifies from one
 `.s` source is an assembly translation unit; the same document describes the
-process from classification to annotated source.
+process from classification to unchanged, provenance-marked retained assembly.
+It does not authorize rewriting assembly into imagined original source.
 
 ## Validation and references
 

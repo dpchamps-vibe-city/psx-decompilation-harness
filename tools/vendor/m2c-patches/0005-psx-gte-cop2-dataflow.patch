@@ -1,0 +1,71 @@
+diff -ruN a/m2c/arch_mips.py b/m2c/arch_mips.py
+--- a/m2c/arch_mips.py	2026-10-18 20:08:05.066995472 -0700
++++ b/m2c/arch_mips.py	2026-10-18 20:09:48.392613554 -0700
+@@ -103,6 +103,12 @@
+ )
+ from .types import FunctionSignature, Type
+ 
++# PS1 GTE command mnemonics as disassemblers print them (lowercased by the parser).
++PSX_GTE_COMMANDS = {
++    "rtps", "rtpt", "nclip", "op", "dpcs", "intpl", "mvmva", "ncds", "cdp", "ncdt",
++    "nccs", "cc", "ncs", "nct", "sqr", "dcpl", "dpct", "avsz3", "avsz4", "ncct", "gpf", "gpl",
++}
++
+ 
+ LENGTH_TWO: Set[str] = {
+     "neg",
+@@ -1283,6 +1289,54 @@
+             output_reg = hi_reg if base_mult_mnemonic == "mthi" else lo_reg
+             outputs = [output_reg]
+             eval_fn = lambda s, a: s.set_reg(output_reg, a.reg(0))
++        elif mnemonic in ("mtc2", "ctc2", "mfc2", "cfc2", "lwc2", "swc2") or (
++            mnemonic in PSX_GTE_COMMANDS and not any(isinstance(r, Register) for r in args)
++        ):
++            # PS1 GTE (COP2). A transfer's GTE operand is a GTE register, never a
++            # CPU one, so the CPU side's data flow stays exact. Each operation is
++            # an M2C_ pseudo-call in program order: a GTE write or command changes
++            # GTE state, so pending GTE reads are evaluated before it.
++            call = f"M2C_{mnemonic.upper()}" if mnemonic.endswith("c2") else f"M2C_GTE_{mnemonic.upper()}"
++            if mnemonic in ("mtc2", "ctc2", "mfc2", "cfc2"):
++                assert (
++                    len(args) == 2
++                    and isinstance(args[0], Register)
++                    and isinstance(args[1], Register)
++                )
++                gte_args: List[Expression] = [Literal(int(args[1].register_name))]
++            elif mnemonic in ("lwc2", "swc2"):
++                assert (
++                    len(args) == 2
++                    and isinstance(args[0], Register)
++                    and isinstance(args[1], AsmAddressMode)
++                )
++                gte_args = [Literal(int(args[0].register_name))]
++            else:
++                gte_args = [Literal(arg.value) for arg in args if isinstance(arg, AsmLiteral)]
++            if mnemonic in ("mfc2", "cfc2"):
++                outputs = [args[0]]
++                eval_fn = lambda s, a: s.set_reg_real(
++                    a.reg_ref(0),
++                    fn_op(call, gte_args, Type.intish()),
++                    emit_exactly_once=True,
++                )
++            else:
++                if mnemonic in ("mtc2", "ctc2"):
++                    inputs = [args[0]]
++                elif mnemonic in ("lwc2", "swc2"):
++                    assert isinstance(args[1], AsmAddressMode)
++                    inputs = [args[1].base]
++                    is_store = mnemonic == "swc2"
++
++                def eval_fn(s: NodeState, a: InstrArgs) -> None:
++                    s.prevent_later_function_calls()
++                    operands = list(gte_args)
++                    if mnemonic in ("mtc2", "ctc2"):
++                        operands.insert(0, a.reg(0))
++                    elif mnemonic in ("lwc2", "swc2"):
++                        operands.append(handle_la(a))
++                    s.write_statement(void_fn_op(call, operands))
++
+         elif mnemonic in cls.instrs_ignore:
+             pass
+         else:

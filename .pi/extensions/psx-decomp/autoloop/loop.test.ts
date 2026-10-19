@@ -7,7 +7,7 @@ import { test } from "../../../../tools/testing/runtimeTestContext.js";
 import { DEFAULT_LOOP_CONFIG } from "./config.ts";
 import { DOCUMENTATION_TOOLS, runFunction, runLoop, turn, type LoopDeps } from "./loop.ts";
 import { createTurnGate } from "./turn-gate.ts";
-import { buildInputs, inputIdentity, type Completion } from "../tools/prepared-attempt.ts";
+import { buildInputs, inputIdentity, recordsFileGroupings, type Completion } from "../tools/prepared-attempt.ts";
 import { ROOT } from "../../../../tools/testing/runtimeTestContext.js";
 import { configuredToolchainIdentity } from "../../../../tools/agent/decompToolchain.ts";
 import { runCommand } from "../../shared/process.ts";
@@ -190,6 +190,25 @@ test("documentation resumes preserve the matching tier and record only the actua
   const failed = await runFunction(deps, state, name);
   assert.equal(failed.state.completions![name]!.documentation, "pending");
   assert.equal(failed.state.completions![name]!.documentationModel, undefined);
+});
+
+test("a disabled notes turn skips documentation instead of leaving it pending; library projects never record groupings", async (t) => {
+  const { root, name, state } = await pendingDocumentation("autoloop-docs-disabled-", (fn) => [`src/${fn}.c`]);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { deps, record } = documentationDeps(root, "stop");
+  deps.config = { ...deps.config, updateFileGroupings: false };
+  const result = await runFunction(deps, state, name);
+  assert.equal(result.outcome.kind, "matched");
+  assert.equal(record.toolsAtSend.length, 0, "no notes turn is dispatched");
+  assert.equal(result.state.completions![name]!.documentation, "skipped");
+  assert.equal(JSON.parse(readFileSync(join(root, "run_output/state.json"), "utf8")).completions[name].documentation, "skipped",
+    "nothing stays pending to resume on a later run");
+
+  assert.equal(recordsFileGroupings(root), true, "a linked image records which unit a function belongs to");
+  writeFileSync(join(root, "project.json"), JSON.stringify({ schemaVersion: 1,
+    target: { kind: "relocatable-library", format: "elf-ar", standaloneObjects: ["input/member.o"] },
+    output: { sourceDir: "src/libraries", sourceLayout: "tu-directory", inputRoot: "input" } }));
+  assert.equal(recordsFileGroupings(root), false, "a library member's object already names its unit");
 });
 
 /** A resumable pending-documentation fixture: one verified function, in a repository. */

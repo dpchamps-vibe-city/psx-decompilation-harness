@@ -7,7 +7,7 @@ import { declaresIncludeAsm, inspectSource, type SourceFacts } from "./c-ast.ts"
 import type { LoopConfig, ParkRecord, ParkReason } from "./types.ts";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
 import { requireLibraryFunction } from "../../../../tools/lib/libraryTargets.js";
-import { isDirectoryTu, libraryAssemblyTu } from "../../../../tools/lib/libraryTranslationUnit.js";
+import { isDirectoryTu, libraryAssemblyTu, libraryModulePart } from "../../../../tools/lib/libraryTranslationUnit.js";
 
 /**
  * The stub a parked function is returned to.
@@ -21,6 +21,7 @@ export function canonicalStub(projectRoot: string, functionName: string): string
   if (loadLibraryProject(projectRoot)) {
     const { member, fn } = requireLibraryFunction(functionName, projectRoot);
     if (!isDirectoryTu(member) || libraryAssemblyTu(member, projectRoot)) throw new Error("Library parking requires a C TU function part; assembly is never reconstructed");
+    if (libraryModulePart(member, projectRoot)) throw new Error(`${member.id} is a folded module: parking would overwrite its other functions`);
     return `INCLUDE_ASM("build/libraries/nonmatchings/${member.id}", ${fn.name});\n`;
   }
   return [
@@ -138,6 +139,7 @@ async function inspectText(input: PlanParkInput, name: string, source: string): 
  * be the thing that breaks the build.
  */
 export async function planPark(input: PlanParkInput): Promise<ParkPlan> {
+  if (loadLibraryProject(input.projectRoot)) canonicalStub(input.projectRoot, input.functionName); // Refuses folded modules and assembly TUs first.
   const symbol = loadLibraryProject(input.projectRoot) ? requireLibraryFunction(input.functionName, input.projectRoot).fn.name : input.functionName;
   const reasons: string[] = [];
 

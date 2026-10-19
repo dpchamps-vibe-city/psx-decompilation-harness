@@ -27,7 +27,6 @@ test("a new noncanonical header macro earns its exception through the real produ
   assert.deepEqual(evidence.failures, []);
   assert.equal(evidence.definitions.get("include/operations.h")?.get("LOADED_ENTRY"), 1);
   const config = structuredClone(DEFAULT_CONFIG);
-  config.sourcePolicy.allowBiosTailJumpMacro = false;
   const audit = () => checkSourcePolicy({ projectRoot: f.root, config, scanFunctions: ["first", "second"], changedFiles: ["include/operations.h", "src/first.c", "src/second.c", "configs/macro-evidence.json"] });
   assert.equal(audit().pass, true);
   // Evidence for one definition must never exempt other code in its header.

@@ -102,8 +102,8 @@ material-use results. Changed definitions require remeasurement and a new
 fingerprint. Successful evidence exempts only that definition in that header;
 other code in the header remains audited. Duplicate definitions, `#undef` and
 wrong-arity calls fail. Whole-function asm directives and assembly stubs fail
-regardless of byte identity. Legacy canonical BIOS enable flags remain supported;
-evidence-bound BIOS calls do not need a new approval flag.
+regardless of byte identity. BIOS calls are hand-written assembly and are never
+C targets; no flag, macro or evidence turns one into C.
 
 Macro bodies that fail the C parser are no longer silently skipped. Opaque
 assembly/control bodies fail closed without evidence. Uninspectable token-paste

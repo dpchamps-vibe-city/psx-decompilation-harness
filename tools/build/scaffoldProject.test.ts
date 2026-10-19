@@ -63,6 +63,15 @@ test("fresh EXE and library scaffolds require no consumer package or duplicated 
   }
 });
 
+test("a project whose toolchain selects the ECOFF period assembler gets the period include templates", async t => {
+  const { harness, root, put } = fixture(t);
+  put(root, "toolchain.json", JSON.stringify({ assembler: { objectFormat: "ecoff" } }) + "\n");
+  await applyScaffold(planScaffold(root, "library", harness));
+  for (const path of ["include/include_asm.h", "include/macro.inc"])
+    assert.equal(read(root, path), readFileSync(join(harness, "templates/period", path), "utf8"), path);
+  assert.match(read(root, "include/macro.inc"), /^\.macro glabel label$/m, "positional macros for the period assembler");
+});
+
 test("dry runs do not write; project plugin/configuration files are preserved rather than upgraded", async t => {
   const { harness, root, put } = fixture(t);
   await applyScaffold(planScaffold(root, "exe", harness), true);

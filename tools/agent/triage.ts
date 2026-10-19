@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 import { configuredAssembler, type AssemblerKind } from "../lib/toolchain.js";
-import { projectRoot } from "../lib/runtimeContext.js";
+import { HARNESS_ROOT, projectRoot } from "../lib/runtimeContext.js";
 /**
  * triage.ts — pre-flight symptom detector for one function.
  *
@@ -112,7 +112,6 @@ import { loadConfig } from "../../.pi/extensions/shared/config.ts";
 import { targetWordsOf } from "../lib/functionOracle.js";
 import { decodeFunctionWords, type DecodedInsn } from "./matching-reconstruction/decode.js";
 import { describeBiosVeneer, recognizeBiosVeneer } from "./matching-reconstruction/bios-veneer.js";
-import { biosTailJumpMacroEnabled } from "../lib/biosSyscallMacro.js";
 
 /* Both spellings: target assembly uses names, cc1 output uses numbers. */
 const CALL_CLOBBERED = new Set([
@@ -153,14 +152,9 @@ export interface Finding {
 export function biosVeneerFindings(insns: DecodedInsn[]): Finding[] {
   const bios = recognizeBiosVeneer(insns);
   if (!bios) return [];
-  if (biosTailJumpMacroEnabled(projectRoot())) return [{ detector: "bios-veneer", severity: "info",
-    summary: "Original BIOS dispatch has an explicitly approved PSX_BIOS_FUNCTION binding",
-    evidence: [`Vector 0x${bios.vector.toString(16)}, selector 0x${bios.selector.toString(16)}; incoming arguments and ra pass through unchanged.`,
-      "Use PSX_BIOS_FUNCTION with an independently witnessed signature. Approval is not a match: compile and verify exact code/data and relocations."],
-    see: ["include/library/psx_bios_tailjump.h"] }];
   return [{ detector: "bios-veneer", severity: "blocker",
-    summary: "Original BIOS dispatch requires the explicitly approved PSX_BIOS_TAILJUMP operation",
-    evidence: [describeBiosVeneer(bios), "No clean-C search domain was exhausted. Do not request an INCLUDE_ASM exception or count this target as reconstructed."],
+    summary: "Original BIOS dispatch is hand-written assembly; it stays its retained extraction and is never translated to C",
+    evidence: [describeBiosVeneer(bios), "Not a C target: do not write C, a macro or an INCLUDE_ASM exception for it, and do not count it as reconstructed."],
     see: ["tools/agent/matching-reconstruction/bios-veneer.ts"] }];
 }
 
@@ -2447,6 +2441,9 @@ function main(): void {
      does. */
   findings.push(...detectIdiomPrecedent(name));
   rmSync(scratch, { recursive: true, force: true });
+  /* A citation names a file this project or the harness actually has; another
+     project's notes or headers are not evidence here. */
+  for (const finding of findings) finding.see = finding.see.filter(path => existsSync(resolve(projectRoot(), path)) || existsSync(resolve(HARNESS_ROOT, path)));
 
   if (json) {
     console.log(JSON.stringify({ function: name, sourceState, macroIdentity, findings }, null, 2));

@@ -13,7 +13,19 @@ The user's later instruction **forbids assembly reconstruction and target-fitted
 transformations**. It supersedes the assembly-writing approval below and the
 source-rewriting requirements of step 4.4. Those requirements and the original
 "Done when" conditions are preserved below, not silently redefined as complete.
-Only explicitly original-derived, build-local stub extraction is permitted.
+The original remediation permitted only explicitly original-derived, build-local
+stub extraction. The user has since explicitly requested retaining that existing
+mechanical assembly output in the repository for handwritten-classified members.
+This authorizes unchanged extracted files with provenance, **not** reconstructed
+assembly, source translation, label/instruction changes, or target-fitting.
+
+The retained form uses `handwritten.ASM` and `handwritten-symbols.ASM`, with
+original/file hashes and `format: "assembler-with-cpp"` in `tu.json`. These are
+verbatim copies of the established unpreprocessed assembly inputs. CPP drivers
+and preprocessed `.s` outputs stay under `build/`; the mistaken retained `.s`
+copies were removed. This supersedes the earlier blanket build-local-listing
+restriction only for these classified members. Existing C and preserved source
+are unchanged.
 
 The compliant migration and remediation are verified:
 
@@ -323,8 +335,10 @@ In psyq-decomp:
    - a function is a C target exactly when its member's TU is a C TU and its
      part is a stub;
    - every function of an assembly TU is `handwritten: "asm"`;
-   - the code classifier (`tools/agent/libraryCodeClass.ts`) only attaches
-     platform-macro evidence and no longer excludes functions.
+   - the code classifier (`tools/agent/libraryCodeClass.ts`) no longer excludes
+     functions by itself. (Amended 2026-10-18: split records each fingerprinted
+     function of a C member as `retained` in its `tu.json`; the graph excludes
+     a function only through that explicit, revalidated flag.)
 9. **Type errors.** Fix the five new ones:
    `tools/lib/libraryTranslationUnit.ts:173`, `tools/lib/objectFormats.test.ts:67`,
    `:68`, `:142`, and the one in item 1.

@@ -90,10 +90,17 @@ test("end-to-end: configured headers, relocation-aware splits, production C subs
     const { member, key, bytes, candidate } = f.create();
     assert(member.object.sections.get(".text")!.offset > 0, "nonzero ELF file base exercises the relocated-call bug");
     assert.equal(classifyLibraryCode(member.object, member.functions[0]!), undefined, "ordinary caller stays eligible");
-    assert.equal(classifyLibraryCode(member.object, member.functions[2]!)?.kind, "bios-dispatch", "private BIOS veneer retains platform-macro evidence");
+    assert.equal(classifyLibraryCode(member.object, member.functions[2]!)?.kind, "bios-dispatch", "private BIOS veneer is fingerprinted from its original words");
     splitLibrary();
-    const graph = writeLibraryGraph();
-    assert.ok(graph.functions.every(fn => fn.libraryStub && fn.handwritten === false && eligible(fn)), "C stub targets are not excluded by the code classifier");
+    const graph = writeLibraryGraph(), veneer = libraryTargetKey(member, member.functions[2]!.name);
+    const veneerPart = readLibraryTu(member, f.root).parts.find(p => p.symbol === member.functions[2]!.name)!;
+    assert.deepEqual(veneerPart.retained, { kind: "handwritten-assembly", evidence: "bios-dispatch", originalSha256: member.originalObject?.sha256 ?? member.sha256 }, "split records the hand-written veneer in the manifest");
+    assert.ok(graph.functions.filter(fn => fn.name !== veneer).every(fn => fn.libraryStub && fn.handwritten === false && eligible(fn)), "ordinary C stubs stay targets");
+    const veneerEntry = graph.functions.find(fn => fn.name === veneer)!;
+    assert.equal(veneerEntry.handwritten, "asm"); assert.equal(eligible(veneerEntry), false, "a retained hand-written function is never a C target");
+    const manifestText = readFileSync(join(f.root, member.source), "utf8");
+    splitLibrary();
+    assert.equal(readFileSync(join(f.root, member.source), "utf8"), manifestText, "recording retained functions is idempotent");
     const manifest = readLibraryTu(member, f.root);
     assert.equal(manifest.parts.filter(p => p.symbol && p.symbol !== "__library_member_data").length, 3);
     const sourceDir = dirname(join(f.root, member.source)), entryStub = readFileSync(join(sourceDir, "entry.c"));
@@ -147,6 +154,21 @@ test("end-to-end: configured headers, relocation-aware splits, production C subs
     writeFileSync(listing, beforeListing);
     // Re-running splitting neither expands the assignment nor overwrites C.
     splitLibrary(); assert(readFileSync(join(sourceDir, "entry.c")).equals(entryStub));
+    // Member finishing: once every function is C or retained, the data part becomes a target.
+    const dataKey = `${member.id}::__library_member_data`, helper = libraryTuStatus(member, f.root)!.find(p => p.symbol === member.functions[1]!.name)!;
+    assert.ok(!writeLibraryGraph().functions.some(fn => "finishing" in fn), "no finishing target while a function is still a stub");
+    const helperStub = readFileSync(helper.source, "utf8");
+    writeFileSync(join(sourceDir, "entry.c"), candidate);
+    writeFileSync(helper.source, `int ${member.functions[1]!.name}(unsigned int x) { return x + 7; }\n`);
+    const finishing = writeLibraryGraph().functions.find(fn => fn.name === dataKey)!;
+    assert.equal(finishing.finishing, "data"); assert.equal(eligible(finishing), true);
+    assert.ok(!writeLibraryGraph().functions.some(fn => fn.name === `${member.id}::__library_member_symbols`), "symbol order waits for the data");
+    const prepared = await prepareLibraryFunction(dataKey);
+    assert.equal(prepared.packet.preparationScope, "member-finishing");
+    assert.equal(prepared.packet.primary!.origin, "generated-part");
+    assert.match(prepared.packet.primary!.text, /Member data as C/);
+    assert.equal(measureLibraryFunction(dataKey).functionComparison.symbol, "__library_member_data", "a finishing target measures the whole member");
+    writeFileSync(join(sourceDir, "entry.c"), entryStub); writeFileSync(helper.source, helperStub);
   });
 });
 

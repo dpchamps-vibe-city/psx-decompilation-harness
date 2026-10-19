@@ -55,6 +55,12 @@ roles; do not infer these from an m2c declaration.
   register pinning, new stubs or allowlist changes. COP2 presence without a
   template match grants nothing. A new shared operation definition is a separate
   evidence-backed route, described below.
+- GTE (COP2) code was written in C with the SDK's INLINE_C `gte_*` macros. The
+  draft shows each GTE step as an `M2C_CTC2`/`M2C_MTC2`/`M2C_LWC2`/`M2C_SWC2`/
+  `M2C_MFC2`/`M2C_CFC2`/`M2C_GTE_<command>` pseudo-call in program order; replace
+  them with the detected macros. Under a DMPSX toolchain call the SDK macro
+  unchanged: the declared stage rewrites its placeholder word after assembly.
+  Never hand-encode a COP2 word.
 - Use C89: declarations first in a block, `/* */` comments, no C99 syntax.
   No raw assembly, register pinning, flag overrides or ad hoc policy exemptions.
 

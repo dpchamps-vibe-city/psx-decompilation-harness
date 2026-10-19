@@ -12,7 +12,7 @@ import { nativeObjectView } from "./objectFormats/view.js";
 import { libraryInputFiles, loadLibraryProject, type LibraryProject } from "./project.js";
 import { compareRelocatableObjects, objectFunctions, readRelocatableObject, type RelocatableObject } from "./relocatableObject.js";
 import { libraryMemberSource } from "./librarySourceLayout.js";
-import { libraryFunctionSource, librarySourceFiles } from "./libraryTranslationUnit.js";
+import { LIBRARY_GENERATED_PARTS, libraryFunctionSource, libraryGeneratedFunction, librarySourceFiles } from "./libraryTranslationUnit.js";
 import { existsSync } from "node:fs";
 export interface LibraryMember {
   id: string; input: string; member: string; ordinal: number; sourceOffset: number;
@@ -114,6 +114,11 @@ function indexMembers(members: LibraryMember[]): LibraryIndex {
     const locals = new Map<string, LibraryFunction[]>(), offsets = new Map<string, LibraryFunction[]>();
     index.locals.set(member.id, locals); index.offsets.set(member.id, offsets);
     const exported = new Set(member.object.symbols.filter(s => s.binding !== 0).map(s => `${s.section}:${s.name}`));
+    // Finishing targets resolve by their qualified key only; they have no code extent.
+    for (const symbol of Object.keys(LIBRARY_GENERATED_PARTS) as Array<keyof typeof LIBRARY_GENERATED_PARTS>) {
+      const value = { member, fn: libraryGeneratedFunction(symbol), key: libraryTargetKey(member, symbol) };
+      add(index.functions, value.key, value);
+    }
     for (const fn of member.functions) {
       const value = { member, fn, key: libraryTargetKey(member, fn.name) };
       add(index.functions, value.key, value); add(index.functions, fn.name, value);

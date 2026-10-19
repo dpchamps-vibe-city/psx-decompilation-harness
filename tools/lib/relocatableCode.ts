@@ -9,6 +9,8 @@ import { decodeWord, definedRegister, isBranch, type DecodedInsn } from "../agen
 export interface ObjectFunction {
   name: string; section: string; offset: number; size: number; inferredSize: boolean;
   discovery?: { kind: "call-relocation" | "address-relocation"; sites: Array<{ section: string; offset: number }> };
+  /** A member-finishing target, not code: the TU's generated data or symbol-order part. */
+  generated?: "data" | "symbols";
 }
 const transfer = (word: number) => word >>> 26 === 2 || (word >>> 26 === 0 && (word & 63) === 8);
 const control = (i: DecodedInsn) => isBranch(i.op) || ["j", "jal", "jr", "jalr", "break"].includes(i.op);

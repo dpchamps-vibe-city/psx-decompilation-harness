@@ -1,15 +1,15 @@
 import { assemblySourceFindings } from "../../../tools/lib/assemblyPolicy.js";
+import { activeSourceText } from "../../../tools/lib/disabledSource.js";
 import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import type { AutodecompConfig, PolicyFinding, SourcePolicyResult } from "./types.ts";
 import { analyzeCSource, capturePrevRetSites, matchingConstructs, walkActiveC } from "../../../tools/agent/cSourceGuard.ts";
 import { parseC, field, namedChildren } from "../../../tools/agent/residual-source-search/tree-sitter-c.ts";
-import { BIOS_SYSCALL_HEADER, BIOS_SYSCALL_MACRO, isBiosSyscallHeader, BIOS_TAILJUMP_HEADER, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_LOAD_MACRO, BIOS_TAILJUMP_END_MACRO, isBiosTailJumpHeader } from "../../../tools/lib/biosSyscallMacro.js";
-import { BIOS_FUNCTION_MACRO, biosFunctionProjection } from "../../../tools/lib/biosFunctionMacro.js";
 import { libraryContext, loadLibraryProject } from "../../../tools/lib/project.js";
 import { configuredAssembler } from "../../../tools/lib/toolchain.js";
 import { resolveFunctionTarget } from "../../../tools/lib/targetAdapter.js";
 import { libraryMemberForSource, withLibraryMetadata } from "../../../tools/lib/libraryTargets.js";
+import { libraryAssemblyTu, libraryModulePart, librarySourceFiles, libraryTuStatus } from "../../../tools/lib/libraryTranslationUnit.js";
 import { evaluateMacroEvidence, opaqueMacroControlHazard, opaqueMacroHazard } from "../../../tools/lib/macroEvidence.js";
 
 interface PolicyOptions {
@@ -264,9 +264,12 @@ function stripComments(line: string, inBlock: boolean): { code: string; inBlock:
  * deliberately do not use this: there, a remaining stub is a real failure.
  */
 export function isPendingStub(source: string): boolean {
+  /* A parked stub keeps its preserved attempt under `#if 0`; that text is not code. */
+  let active: string;
+  try { active = activeSourceText(source); } catch { return false; }
   let inBlock = false;
   const code: string[] = [];
-  for (const line of source.split("\n")) {
+  for (const line of active.split("\n")) {
     const stripped = stripComments(line, inBlock);
     inBlock = stripped.inBlock;
     const trimmed = stripped.code.trim();
@@ -311,11 +314,12 @@ export function sourceConstructFindings(source: string, config: AutodecompConfig
   name?: string; vram?: string; container?: string;
   definitions?: ReadonlyMap<string, number>;
   evidenceMacros?: ReadonlyMap<string, number>;
+  /** A folded module's retained hand-written functions: their canonical INCLUDE_ASM lines stay. */
+  retainedIncludeAsm?: ReadonlySet<string>;
 } = {}): Array<Omit<PolicyFinding, "file">> {
   const guard = analyzeCSource(source), findings: Array<Omit<PolicyFinding, "file">> = [];
   if (!guard.parses) return [{ kind: "invalid-source", message: `Cannot audit malformed C: ${guard.reasons.join("; ")}` }];
   const allowed = (kind: string) => allowlisted(config, scope.name, scope.vram, scope.container, kind);
-  const evidenced = (name: string) => scope.evidenceMacros?.has(name) === true;
   const constructs = matchingConstructs(source);
   for (const pin of [...constructs.localRegisterBindings, ...constructs.fileRegisterBindings]) {
     if (allowed("register-asm")) continue;
@@ -336,18 +340,8 @@ export function sourceConstructFindings(source: string, config: AutodecompConfig
     findings.push({ kind: "embedded-asm", line: asm.line, text: asm.text, message: "Embedded assembly is forbidden for an ordinary compiled function" });
   }
   for (const capture of capturePrevRetSites(source)) if (!capture.valid) findings.push({ kind: "register-asm", line: capture.line, message: "CAPTURE_PREV_RET requires a standalone one-identifier invocation at file or block scope" });
-  const projection = biosFunctionProjection(source), tree = parseC(projection.source);
+  const tree = parseC(source);
   try { walkActiveC(tree.rootNode, node => {
-    if (node.type === "function_definition") {
-      const binding = projection.sites.find(s => s.start === node.startIndex);
-      if (binding && (!config.sourcePolicy.allowBiosTailJumpMacro || !binding.valid ||
-          ![0xa0, 0xb0, 0xc0].includes(Number(binding.vector)) || !Number.isInteger(Number(binding.selector)) || Number(binding.selector) < 0 || Number(binding.selector) > 255)) {
-        findings.push({ kind: "platform-macro", line: binding.line, message: "PSX_BIOS_FUNCTION requires explicit approval, a valid signature, a literal A0/B0/C0 vector and an 8-bit literal selector" });
-      }
-    }
-    if (node.type === "identifier" && ["__psx_bios_selector", "__psx_bios_entry"].includes(node.text)) findings.push({
-      kind: "register-asm", line: node.startPosition.row + 1, message: "Do not access private BIOS register bindings; call the canonical operation",
-    });
     if (node.type === "call_expression") {
       const name = field(node, "function")?.text, arity = name ? scope.evidenceMacros?.get(name) : undefined;
       if (arity !== undefined && namedChildren(field(node, "arguments")!).filter(child => child.type !== "comment").length !== arity)
@@ -357,37 +351,9 @@ export function sourceConstructFindings(source: string, config: AutodecompConfig
       const name = node.text.match(/^#\s*undef\s+([A-Za-z_]\w*)/)?.[1];
       if (name && scope.evidenceMacros?.has(name)) findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: `Do not undefine the evidence-bound ${name} operation` });
     }
-    if (node.type === "call_expression" && field(node, "function")?.text === BIOS_SYSCALL_MACRO) {
-      const args = field(node, "arguments");
-      const values = args ? namedChildren(args) : [];
-      if ((!config.sourcePolicy.allowBiosSyscallMacro && !evidenced(BIOS_SYSCALL_MACRO)) || values.length !== 1 || values[0]!.type !== "number_literal" || ![0, 1, 2].includes(Number(values[0]!.text))) {
-        findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_SYSCALL requires the enabled canonical operation or verified macro evidence, and a supported literal selector (0, 1 or 2)" });
-      }
-    }
-    if (node.type === "call_expression" && field(node, "function")?.text === BIOS_TAILJUMP_MACRO) {
-      const args = field(node, "arguments"), values = args ? namedChildren(args) : [];
-      if ((!config.sourcePolicy.allowBiosTailJumpMacro && !evidenced(BIOS_TAILJUMP_MACRO)) || values.length !== 2 || values.some(v => v.type !== "number_literal") ||
-          ![0xa0, 0xb0, 0xc0].includes(Number(values[0]?.text)) || !Number.isInteger(Number(values[1]?.text)) || Number(values[1]?.text) < 0 || Number(values[1]?.text) > 255) {
-        findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_TAILJUMP requires the enabled canonical operation or verified macro evidence, a literal A0/B0/C0 vector and an 8-bit literal selector" });
-      }
-    }
-    if (node.type === "call_expression" && field(node, "function")?.text === BIOS_TAILJUMP_LOAD_MACRO) {
-      const args = field(node, "arguments"), values = args ? namedChildren(args) : [];
-      if ((!config.sourcePolicy.allowBiosTailJumpMacro && !evidenced(BIOS_TAILJUMP_LOAD_MACRO)) || values.length !== 1) {
-        findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_TAILJUMP_LOAD requires the enabled canonical operation or verified macro evidence, and one destination expression" });
-      }
-    }
-    const end = node.type === "call_expression" ? field(node, "function") : node.type === "function_declarator" ? field(node, "declarator") : undefined;
-    if (end?.text === BIOS_TAILJUMP_END_MACRO && (!config.sourcePolicy.allowBiosTailJumpMacro || namedChildren(field(node, "arguments") ?? field(node, "parameters")!).length)) {
-      findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "PSX_BIOS_TAILJUMP_END requires explicit approval and no arguments" });
-    }
-    if (node.type === "preproc_call" && /^#\s*undef\s+PSX_BIOS_(?:FUNCTION|SYSCALL|TAILJUMP(?:_(?:END|LOAD))?)\b/.test(node.text)) {
-      findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "Do not undefine canonical BIOS operations" });
-    }
     if (node.type === "preproc_function_def" || node.type === "preproc_def") {
       const macroName = field(node, "name")?.text;
       if (macroName && scope.definitions?.has(macroName)) return false;
-      if ([BIOS_FUNCTION_MACRO, BIOS_SYSCALL_MACRO, BIOS_TAILJUMP_MACRO, BIOS_TAILJUMP_LOAD_MACRO, BIOS_TAILJUMP_END_MACRO].includes(field(node, "name")?.text ?? "")) findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: "Do not redefine BIOS operations; use the canonical platform header" });
       if (field(node, "name")?.text === "CAPTURE_PREV_RET")
         findings.push({ kind: "register-asm", line: node.startPosition.row + 1, message: "Do not redefine the standing CAPTURE_PREV_RET construct; use common.h" });
       if (macroName && scope.evidenceMacros?.has(macroName)) findings.push({ kind: "platform-macro", line: node.startPosition.row + 1, message: `${macroName} belongs in its fingerprinted project include file, not a duplicate definition` });
@@ -407,8 +373,16 @@ export function sourceConstructFindings(source: string, config: AutodecompConfig
     }
     return true;
   }); } finally { tree.delete(); }
-  if (guard.includeAsm.length && !allowed("include-asm")) for (const site of guard.includeAsm) findings.push({ kind: "include-asm", message: "Assembly stub is forbidden for an ordinary compiled function", text: site.symbol });
+  if (guard.includeAsm.length && !allowed("include-asm")) for (const site of guard.includeAsm.filter(s => !scope.retainedIncludeAsm?.has(s.symbol)))
+    findings.push({ kind: "include-asm", message: "Assembly stub is forbidden for an ordinary compiled function", text: site.symbol });
   return findings;
+}
+
+/** The retained hand-written functions of the folded module at `file`, if it is one. */
+function moduleRetained(projectRoot: string, file: string): ReadonlySet<string> | undefined {
+  if (!loadLibraryProject(projectRoot)) return undefined;
+  const member = libraryMemberForSource(normalizedPath(file), projectRoot), module = member && libraryModulePart(member, projectRoot);
+  return module && resolve(projectRoot, dirname(member!.source), module.path) === resolve(projectRoot, file) ? new Set(Object.keys(module.retainedFunctions ?? {})) : undefined;
 }
 
 function scanSourceFile(options: PolicyOptions, file: string, findings: PolicyFinding[]): void {
@@ -416,6 +390,16 @@ function scanSourceFile(options: PolicyOptions, file: string, findings: PolicyFi
   if (!existsSync(path)) return;
   const source = readFileSync(path, "utf8");
   if (/\.(?:s|ASM)$/.test(file)) {
+    if (loadLibraryProject(options.projectRoot)) {
+      const member = libraryMemberForSource(normalizedPath(file), options.projectRoot);
+      if (member && libraryAssemblyTu(member, options.projectRoot)?.part.handwritten && librarySourceFiles(member, options.projectRoot).some(p => resolve(options.projectRoot, p) === path)) {
+        // Retained extraction is not authored assembly. Only manifest-bound,
+        // hash-unchanged original-derived files qualify; arbitrary raw words do not.
+        try { libraryTuStatus(member, options.projectRoot); }
+        catch (error) { findings.push({ kind: "raw-assembly-encoding", file, message: `Invalid retained handwritten extraction: ${error}` }); }
+        return;
+      }
+    }
     const scope = patchScope(options, file);
     let sdkPlaceholders = false;
     try {
@@ -425,13 +409,10 @@ function scanSourceFile(options: PolicyOptions, file: string, findings: PolicyFi
     findings.push(...assemblySourceFindings(source, { cpp: file.endsWith(".ASM"), sdkPlaceholders }).map(f => ({ ...f, kind: "raw-assembly-encoding", file })));
     return;
   }
-  const fileEvidence = options.evidenceMacros?.get(normalizedPath(file));
-  if (((options.config.sourcePolicy.allowBiosSyscallMacro || fileEvidence?.has(BIOS_SYSCALL_MACRO)) && isBiosSyscallHeader(options.projectRoot, file)) ||
-      ((options.config.sourcePolicy.allowBiosTailJumpMacro || fileEvidence?.has(BIOS_TAILJUMP_MACRO) || fileEvidence?.has(BIOS_TAILJUMP_LOAD_MACRO)) && isBiosTailJumpHeader(options.projectRoot, file))) return;
   const scope = patchScope(options, file);
   const evidenceMacros = new Map([...(options.evidenceMacros?.values() ?? [])].flatMap(values => [...values]));
   findings.push(...sourceConstructFindings(source, options.config, {
-    ...scope, evidenceMacros, definitions: options.evidenceMacros?.get(normalizedPath(file)),
+    ...scope, evidenceMacros, definitions: options.evidenceMacros?.get(normalizedPath(file)), retainedIncludeAsm: moduleRetained(options.projectRoot, file),
   }).map(f => ({ ...f, file: normalizedPath(relative(options.projectRoot, path)) })));
 }
 
@@ -524,9 +505,7 @@ function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
          cannot distinguish code from a multiline comment/string/disabled arm.
          Missing-file patch fixtures retain the conservative legacy fallback. */
       const completeSource = policesConstructs(file) && linesOf(file)?.[newLine - 1] === text;
-      const approvedPlatformHeader = (options.config.sourcePolicy.allowBiosSyscallMacro && isBiosSyscallHeader(options.projectRoot, file)) ||
-        (options.config.sourcePolicy.allowBiosTailJumpMacro && isBiosTailJumpHeader(options.projectRoot, file));
-      const violation = commentOnly || !policesConstructs(file) || completeSource || approvedPlatformHeader
+      const violation = commentOnly || !policesConstructs(file) || completeSource
         ? undefined
         : forbiddenLine(text, options.config, scope.name, scope.vram, scope.container);
       if (violation) findings.push({ kind: violation.kind, file, line: newLine, message: violation.message, text: text.trim() });
@@ -616,12 +595,6 @@ function checkSourcePolicyScoped(options: PolicyOptions): SourcePolicyResult {
   // was committed; unchanged files must not become an opaque-body escape hatch.
   for (const file of evidence.definitions.keys()) scanSourceFile(options, file, hardFailures);
 
-  if (options.config.sourcePolicy.allowBiosSyscallMacro && !isBiosSyscallHeader(options.projectRoot)) hardFailures.push({
-    kind: "platform-macro", file: BIOS_SYSCALL_HEADER, message: "Enabled PSX_BIOS_SYSCALL requires the unchanged canonical platform header",
-  });
-  if (options.config.sourcePolicy.allowBiosTailJumpMacro && !isBiosTailJumpHeader(options.projectRoot)) hardFailures.push({
-    kind: "platform-macro", file: BIOS_TAILJUMP_HEADER, message: "Enabled PSX_BIOS_TAILJUMP requires the unchanged canonical platform header",
-  });
   const scanNames = options.scanFunctions ?? (options.functionName ? [options.functionName] : []);
   const scannedFiles = new Set<string>();
   for (const name of scanNames) {

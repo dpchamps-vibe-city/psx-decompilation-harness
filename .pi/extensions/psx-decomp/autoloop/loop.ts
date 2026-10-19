@@ -1,4 +1,4 @@
-import { prepareAttempt, attemptStaticFinalization, buildInputs, documentCompletion, sameInputs, inputIdentity, type Completion, type PreparedAttempt } from "../tools/prepared-attempt.ts";
+import { prepareAttempt, attemptStaticFinalization, buildInputs, documentCompletion, recordsFileGroupings, sameInputs, inputIdentity, type Completion, type PreparedAttempt } from "../tools/prepared-attempt.ts";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
@@ -12,7 +12,9 @@ import type { PolicyFinding } from "../../shared/types.ts";
 import { chooseParkAttempt } from "./best-attempt.ts";
 import { implicatedByPark } from "./family.ts";
 import { shouldStop } from "./stop-rule.ts";
-import { commitMatchedFunction, commitParkedFunction } from "./commit.ts";
+import { commitCleanedMember, commitFoldedMember, commitMatchedFunction, commitParkedFunction } from "./commit.ts";
+import { foldMatchedMember, runFoldCleanup, type FoldCleanupOutcome } from "./fold.ts";
+import { pendingFoldCleanups } from "../../../../tools/agent/foldLibraryTu.js";
 import { needsCompaction, requestCompaction } from "./context.ts";
 import { DEFAULT_CHECKPOINT_AT_TOKENS } from "./config.ts";
 import { CHECKPOINT_COMPACTION_INSTRUCTIONS, checkpointContinuation, type CheckpointSink, type CheckpointWatch } from "./checkpoint.ts";
@@ -325,6 +327,12 @@ async function clearContext(deps: LoopDeps, force = false): Promise<void> {
 /** The documentation role reads and writes notes; it has no solver tools. */
 export const DOCUMENTATION_TOOLS = ["read", "bash", "edit", "write"];
 
+/** Whether verified matches get the notes turn: configured on, and never for
+ * a library project, whose objects already name each function's unit. */
+function documentsMatches(deps: LoopDeps): boolean {
+  return deps.config.updateFileGroupings && recordsFileGroupings(deps.projectRoot);
+}
+
 /**
  * The one turn between a match and its commit: record grouping evidence.
  *
@@ -340,13 +348,14 @@ export const DOCUMENTATION_TOOLS = ["read", "bash", "edit", "write"];
  * a reply.
  */
 async function documentMatch(deps: LoopDeps, state: LoopState, functionName: string, completion: Completion): Promise<LoopState> {
-  /* Automatic acceptance must not spend a model turn on routine notes. Older
-     static completions may still carry pending documentation from prior runs. */
-  if (completion.origin === "static" && completion.documentation === "pending")
+  /* Automatic acceptance must not spend a model turn on routine notes, and a
+     disabled notes turn must not leave a pending item that resumes forever.
+     Older completions may still carry pending documentation from prior runs. */
+  if (completion.documentation === "pending" && (completion.origin === "static" || !documentsMatches(deps)))
     completion = { ...completion, documentation: "skipped", error: undefined };
   let current: LoopState = { ...state, completions: { ...state.completions, [functionName]: completion } };
   writeState(deps.config, current); /* durable completion BEFORE optional dispatch */
-  if (!deps.config.updateFileGroupings || completion.documentation !== "pending") return current;
+  if (completion.documentation !== "pending") return current;
   await clearContext(deps, true);
   setStatus(deps, `◎ ${functionName} · documentation`);
   let documentationModel: string | undefined;
@@ -376,6 +385,32 @@ async function documentMatch(deps: LoopDeps, state: LoopState, functionName: str
   writeState(deps.config, current);
   if (documented.documentation !== "passed") notify(deps, `${functionName} matched; documentation pending (resumes on the next loop run): ${documented.error ?? "disabled"}`, "warning");
   return current;
+}
+
+/**
+ * The one turn between a fold and its commit: make the folded module read like
+ * its original source. Like documentation, it is its own role on a cleared
+ * conversation with the documentation tools. Unlike documentation it edits a
+ * build input, so `runFoldCleanup` holds it to the module and re-runs the
+ * refinement gate; a failed cleanup leaves the verbatim fold in place.
+ */
+async function cleanFoldedMember(deps: LoopDeps, memberId: string): Promise<FoldCleanupOutcome> {
+  await clearContext(deps, true);
+  setStatus(deps, `◎ ${memberId} · fold cleanup`);
+  const savedTools = deps.pi.getActiveTools();
+  deps.pi.setActiveTools(DOCUMENTATION_TOOLS);
+  try {
+    return await runFoldCleanup({ projectRoot: deps.projectRoot, memberId, turn: async (message) => {
+      if (deps.flag.aborted) return "the loop was stopped before cleanup began";
+      if (!deps.ctx.model) return "no model was selected for cleanup";
+      if (!(await turn(deps, message))) return "the cleanup turn was interrupted (the loop was stopped, or a checkpoint compaction failed)";
+      const last = [...deps.ctx.sessionManager.getBranch()].reverse().find((e) => e.type === "message" && e.message.role === "assistant");
+      const stopReason = last?.type === "message" && last.message.role === "assistant" ? last.message.stopReason : undefined;
+      return stopReason === "stop" ? true : `the cleanup turn ended without a final reply (last stop reason: ${stopReason ?? "none"})`;
+    } });
+  } finally {
+    deps.pi.setActiveTools(savedTools);
+  }
 }
 
 /**
@@ -899,10 +934,26 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
        * whatever the user was doing when they started the loop. */
       if (index > 0) await clearContext(deps);
 
+      /* A folded module whose text has not passed cleanup is a work item of its
+         own, ahead of new targets, like pending documentation. */
+      const pendingCleanup = deps.config.autoFold && loadLibraryProject(deps.projectRoot)
+        ? pendingFoldCleanups(deps.projectRoot).find((member) => !skip.has(`fold-cleanup:${member.id}`)) : undefined;
+      if (pendingCleanup && !(index === 0 && options.firstTarget)) {
+        skip.add(`fold-cleanup:${pendingCleanup.id}`);
+        const cleaned = await cleanFoldedMember(deps, pendingCleanup.id);
+        if (cleaned.status !== "passed") notify(deps, `${pendingCleanup.id} stays a verbatim fold; cleanup resumes on a later run: ${cleaned.error}`, "warning");
+        else if (deps.config.commitOnMatch) {
+          const commit = await commitCleanedMember(deps.projectRoot, pendingCleanup.id, cleaned.changedFiles);
+          if (commit.failed) { notify(deps, `Loop stopped: ${pendingCleanup.id} was cleaned but not committed — ${commit.detail}`, "error"); break; }
+          if (commit.committed) notify(deps, `Committed cleanup of ${pendingCleanup.id} as ${commit.detail}`, "info");
+        }
+        continue;
+      }
+
       setStatus(deps, "↻ autoloop · selecting target");
       /* Pending notes from older runs are not a preparation work item. Keep
          them in state, but do not let them preempt a prep-led ladder. */
-      const pendingDocumentation = deps.config.ladder[0]?.role === "prep" ? undefined
+      const pendingDocumentation = deps.config.ladder[0]?.role === "prep" || !documentsMatches(deps) ? undefined
         : Object.entries(state.completions ?? {}).find(([name, c]) => c.documentation === "pending" && !skip.has(name))?.[0];
       const target = index === 0 && options.firstTarget
         ? options.firstTarget
@@ -939,6 +990,22 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
         } else {
           notify(deps, `Not committed: ${target} — ${commit.detail}`, "warning");
         }
+      }
+
+      /* A member whose last target just matched folds into one module. */
+      if (run.outcome.kind === "matched" && deps.config.autoFold && loadLibraryProject(deps.projectRoot)) {
+        setStatus(deps, `◎ ${target} · fold`);
+        const folded = await foldMatchedMember(deps.projectRoot, target);
+        if (folded.written) {
+          notify(deps, `Folded ${folded.memberId} into ${folded.module}`, "info");
+          const cleaned = await cleanFoldedMember(deps, folded.memberId);
+          if (cleaned.status === "passed") notify(deps, `Cleaned ${folded.memberId}${cleaned.changed ? "" : " (already read as source)"}`, "info");
+          else notify(deps, `${folded.memberId} stays a verbatim fold; cleanup resumes on a later run: ${cleaned.error}`, "warning");
+          if (deps.config.commitOnMatch) {
+            const commit = await commitFoldedMember(deps.projectRoot, folded.memberId, [folded.directory!]);
+            if (commit.failed) { notify(deps, `Loop stopped: ${folded.memberId} folded but was not committed — ${commit.detail}`, "error"); break; }
+          }
+        } else if (folded.error) notify(deps, `Fold of ${folded.memberId} not applied: ${folded.error}`, "warning");
       }
 
       /* A match already proved the build green inside the finalize gate; only a

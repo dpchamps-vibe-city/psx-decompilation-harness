@@ -18,7 +18,7 @@ export { configuredTool } from "../lib/toolchain.js";
 import { loadLibraryProject, libraryContext } from "../lib/project.js";
 import { requireLibraryFunction, libraryMemberById } from "../lib/libraryTargets.js";
 import { extractSignaturesFromSource } from "./sdkTypes.js";
-import { isDirectoryTu, libraryAssemblyDependencies, libraryAssemblyTu, libraryFunctionSource, libraryCompileInput, libraryDependencyInput, librarySourceFiles, type LibraryAssemblyTu } from "../lib/libraryTranslationUnit.js";
+import { isDirectoryTu, libraryAssemblyDependencies, libraryAssemblyInput, libraryAssemblyTu, libraryFunctionSource, libraryCompileInput, libraryDependencyInput, librarySourceFiles, type LibraryAssemblyTu } from "../lib/libraryTranslationUnit.js";
 export function productionCompileInput(source: string, output: string, context: FlagContext, stem = "", root = projectRoot()): string {
   if (context.kind !== "library" || !context.id || source.endsWith(".h")) return source;
   const member = libraryMemberById(context.id!, root);
@@ -538,7 +538,7 @@ export function compileSource(
     const planned = planAssemblyTranslationUnit(context, assemblyTu, absoluteSource, absoluteOutput, stem);
     if (assemblyTu.source.endsWith(".ASM")) {
       planned.preprocessed = planned.assembly = join(absoluteOutput, `${stem}.asm.s`);
-      runTool(configuredTool("cpp"), [...configuredAssemblyCppFlags(context), assemblyTu.source, "-o", planned.preprocessed]);
+      runTool(configuredTool("cpp"), [...configuredAssemblyCppFlags(context), libraryAssemblyInput(assemblyTu, absoluteOutput), "-o", planned.preprocessed]);
       if (!assemblyTu.part.backlog) assertAssemblySource(readFileSync(planned.preprocessed, "utf8"), planned.preprocessed, { sdkPlaceholders: configuredAssembler(context).postAssembly.includes("psyq-dmpsx") });
     }
     if (options.assemble) assemble(context, planned.assembly, planned.object!);
@@ -630,7 +630,7 @@ export async function compileSourceAsync(
     const planned = planAssemblyTranslationUnit(context, assemblyTu, absoluteSource, absoluteOutput, stem);
     if (assemblyTu.source.endsWith(".ASM")) {
       planned.preprocessed = planned.assembly = join(absoluteOutput, `${stem}.asm.s`);
-      await runToolAsync(configuredTool("cpp"), [...configuredAssemblyCppFlags(context), assemblyTu.source, "-o", planned.preprocessed], projectRoot(), options.signal);
+      await runToolAsync(configuredTool("cpp"), [...configuredAssemblyCppFlags(context), libraryAssemblyInput(assemblyTu, absoluteOutput), "-o", planned.preprocessed], projectRoot(), options.signal);
       if (!assemblyTu.part.backlog) assertAssemblySource(readFileSync(planned.preprocessed, "utf8"), planned.preprocessed, { sdkPlaceholders: configuredAssembler(context).postAssembly.includes("psyq-dmpsx") });
     }
     if (options.assemble) await assembleAsync(context, planned.assembly, planned.object!, projectRoot(), options.signal);

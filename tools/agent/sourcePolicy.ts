@@ -50,6 +50,11 @@ async function main(): Promise<void> {
     });
   const pending = new Set(pendingStubs);
   const scanFunctions = candidates.filter((name) => !pending.has(name));
+  /* Changed backlog files (a fresh split, a park, a reformed member) are the
+     same canonical extraction stubs: skipped like pending functions, audited by --final. */
+  const backlogFiles = new Set(finalAudit ? [] : changedFiles.filter(file => file.endsWith(".c") && existsSync(resolve(projectRoot(), file)) &&
+    isPendingStub(readFileSync(resolve(projectRoot(), file), "utf8"))));
+  const auditedPatch = patch.split(/(?=^diff --git )/m).filter(section => !backlogFiles.has(/^diff --git a\/(\S+)/.exec(section)?.[1] ?? "")).join("");
   const result = checkSourcePolicy({
     projectRoot: projectRoot(),
     config,
@@ -60,8 +65,8 @@ async function main(): Promise<void> {
     functionVrams: Object.fromEntries(graph.functions.map((candidate) => [candidate.name, candidate.vram])),
     functionContainers: Object.fromEntries(graph.functions.map((candidate) => [candidate.name, candidate.container])),
     functionSources: Object.fromEntries(sourceOf),
-    changedFiles,
-    patch,
+    changedFiles: changedFiles.filter(file => !backlogFiles.has(file)),
+    patch: auditedPatch,
   });
 
   /* Worker containment ("did this patch touch anything outside the integration

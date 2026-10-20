@@ -291,6 +291,10 @@ export function projectDeclarations(index: DeclarationIndex, names: Iterable<str
     } else definitions.push(d.text);
     tree.delete();
   }
-  return { text: [...new Set(forwards), ...new Set(definitions)].join("\n\n") + "\n",
+  /* A blank line separates declarations, so none is left inside one (a
+     preprocessed header struct keeps its source's blank lines). Consumers
+     merge and deduplicate projections at those separators. */
+  const compact = (text: string) => text.replace(/\n[ \t\r]*\n/g, "\n");
+  return { text: [...new Set(forwards), ...new Set(definitions.map(compact))].join("\n\n") + "\n",
     selected, unknown: [...unknown].sort(), excluded: index.declarations.filter((d) => !selected.includes(d)).map((d) => `${d.scope}:${d.name}`) };
 }

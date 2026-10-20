@@ -16,6 +16,8 @@ export interface CallSite {
   id: string; caller: string; at: number; effect: number; kind: "direct" | "indirect" | "tail";
   targets: string[]; closed: boolean; remainder: string[];
   args: Array<number | null>; results: number[]; through?: number; table?: string;
+  /** Relocated transfer (relocatable objects): the target named by the relocation, not an address. */
+  symbol?: { reference: string; addend: number };
 }
 export interface Summary {
   id: string; name: string; container: string; report: MachineIrReport;

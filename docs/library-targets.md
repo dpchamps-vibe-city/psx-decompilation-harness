@@ -30,6 +30,11 @@ inputs and headers:
 - `headers.context`: selected **include spellings**, e.g. `libcd.h`, not directory
   paths. They are included in fresh scaffolds and m2c context; include the scalar
   aliases used by m2c (e.g. `common.h`). Select headers for the actual target; the example's CD header is not a universal library umbrella.
+- `headers.requires`: reference headers, by include spelling, that rely on their
+  includer having included others first, e.g. `"libgs.h": ["sys/types.h",
+  "libgte.h", "libgpu.h"]`. Preparation adds the reference headers that declare
+  the target, the member's imports and the types its constraints carry (see
+  below), each after the headers it requires.
 - `output.sourceDir`: directory under `src/`, default `src/libraries`.
 - `output.sourceLayout: "tu-directory"`: the library scaffold's recommended
   organization. Input directories (or archive stem/ordinal) name a TU directory;
@@ -404,7 +409,30 @@ separates this single-function assignment from the whole-member oracle: neighbor
 and shared storage are context, not additional decompilation assignments. Mutable
 initializers remain in the data fragment rather than being emitted in the draft.
 Existing real C and edited build drafts are preserved; raw m2c output/diagnostics
-survive failure. Automatic staging accepts generated C but may replace only an
+survive failure.
+
+Before m2c runs, preparation applies the image path's original-code type
+inference to the library. The evidence graph is linked by relocations rather
+than addresses: a relocated `jal` is a direct call to the function its
+relocation names (in this or another member), an unresolved import is a
+contract by name (`extern:NAME`), and relocated storage is identified across
+members by its defining member and offset. Seeds are a reference-header
+prototype for an exported function, never a private helper of the same name,
+or the clean C of a function whose member verifies. Propagation's partial
+word-slot constraints reach m2c as `--graph-constraints` keyed by the names its
+listing uses (the member's functions, and other members' functions only through
+an import). The m2c context and draft gain the reference headers declaring the
+target, the member's imports and constrained types; other members' verified
+contracts are projected with their private types renamed. A function declared
+in the context gets no partial constraint: the declaration is its contract.
+The draft's definition of an exported target spells its reference
+declaration's types (m2c prints `long` as `s32`, which cc1 rejects as
+conflicting). A callee the declared target calls with fewer arguments than the
+callee reads (an old-style call, made with no prototype in scope) gets no
+constraint and an unprototyped declaration in the draft. The packet records the
+graph, propagation report and constraints (`discovery.propagation`); conflicts
+and the target's unresolved slots are unknowns. A failed analysis is recorded
+and preparation continues with the plain context. Automatic staging accepts generated C but may replace only an
 unchanged, committed exclusive function stub. A fresh, exact prepared result is staged and finalized
 through the normal whole-TU route before any matching-model dispatch, including
 prep-led ladders. Refreshed prep results receive the same shortcut. Source policy,

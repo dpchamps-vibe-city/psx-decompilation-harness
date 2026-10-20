@@ -10,7 +10,9 @@ export const PROJECT_FILE = "project.json";
 export interface LibraryProject {
   schemaVersion: 1;
   target: { kind: "relocatable-library"; format: "elf-ar" | "psyq-lib"; archives: string[]; standaloneObjects: string[] };
-  headers: { reference: string[]; owned: string[]; context: string[] };
+  /** `requires`: reference headers (by include name) that rely on their includer
+   * having included others first, as the SDK's own sources do. */
+  headers: { reference: string[]; owned: string[]; context: string[]; requires?: Record<string, string[]> };
   selection: { scope: "all-code-members" };
   verification: { mode: "relocatable-object" | "original-object"; originals?: { format: "psyq-lnk"; archives: string[]; objects: string[]; map: Record<string, { archive: string; ordinal: number } | { object: string }> } };
   views?: { elf: Record<string, string> };
@@ -58,8 +60,12 @@ function validateLibraryProject(p: any, root: string): LibraryProject | null {
   p.target.archives ??= []; p.target.standaloneObjects ??= [];
   paths(p.target.archives, "target.archives"); paths(p.target.standaloneObjects, "target.standaloneObjects");
   if (!p.target.archives.length && !p.target.standaloneObjects.length) throw new Error(`${PROJECT_FILE}: no target inputs configured`);
-  p.headers ??= {}; object(p.headers, ["reference", "owned", "context"], "headers");
+  p.headers ??= {}; object(p.headers, ["reference", "owned", "context", "requires"], "headers");
   for (const role of ["reference", "owned", "context"]) { p.headers[role] ??= []; paths(p.headers[role], `headers.${role}`); }
+  if (p.headers.requires !== undefined) {
+    object(p.headers.requires, undefined, "headers.requires");
+    for (const [header, prior] of Object.entries(p.headers.requires)) paths([header, ...(prior as unknown[])], `headers.requires.${header}`);
+  }
   if ([...p.headers.reference, ...p.headers.owned].some(s => /[*?\[]/.test(s))) throw new Error(`${PROJECT_FILE}: header roles name directories, not globs`);
   for (const a of p.headers.reference) for (const b of p.headers.owned) {
     if (a === b || a.startsWith(b + "/") || b.startsWith(a + "/")) throw new Error(`${PROJECT_FILE}: reference and owned headers overlap`);

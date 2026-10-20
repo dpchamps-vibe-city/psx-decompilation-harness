@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join, relative, resolve } from "node:path";
 import { configuredCompilerAnalysis, configuredFileFlags, configuredFlags, configuredProfile, configuredTool, toolchainExecutables, type FlagContext } from "../lib/toolchain.js";
 import { libraryContext, loadLibraryProject, libraryInputFiles } from "../lib/project.js";
-import { compareLibraryObjects, libraryInventory, libraryObjectInputs, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, withLibraryMetadata, type LibraryMember } from "../lib/libraryTargets.js";
+import { compareLibraryObjects, libraryInventory, libraryMemberById, libraryObjectInputs, libraryMembers, libraryTargetKey, materializeOriginal, requireLibraryFunction, resolveLibraryCall, withLibraryMetadata, type LibraryMember } from "../lib/libraryTargets.js";
 import { compareRelocatableObjects, readRelocatableObject, renderObjectResidual, type ObjectComparison } from "../lib/relocatableObject.js";
 import { compareRelocatableFunction } from "../lib/relocatableFunctionOracle.js";
 import { libraryDisassemblySymbols, validateLibraryDisassembly } from "../lib/libraryDisassembly.js";
@@ -32,8 +32,9 @@ import { extractSignaturesFromSource } from "./sdkTypes.js";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { preservedAttempt } from "./cSourceAnalysis.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
+import { alignDefinition, analyzeLibraryTypes, indexPreprocessed, inferenceDeclarations, unprototypeDeclarations, type LibraryTypeAnalysis } from "./libraryInference.js";
 import { prepareM2c } from "../build/prepareM2c.js";
-import { packetOpening, packetEvidence, type PreparationPacket } from "./campaign/packet.js";
+import { packetOpening, packetEvidence, type PreparationPacket, type UnknownFact } from "./campaign/packet.js";
 import { detectFunctionMacroIdentity } from "../diagnostics/macroIdentity.js";
 import { sourceConstructFindings } from "../../.pi/extensions/shared/source-policy.js";
 import { loadConfig } from "../../.pi/extensions/shared/config.js";
@@ -572,7 +573,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
       const previous = JSON.parse(readFileSync(latest, "utf8")) as { draft: string; destination?: string; generationContract?: string; boundaryIdentity?: string };
       const text = readFileSync(resolve(root, previous.draft), "utf8");
       if (isDirectoryTu(member)) {
-        if (previous.destination !== target.source || previous.generationContract !== "directory-tu-selected-related-v3" || previous.boundaryIdentity !== boundaryIdentity || inspectLibraryPart(text, { path: `${fn.name}.c`, symbol: fn.name }).stub) throw new Error("Prior draft belongs to a different source boundary");
+        if (previous.destination !== target.source || previous.generationContract !== "directory-tu-selected-related-v4" || previous.boundaryIdentity !== boundaryIdentity || inspectLibraryPart(text, { path: `${fn.name}.c`, symbol: fn.name }).stub) throw new Error("Prior draft belongs to a different source boundary");
       }
       retained = { origin: "m2c", path: previous.draft, text, sha256: digest(text), declarationsRequired: [] };
     } catch { /* No prior draft. Failed/empty generation never publishes this pointer. */ }
@@ -623,6 +624,39 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
     }
     if (!packet.primary) {
       const m2c = prepareM2c(root);
+      /* The image path's original-code type inference, linked by relocations.
+         Its partial constraints, and the reference headers declaring what the
+         member names, reach m2c; a failed analysis leaves the plain context. */
+      const constraintsPath = join(directory, "inference.json");
+      let analysis: LibraryTypeAnalysis | undefined;
+      try {
+        const verified = new Map<string, boolean>();
+        analysis = analyzeLibraryTypes(member, key, id => verified.get(id) ?? verified.set(id, verifiedLibraryMembers([libraryMemberById(id, root)], root).get(id) ?? false).get(id)!, options.signal);
+        const graphPath = join(directory, "type-graph.json"), propagationPath = join(directory, "propagation.json");
+        writeFileSync(graphPath, JSON.stringify(analysis.graph, null, 2));
+        writeFileSync(propagationPath, JSON.stringify({ ...analysis.propagation, seeds: analysis.seeds }, null, 2));
+        packet.discovery.propagation = { graph: relative(root, graphPath), report: relative(root, propagationPath), input: relative(root, constraintsPath),
+          graphComplete: analysis.graph.indexComplete && !analysis.graph.frontier.length, convergence: analysis.propagation.status,
+          visited: analysis.graph.nodes.length, facts: analysis.propagation.facts.length, steps: analysis.propagation.steps };
+        const inference = (subject: string, missing: string, evidence: string[], strength: UnknownFact["strength"], stoppedBecause: string) => packet.discovery.unknowns.push({
+          subject, strength, constraints: [], evidence, missing, attempted: "relocation-linked original-code type propagation",
+          bound: `${analysis!.graph.nodes.length}/${analysis!.graph.bounds.functions} original functions; ${analysis!.propagation.steps}/${analysis!.graph.bounds.propagationSteps} propagation steps`,
+          stoppedBecause, inspectNext: [relative(root, propagationPath)] });
+        for (const conflict of analysis.propagation.conflicts) inference(conflict.endpoint,
+          "incompatible uncast type-use representations; a conversion or separate storage view is required, not a blanket source-type equality",
+          [relative(root, propagationPath), ...conflict.facts], "conditional", "conflict");
+        for (const unresolved of analysis.propagation.unresolved.filter(u => u.node === analysis!.graph.root))
+          inference(`${unresolved.node}:ABI ${unresolved.slot}`, unresolved.reason, [relative(root, propagationPath), relative(root, graphPath)],
+            unresolved.outcome === "unsupported" ? "unsupported" : "unknown", unresolved.outcome);
+        analysis.headers = analysis.headers.filter(h => !p.headers.context.includes(h));
+        packet.context.headers = [...p.headers.context, ...analysis.headers];
+      } catch (error) {
+        analysis = undefined;
+        packet.discovery.unknowns.push({ subject: key, strength: "unknown", constraints: [], evidence: [member.assembly], missing: String(error),
+          attempted: "relocation-linked original-code type propagation", bound: "one library function", stoppedBecause: "analysis failed", inspectNext: [relative(root, directory)] });
+      }
+      const includes = [...p.headers.context.map(h => `#include "${h}"`), ...(analysis?.headers ?? []).map(h => `#include <${h}>`)].join("\n") + "\n";
+      writeFileSync(context, includes + (options.contextFile ? readFileSync(resolve(root, options.contextFile), "utf8") : ""));
       // Source/patch content identity lives in the component witness, not an installation-path input.
       const cpp = await recordedCommand(configuredTool("cpp", root), [...configuredFlags("cpp", flagContext, root), context, "-o", join(directory, "context.i")], root, directory, "context-cpp", options.signal);
       packet.discovery.preflight.push(cpp);
@@ -630,7 +664,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
       // A directory TU drafts only this function. Its neighbors and data stay
       // in the ordinary production compile driver, not in the solver's draft.
       const index = emptyDeclarationIndex();
-      indexDeclarations(index, readFileSync(join(directory, "context.i"), "utf8"), relative(root, context), member.id, "public-header");
+      indexPreprocessed(index, readFileSync(join(directory, "context.i"), "utf8"), member.id);
       for (const path of [target.context.types, target.context.functions]) if (existsSync(join(root, path)))
         indexDeclarations(index, readFileSync(join(root, path), "utf8"), path, member.id, "source-local");
       if (isDirectoryTu(member)) {
@@ -646,8 +680,16 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
         });
       const roots = [...(isDirectoryTu(member) ? [fn.name, ...callees, ...index.declarations.filter(d => d.visibility === "source-local" && d.kind === "object").map(d => d.name)] : member.functions.map(fn => fn.name)), ...member.object.symbols.filter(s => s.binding !== 0 && s.name && !s.name.endsWith(".NON_MATCHING")).map(s => s.name)];
       const projection = projectDeclarations(index, roots, member.id), projectedPath = join(directory, "m2c.ctx");
-      writeFileSync(projectedPath, projection.text);
-      packet.context = { ...packet.context, index, projection: relative(root, projectedPath), excluded: projection.excluded, unknown: projection.unknown };
+      const declarations = analysis ? inferenceDeclarations(analysis, index, relative(root, constraintsPath)) : { callees: [], wrapperTypes: [], carriers: [], unknown: [] };
+      writeFileSync(projectedPath, [...new Set([projection.text, ...declarations.wrapperTypes, ...declarations.callees, ...declarations.carriers].flatMap(t => t.split(/\n\n/)))].join("\n\n"));
+      if (analysis) {
+        /* A declaration in m2c's context is the complete contract, as for a
+           seeded node; a partial constraint beside it only contradicts it. */
+        const declared = new Set(projection.selected.filter(d => d.kind === "function").map(d => d.name));
+        for (const name of Object.keys(analysis.constraints.functions)) if (declared.has(name)) delete analysis.constraints.functions[name];
+        writeFileSync(constraintsPath, JSON.stringify(analysis.constraints, null, 2));
+      }
+      packet.context = { ...packet.context, index, projection: relative(root, projectedPath), excluded: projection.excluded, unknown: [...projection.unknown, ...declarations.unknown] };
       let m2cAssembly = assembly;
       if (isDirectoryTu(member)) {
         // Mutable storage belongs to the TU data part, not to this function
@@ -664,12 +706,18 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
         }).join("\n"));
       }
       const command = await recordedCommand(configuredTool("python", root), [m2c.script, ...configuredFlags("m2c", flagContext, root), "--no-cache", "--context", projectedPath,
-        m2cAssembly, ...(isDirectoryTu(member) ? ["--infer-related", "-f", fn.name] : [])], root, directory, "m2c", options.signal);
+        m2cAssembly, ...(isDirectoryTu(member) ? ["--infer-related", "-f", fn.name] : []),
+        ...(analysis ? ["--passes", "4", "--graph-constraints", constraintsPath] : [])], root, directory, "m2c", options.signal);
       packet.generation.command = command; packet.generation.raw = relative(root, command.stdout); packet.generation.rawHash = hashFile(command.stdout);
-      const raw = readFileSync(command.stdout, "utf8");
+      let raw = readFileSync(command.stdout, "utf8");
       packet.generation.status = command.status === 0 && !raw.includes("Decompilation failure:") ? "generated" : "failed";
       if (packet.generation.status !== "generated") throw new Error(commandText(command));
-      const text = p.headers.context.map(h => `#include "${h}"`).join("\n") + "\n\n" + raw;
+      if (analysis?.declaration) raw = alignDefinition(raw, analysis.declaration);
+      if (analysis) raw = unprototypeDeclarations(raw, analysis.unprototyped);
+      /* Carriers stay in m2c's context; foreign contracts and their renamed
+         private types are declarations the draft itself needs. */
+      const wrapper = [...new Set([...declarations.wrapperTypes, ...declarations.callees])].filter(Boolean).join("\n");
+      const text = includes + "\n" + (wrapper ? wrapper + "\n\n" : "") + raw;
       const draft = join(directory, "draft.c"); writeFileSync(draft, text);
       packet.primary = { origin: "m2c", path: relative(root, draft), sha256: digest(text), text,
         declarationsRequired: projection.selected.filter(d => d.kind === "type" && d.visibility === "source-local") }; packet.generation.draftHash = digest(text);
@@ -724,7 +772,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   packet.preparationState = "complete";
   packet.identity.fingerprint = digest(JSON.stringify({ inputs, memberships }));
   if (!options.alternative && packet.primary?.origin === "m2c" && packet.compilation.status === "succeeded")
-    writeFileSync(latest, JSON.stringify({ draft: packet.primary.path, destination: target.source, generationContract: "directory-tu-selected-related-v3", boundaryIdentity }) + "\n");
+    writeFileSync(latest, JSON.stringify({ draft: packet.primary.path, destination: target.source, generationContract: "directory-tu-selected-related-v4", boundaryIdentity }) + "\n");
   const path = relative(root, join(directory, "packet.json"));
   writeFileSync(join(root, path), JSON.stringify(packet, null, 2) + "\n");
   writeFileSync(join(directory, "handoff.md"), packetOpening(packet, path)); writeFileSync(join(directory, "evidence.md"), packetEvidence(packet)); writeFileSync(join(directory, "diagnostics.txt"), packet.compilation.diagnostics);

@@ -15,6 +15,8 @@ import { planPark } from "../../.pi/extensions/psx-decomp/autoloop/park.js";
 import { eligible } from "../../.pi/extensions/shared/call-graph.js";
 import { preflightLibraryFunction, checkLibrarySplits } from "./libraryPreflight.js";
 import { classifyLibraryCode } from "./libraryCodeClass.js";
+import { analyzeLibraryTypes } from "./libraryInference.js";
+import { seedOracle } from "./type-propagation/seeds.js";
 
 /** Synthetic SDK-style mixed member: one size-zero export, two unnamed private
  * callees, an old BIOS veneer and data. No proprietary SDK/game bytes. */
@@ -172,6 +174,31 @@ test("end-to-end: configured headers, relocation-aware splits, production C subs
   });
 });
 
+test("library preparation propagates types over relocation-linked original code and hands m2c the constraints", async t => {
+  const f = fixture(t);
+  await fixtureContext(f.root, async () => {
+    const { member, key } = f.create();
+    splitLibrary();
+    const helpers = member.functions.slice(1).map(fn => libraryTargetKey(member, fn.name));
+    const analysis = analyzeLibraryTypes(member, key, () => false);
+    const root = analysis.graph.nodes.find(n => n.id === analysis.graph.root)!;
+    assert.equal(analysis.graph.root, `${member.id}:${key}`);
+    assert.deepEqual(root.calls.map(c => [c.kind, c.closed, c.targets]).sort(), helpers.map(h => ["direct", true, [`${member.id}:${h}`]]).sort(),
+      "a relocated jal is a direct, closed call to the function its relocation names");
+    assert.ok(helpers.every(h => analysis.graph.nodes.some(n => n.name === h)), "callees are summarized from their original code");
+    const seeds = seedOracle("", [key], undefined, { verified: () => false });
+    assert.equal(seeds.get(key), undefined, "the target never seeds itself");
+    const exported = seedOracle("", [], undefined, { verified: () => false });
+    assert.equal(exported.get(key)?.where, "sdk/include/api.h", "an exported function takes the reference header's contract");
+    assert.equal(exported.get(helpers[0]!), undefined, "a private helper never borrows a header declaration of its name");
+    const prepared = await prepareLibraryFunction(key);
+    assert.equal(prepared.packet.discovery.propagation?.convergence, "fixed-point");
+    assert.ok(prepared.packet.generation.command!.args.includes("--graph-constraints"), "m2c receives the propagated constraints");
+    assert.equal(JSON.parse(readFileSync(join(f.root, prepared.packet.discovery.propagation!.input), "utf8")).version, 1);
+    assert.deepEqual(prepared.packet.context.headers, ["common.h", "api.h"], "a configured context header is not included twice");
+  });
+});
+
 test("end-to-end: address-only callbacks split and migrate into individual files before one-function preparation", async t => {
   const f = fixture(t, true);
   await fixtureContext(f.root, async () => {
@@ -204,7 +231,7 @@ test("end-to-end: address-only callbacks split and migrate into individual files
     writeFileSync(oldDraft, stale);
     // A draft produced for the former compound extent must not be inherited
     // merely because its destination and one top-level signature still match.
-    for (const generationContract of ["directory-tu-selected-related-v2", "directory-tu-selected-related-v3"]) {
+    for (const generationContract of ["directory-tu-selected-related-v2", "directory-tu-selected-related-v3", "directory-tu-selected-related-v4"]) {
       writeFileSync(latest, JSON.stringify({ draft: "obsolete.c", destination: join(dirname(member.source), "entry.c"), generationContract, boundaryIdentity: "obsolete" }));
       const fresh = await prepareLibraryFunction(key);
       assert.notEqual(fresh.packet.primary!.path, "obsolete.c");
@@ -212,7 +239,7 @@ test("end-to-end: address-only callbacks split and migrate into individual files
       assert.equal(readFileSync(oldDraft, "utf8"), stale, "stale draft evidence is preserved, not overwritten");
     }
     const recorded = JSON.parse(readFileSync(latest, "utf8"));
-    assert.equal(recorded.generationContract, "directory-tu-selected-related-v3");
+    assert.equal(recorded.generationContract, "directory-tu-selected-related-v4");
     assert.equal(typeof recorded.boundaryIdentity, "string");
     assert.notEqual(recorded.boundaryIdentity, "obsolete");
     const retained = join(f.root, "retained.c"), retainedText = readFileSync(join(f.root, recorded.draft), "utf8") + "\n/* keep this measured draft */\n";

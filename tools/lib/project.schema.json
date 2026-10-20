@@ -35,7 +35,11 @@
       "properties": {
         "reference": { "$ref": "#/$defs/paths", "description": "Immutable reference header directories; must not overlap owned directories." },
         "owned": { "$ref": "#/$defs/paths", "description": "Project-owned declaration/type directories." },
-        "context": { "$ref": "#/$defs/paths", "description": "Include spellings for source scaffolds and m2c context, resolved through toolchain includeDirs." }
+        "context": { "$ref": "#/$defs/paths", "description": "Include spellings for source scaffolds and m2c context, resolved through toolchain includeDirs." },
+        "requires": {
+          "type": "object", "additionalProperties": { "$ref": "#/$defs/paths" },
+          "description": "Reference headers, by include spelling, that rely on their includer having included the listed headers first. Preparation includes those first when it includes the header."
+        }
       }
     },
     "selection": {

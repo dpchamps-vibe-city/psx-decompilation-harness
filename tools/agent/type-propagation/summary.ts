@@ -8,6 +8,8 @@ export function baseBias(report: MachineIrReport, value: number, active = new Se
   const op = report.ir.values[value]?.op;
   const next = new Set(active).add(value);
   if (op?.kind === "const") return { base: "absolute", bias: op.value >>> 0 };
+  /* A relocated address has no absolute value; its relocation reference is the base. */
+  if (op?.kind === "symbol" && (op.part === "address" || op.part === "gp-relative")) return { base: `symbol:${op.reference}`, bias: op.addend };
   if (op?.kind === "entry") return { base: `entry:${op.register}`, bias: 0 };
   if (op?.kind === "binary" && (op.op === "add" || op.op === "sub")) {
     const right = report.ir.values[op.right]?.op;
@@ -121,18 +123,22 @@ export function localSummary(report: MachineIrReport): { summary: Summary; relat
       }
     }
     return { id: `${id}:call:${effect.vram}`, caller: id, at: effect.vram, effect: effect.id,
-      kind: effect.op.target === undefined ? "indirect" : "direct", targets: [], closed: false, remainder: [], args,
+      kind: effect.op.target === undefined && !effect.op.targetSymbol ? "indirect" : "direct", targets: [], closed: false, remainder: [], args,
       results: report.ir.values.filter((v) => v.op.kind === "call-result" && v.op.effect === effect.id && v.op.register === "v0").map((v) => v.id),
-      ...(effect.op.through === undefined ? {} : { through: effect.op.through }) };
+      ...(effect.op.through === undefined ? {} : { through: effect.op.through }),
+      ...(effect.op.targetSymbol ? { symbol: { ...effect.op.targetSymbol } } : {}) };
   });
   /* External j is a tail transfer, not an intra-function jump. Indirect jr is
-     handled by the graph as unresolved rather than silently classified as ra. */
+     handled by the graph as unresolved rather than silently classified as ra.
+     A relocated j to an import has no section offset, only its relocation. */
   for (const block of report.ir.cfg.blocks) {
     const instruction = block.terminatorIndex === undefined ? undefined : report.ir.cfg.insns[block.terminatorIndex];
-    if (!instruction || instruction.op !== "j" || instruction.target === undefined ||
-      (instruction.target >= report.vram && instruction.target < report.vram + report.sizeBytes)) continue;
+    if (!instruction || instruction.op !== "j") continue;
+    const relocation = instruction.relocations?.find((r) => r.type === "R_MIPS_26");
+    if (instruction.target === undefined ? !relocation : instruction.target >= report.vram && instruction.target < report.vram + report.sizeBytes) continue;
     calls.push({ id: `${id}:tail:${instruction.vram}`, caller: id, at: instruction.vram, effect: -1, kind: "tail",
-      targets: [], closed: false, remainder: [], args: [4, 5, 6, 7].map((r) => report.ir.blockOut[block.index * REGISTER_COUNT + r] ?? null), results: [] });
+      targets: [], closed: false, remainder: [], args: [4, 5, 6, 7].map((r) => report.ir.blockOut[block.index * REGISTER_COUNT + r] ?? null), results: [],
+      ...(relocation ? { symbol: { reference: relocation.reference, addend: relocation.addend } } : {}) });
   }
   const returns = report.ir.blockExit.flatMap((exit, block) => {
     const b = report.ir.cfg.blocks[block]!;

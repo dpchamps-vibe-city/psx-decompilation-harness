@@ -16,8 +16,9 @@ import { compareRelocatableFunction } from "../lib/relocatableFunctionOracle.js"
 import { libraryDisassemblySymbols, validateLibraryDisassembly } from "../lib/libraryDisassembly.js";
 import { libraryAssemblyParts, libraryAssemblyInputs, libraryMemberOrigin, librarySourceScaffold, writeLibraryAssemblyParts } from "../lib/libraryAssembly.js";
 import { migrateLibrarySources, writeLibraryTu } from "./librarySources.js";
-import { isDirectoryTu, isLibraryGeneratedSymbol, inspectLibraryPart, libraryAssemblyTu, libraryFunctionSource, libraryGeneratedFunction, libraryModulePart, libraryOriginalSha256, librarySourceFiles, libraryTuStatus, readLibraryTu, type LibraryTuForm, type LibraryTuManifest, type LibraryTuPartStatus } from "../lib/libraryTranslationUnit.js";
+import { isAssemblyPart, isDirectoryTu, isLibraryDataSymbol, isLibraryGeneratedSymbol, isModulePart, inspectLibraryPart, libraryAssemblyTu, libraryFunctionSource, libraryGeneratedFunction, libraryModulePart, libraryOriginalSha256, librarySourceFiles, libraryTuStatus, readLibraryTu, type LibraryTuForm, type LibraryTuManifest, type LibraryTuPartStatus } from "../lib/libraryTranslationUnit.js";
 import { classifyLibraryCode } from "./libraryCodeClass.js";
+import { libraryRodataLayout, libraryRodataPartPath } from "../lib/libraryRodata.js";
 import { libraryDataObjects, lnkSymbolOrder, m2cGlobalDefinitions, renderDataDraft, renderSymbolOrder } from "./libraryFinishing.js";
 import { retainHandwrittenAssembly } from "./retainHandwrittenAssembly.js";
 import { libraryFunctionTarget } from "../lib/targetAdapter.js";
@@ -285,16 +286,17 @@ function writeLibraryGraphScoped(members: LibraryMember[], root: string) {
   mkdirSync(join(root, "build"), { recursive: true }); writeFileSync(join(root, "build/callGraph.json"), JSON.stringify(graph, null, 2) + "\n");
   return graph;
 }
-/** Member-finishing targets: the generated data part once every function is C
- * or retained, then the symbol-order part once the data is C too. Data-only
- * members are ready at once. They have no code extent; the whole member is the oracle. */
+/** Member-finishing targets: each generated data part (the member data and the
+ * .rdata in front of each switch table) once every function is C or retained,
+ * then the symbol-order part once the data is C too. Data-only members are
+ * ready at once. They have no code extent; the whole member is the oracle. */
 function libraryFinishingEntries(member: LibraryMember, form: LibraryTuForm, status: Map<string | undefined, LibraryTuPartStatus> | undefined, root: string) {
   if (form !== "c" || !status) return [];
   const functionsDone = member.functions.every(fn => { const part = status.get(fn.name); return part && (!part.stub || part.retained); });
-  const data = status.get("__library_member_data"), symbols = status.get("__library_member_symbols");
+  const data = [...status.values()].filter(p => isLibraryDataSymbol(p.symbol)), symbols = status.get("__library_member_symbols");
   const ready = [
-    ...(functionsDone && data?.stub ? ["__library_member_data" as const] : []),
-    ...(functionsDone && symbols?.stub && !data?.stub ? ["__library_member_symbols" as const] : []),
+    ...(functionsDone ? data.filter(p => p.stub).map(p => p.symbol!) : []),
+    ...(functionsDone && symbols?.stub && data.every(p => !p.stub) ? ["__library_member_symbols"] : []),
   ];
   return ready.map(symbol => {
     const fn = libraryGeneratedFunction(symbol), target = libraryFunctionTarget(member, fn, root);
@@ -331,6 +333,33 @@ export function applyRetainedFlags(members: LibraryMember[], root: string): numb
   if (plan.errors.length) throw new Error(`C sources for hand-written functions:\n${plan.errors.join("\n")}`);
   for (const { member, manifest } of plan.changes) writeFileSync(join(root, member.source), JSON.stringify(manifest, null, 2) + "\n");
   return plan.changes.length;
+}
+/** A C member whose data is still extraction gets the part holding the .rdata
+ * in front of each switch table, placed before the table's owner. When its
+ * switch tables were all the data it had, its data stub goes: a fresh split
+ * would not write one. */
+export function ensureRodataParts(member: LibraryMember, parts: ReturnType<typeof libraryAssemblyParts>, root: string): void {
+  const path = join(root, member.source);
+  if (!isDirectoryTu(member) || !existsSync(path)) return;
+  const manifest = JSON.parse(readFileSync(path, "utf8")) as LibraryTuManifest, directory = dirname(path);
+  if (manifest.parts.some(p => isAssemblyPart(p) || isModulePart(p))) return;
+  const data = manifest.parts.find(p => p.symbol === "__library_member_data");
+  if (!data || !inspectLibraryPart(readFileSync(join(directory, data.path), "utf8"), data).stub) return;
+  const emptied = libraryRodataLayout(member).tables.length > 0 && !parts.some(p => p.symbol === "__library_member_data");
+  let changed = emptied;
+  if (emptied) manifest.parts.splice(manifest.parts.indexOf(data), 1);
+  for (const segment of libraryRodataLayout(member).segments) {
+    if (!parts.some(p => p.symbol === segment.symbol) || manifest.parts.some(p => p.symbol === segment.symbol)) continue;
+    const owner = manifest.parts.findIndex(p => p.symbol === segment.owner);
+    if (owner < 0) throw new Error(`${member.id}: switch table owner ${segment.owner} is not a part of ${member.source}`);
+    const file = libraryRodataPartPath(segment.symbol), text = `INCLUDE_ASM("build/libraries/nonmatchings/${member.id}", ${segment.symbol});\n`;
+    if (existsSync(join(directory, file)) && readFileSync(join(directory, file), "utf8") !== text) throw new Error(`${member.id}: ${file} exists outside the manifest; no edits made`);
+    writeFileSync(join(directory, file), text);
+    manifest.parts.splice(owner, 0, { path: file, symbol: segment.symbol });
+    changed = true;
+  }
+  if (changed) writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+  if (emptied) rmSync(join(directory, data.path));
 }
 /** A C member's ordered symbol declarations, while any part is still extraction. */
 export function ensureSymbolsPart(member: LibraryMember, parts: ReturnType<typeof libraryAssemblyParts>, root: string): void {
@@ -380,6 +409,7 @@ export function splitLibrary(root = projectRoot()): void {
       if (isDirectoryTu(member)) writeLibraryTu(member, librarySourceScaffold(member, project.headers.context, parts), root);
       else { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, librarySourceScaffold(member, project.headers.context, parts)); }
     }
+    ensureRodataParts(member, parts, root);
     ensureSymbolsPart(member, parts, root);
   }
   // An assembly-origin member's backlog becomes its verbatim retained extraction
@@ -512,12 +542,12 @@ function recordedMatch(member: LibraryMember, identity: string, key: string, roo
     return record.verdict === "match" && record.identityVersion === 3 && record.identity === identity && record.verificationKey === key;
   } catch { return false; }
 }
-/** A C draft of the member's data: m2c's global definitions over the whole
- * member listing, headed by the original objects' sections, sizes and linkage. */
-async function libraryDataDraft(member: LibraryMember, root: string, directory: string, m2cFlags: string[], headers: string[], packet: PreparationPacket, signal?: AbortSignal): Promise<string> {
+/** A C draft of one generated data part: m2c's global definitions over the
+ * whole member listing, headed by the part's original sections, sizes and linkage. */
+async function libraryDataDraft(member: LibraryMember, symbol: string, root: string, directory: string, m2cFlags: string[], headers: string[], packet: PreparationPacket, signal?: AbortSignal): Promise<string> {
   const command = await recordedCommand(configuredTool("python", root), [prepareM2c(root).script, ...m2cFlags, "--no-cache", "--globals=all", join(root, member.assembly)], root, directory, "m2c", signal);
   packet.generation.command = command; packet.generation.raw = relative(root, command.stdout); packet.generation.rawHash = hashFile(command.stdout);
-  const listing = ["ASM", "s"].map(ext => `build/libraries/nonmatchings/${member.id}/__library_member_data.${ext}`).find(path => existsSync(join(root, path)));
+  const listing = ["ASM", "s"].map(ext => `build/libraries/nonmatchings/${member.id}/${symbol}.${ext}`).find(path => existsSync(join(root, path)));
   const objects = listing ? libraryDataObjects(readFileSync(join(root, listing), "utf8")) : [];
   return renderDataDraft(headers, objects, command.status === 0 ? m2cGlobalDefinitions(readFileSync(command.stdout, "utf8")) : [], listing ?? "the member's data listing");
 }
@@ -585,7 +615,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   try {
     if (!packet.primary && fn.generated) {
       const draft = join(directory, "draft.c"), text = fn.generated === "data"
-        ? await libraryDataDraft(member, root, directory, configuredFlags("m2c", flagContext, root), p.headers.context, packet, options.signal)
+        ? await libraryDataDraft(member, fn.name, root, directory, configuredFlags("m2c", flagContext, root), p.headers.context, packet, options.signal)
         : "/* Symbol IDs now come from the C itself: definitions, statics and first external references, in source order. */\n";
       writeFileSync(draft, text);
       packet.primary = { origin: "generated-part", path: relative(root, draft), sha256: digest(text), text, declarationsRequired: [] };

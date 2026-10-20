@@ -8,7 +8,7 @@ import { Timings } from "../../../../tools/lib/contentCache.js";
 import type { ExportResult } from "../../../../tools/agent/contextExport.js";
 import { loadLibraryProject } from "../../../../tools/lib/project.js";
 import { libraryMembers, libraryTargetKey, requireLibraryFunction, scopedLibraryMembers, withLibraryMetadata } from "../../../../tools/lib/libraryTargets.js";
-import { LIBRARY_GENERATED_PARTS, libraryFunctionSource, libraryMembersOwning } from "../../../../tools/lib/libraryTranslationUnit.js";
+import { libraryFunctionSource, libraryGeneratedSymbols, libraryMembersOwning } from "../../../../tools/lib/libraryTranslationUnit.js";
 import { compilerInputs, consumeReceipt, contextIsCompilerIndependent, publishReceipt, verificationOutputs } from "./verification-receipt.ts";
 import { libraryReceiptMembers, publishLibraryReceipt, validLibraryReceipt } from "./library-receipt.ts";
 import type { LibraryGateStep } from "../../../../tools/agent/libraryFinalizeGate.js";
@@ -42,7 +42,7 @@ export async function finalizeWorkspace(options: {
        every input object. */
     return withLibraryMetadata(async () => {
       // Finishing targets (the generated data/symbol parts) resolve like functions.
-      const names = (m: (typeof members)[number]) => [...m.functions.map(f => f.name), ...Object.keys(LIBRARY_GENERATED_PARTS)];
+      const names = (m: (typeof members)[number]) => [...m.functions.map(f => f.name), ...libraryGeneratedSymbols(m)];
       const sources = Object.fromEntries(members.flatMap(m => names(m).map(n => [libraryTargetKey(m, n), libraryFunctionSource(m, n)])));
       const containers = Object.fromEntries(members.flatMap(m => names(m).map(n => [libraryTargetKey(m, n), m.id])));
       const target = requireLibraryFunction(options.functionName, options.projectRoot);

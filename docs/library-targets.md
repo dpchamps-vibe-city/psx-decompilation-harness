@@ -148,6 +148,10 @@ src/libraries/libapi/counter/
   _data.c                shared C data, or its separate backlog stub
 ```
 
+A member whose functions own switch tables also gets `_rodata-N.c`, the
+.rdata in front of the Nth table, placed before the table's owner (see
+[switch tables](#switch-tables-in-c-members)).
+
 Case-distinct names receive ordinal prefixes when needed. Additional shared
 fragments preserve declarations interleaved with functions in the original
 source.
@@ -217,15 +221,41 @@ An assembly backlog tracks just the generated `.include`s and any disabled
 attempt, with `backlog: true`. C backlogs use one-line INCLUDE_ASM parts,
 including the symbol part. Neither form emits `.NON_MATCHING` symbols. Every
 generated part prevents TU completion. The generated parts become member-finishing
-autoloop targets, `MEMBER::__library_member_data` once every function part is C or
-retained (data-only members at once), then `MEMBER::__library_member_symbols` once
-the data is C too. Their preparation skips the function diagnostics: the data
+autoloop targets: `MEMBER::__library_member_data` and each `MEMBER::__library_member_rodata_N`
+once every function part is C or retained (data-only members at once), then
+`MEMBER::__library_member_symbols` once all the data is C too. Their preparation skips the function diagnostics: the data
 draft is m2c's global definitions over the member listing, headed by each original
 object's section, size and linkage; the symbol-order draft is a comment, so the
 member must reproduce its LNK symbol IDs from the C itself, and the packet carries
 the original-versus-rebuilt symbol order. The whole member's hash is the oracle. `check-splits`
 checks fresh extraction in an isolated diagnostic directory, not existing stubs.
 Unknown extraction cases fail closed; they do not authorize source rewriting.
+
+#### Switch tables in C members
+
+cc1 writes .rdata in TU order: a function's string literals while it is
+expanded, its switch tables (`.align 3`, one word per case) while its code is
+output. In the original object a table therefore sits between the strings of
+the functions around it. A data part placed after every function could only put
+a compiled table in front of all of the member's .rdata, and would still carry
+the original copy.
+
+Extraction finds each table from the original object: a run of `.rdata` words
+holding code addresses inside one function that the function itself loads with
+a HI16/LO16 pair. Such a table is extracted with its owner's code, in the
+owner's `.s`, exactly where cc1 puts it. The .rdata before each table becomes
+the generated part `__library_member_rodata_N` (`_rodata-N.c`). It sits in front
+of the owner, and after the previous table's owner, so a C owner's own table
+lands at the original offset. The .rdata after the last table stays in
+`__library_member_data`. References into .rdata are written against the
+nearest label in the referenced region, so each region keeps working when
+another becomes C. `split` adds the missing `_rodata-N.c` parts to a TU whose
+`_data.c` is still extraction, and a production build of such a TU without
+them fails and asks for `split`. The manifest is validated: a rodata part must
+name one of the member's segments, use its own path, and stay between its two
+owners. A layout cc1 cannot produce, such as strings between two tables of one
+function or tables out of function order, is not cut. Its tables stay in
+`__library_member_data`, and their owners cannot match until it is reviewed.
 
 ### Retained handwritten extraction
 

@@ -2,6 +2,7 @@ import type { CommandRecord } from "../../lib/recordedCommand.js";
 import type { DeclarationIndex, Declaration } from "../declarationContext.js";
 import type { detectFunctionMacroIdentity } from "../../diagnostics/macroIdentity.js";
 import { compilerAnalysisSummary, type CompilerAnalysisSupport } from "../../lib/compilerAnalysis.js";
+import { isLibraryRodataSymbol, libraryRodataPartPath } from "../../lib/libraryRodata.js";
 
 /** Common handoff core. A draft's existence is independent of its compilability. */
 export interface PacketSource {
@@ -66,6 +67,7 @@ function macroOpening(packet: PreparationPacket): string {
 
 function finishingOpening(packet: PreparationPacket): string {
   const order = packet.discovery.finishing ? ` Original vs rebuilt symbol order: ${packet.discovery.finishing.report}.` : "";
+  if (isLibraryRodataSymbol(packet.identity.symbol)) return `Assignment: write the read-only data in the generated \`${libraryRodataPartPath(packet.identity.symbol)}\` extraction as C. It is the .rdata the original emitted before the switch table of the function that follows this part: the string literals and read-only definitions of the source before that table. Every function is already C or retained. Read-only strings a function uses are usually string literals in that function; place any other definition where the original source had it, before the table's owner. The whole member's hash is the oracle.` + order;
   return packet.identity.symbol === "__library_member_data"
     ? "Assignment: write this member's data, now the generated `_data.c` extraction, as C definitions. Every function is already C or retained. Place each definition where the original source had it, before the functions that use it (in a `_shared-N.h` part when needed); global or static, const, initialized, zero or COMMON, types and alignment all decide the bytes. Read-only strings a function uses are usually string literals in that function, not separate definitions. The whole member's hash is the oracle." + order
     : "Assignment: replace the generated `_symbols.c` declaration part with nothing: its draft is a comment. Symbol IDs must then come from the C itself, in the order definitions, statics and first external references appear. Reorder declarations and definitions across the member's parts until the IDs agree; do not add symbols the original lacks." + order;

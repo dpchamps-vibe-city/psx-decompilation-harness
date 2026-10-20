@@ -9,6 +9,8 @@ import { buildToolInputs } from "../../build/buildInputs.js";
 import { compareFunction } from "../../lib/functionOracle.js";
 import { requireFunctionLocation } from "../../lib/symbolIndex.js";
 import { containerTargetPath, loadContainers } from "../../lib/container.js";
+import { requireLibraryFunction } from "../../lib/libraryTargets.js";
+import { resolveFunctionTarget } from "../../lib/targetAdapter.js";
 import { sdkPrototypes, definitionPrototype, scopeFromPreprocessed, prototypesIn, type Prototype } from "../calleeTruth.js";
 import { analyzeCSource } from "../cSourceGuard.js";
 import { parseC } from "../residual-source-search/tree-sitter-c.js";
@@ -18,7 +20,9 @@ import { digest, fileDigest, snapshot, readCache, writeCache, type PhaseTiming }
 
 export interface SeedRecord { name: string; status: "sdk" | "verified" | "withheld" | "rejected" | "absent"; prototype?: Prototype; reason?: string; evidence: string[]; cache?: "hit" | "miss" }
 export interface VerifiedSeedBundle { prototype: Prototype; preprocessed: string; object: string; outputs: Record<string, string>; inputs: Record<string, string>; inputHash: string }
-export function seedOracle(directory: string, withheld: string[] = [], permitted?: string[]): {
+/** A relocatable library proves C by whole-member verification, not by relinking one function. */
+export interface LibrarySeedAdmission { verified: (member: string) => boolean }
+export function seedOracle(directory: string, withheld: string[] = [], permitted?: string[], library?: LibrarySeedAdmission): {
   get: (name: string) => Prototype | undefined; bundle: (name: string) => VerifiedSeedBundle | undefined; records: SeedRecord[]; timings: PhaseTiming[];
 } {
   const sdk = sdkPrototypes(), records: SeedRecord[] = [], memo = new Map<string, Prototype | undefined>();
@@ -34,6 +38,7 @@ export function seedOracle(directory: string, withheld: string[] = [], permitted
     /* Isolation is checked BEFORE cache lookup. A permitted seed in another
        view supplies no evidence at all to this held-out view. */
     if (withheld.includes(name) || (permitted && !permitted.includes(name))) { record.status = "withheld"; record.reason = "isolated inference input view"; return; }
+    if (library) return librarySeed(name, record, library);
     if (sdk.has(name)) {
       const prototype = structuredClone(sdk.get(name)!);
       record.evidence.push(`${prototype.where}:${prototype.line}`); record.status = "sdk"; record.prototype = prototype; memo.set(name, prototype); return prototype;
@@ -85,6 +90,45 @@ export function seedOracle(directory: string, withheld: string[] = [], permitted
     } catch (error) { record.status = "rejected"; record.reason = String(error); return; }
     finally { timings.push({ phase: `seed:${name}`, durationMs: performance.now() - start, ...(record.cache ? { cache: record.cache } : {}),
       reason: record.cache === "hit" ? "independently verified bundle inputs and outputs unchanged" : record.reason ?? record.status }); }
+  };
+  /* Library names are member::symbol keys, or a bare import no member defines.
+     The vendor header declares only what the library exports, never a private
+     helper of the same name. Clean C seeds only once its member verifies. */
+  const librarySeed = (name: string, record: SeedRecord, admission: LibrarySeedAdmission): Prototype | undefined => {
+    let target: ReturnType<typeof requireLibraryFunction> | undefined;
+    try { if (name.includes("::")) target = requireLibraryFunction(name); } catch { /* an import no member defines */ }
+    const symbol = target?.fn.name ?? name;
+    const exported = !target || target.member.object.symbols.some((s) => s.binding !== 0 && s.name === symbol && s.section === target!.fn.section);
+    if (exported && sdk.has(symbol)) {
+      const prototype = structuredClone(sdk.get(symbol)!);
+      record.evidence.push(`${prototype.where}:${prototype.line}`); record.status = "sdk"; record.prototype = prototype; memo.set(name, prototype); return prototype;
+    }
+    if (!target) return;
+    const start = performance.now();
+    try {
+      if (!admission.verified(target.member.id)) { record.reason = "member does not verify"; return; }
+      const source = join(projectRoot(), resolveFunctionTarget(name).source);
+      if (!source.endsWith(".c") || !existsSync(source)) return;
+      const text = readFileSync(source, "utf8"), guard = analyzeCSource(text);
+      if (guard.includeAsm.some((site) => site.symbol === symbol)) return;
+      const syntax = parseC(text);
+      const assembly = syntax.rootNode.descendantsOfType("gnu_asm_expression").length;
+      syntax.delete();
+      if (!guard.parses || assembly) throw new Error("not a clean-C seed: AST has broken syntax or embedded assembly");
+      const processed = cachedPreprocess(source, projectRoot(), undefined, name), scope = scopeFromPreprocessed(processed.text);
+      const prototype = prototypesIn(scope.source, relative(projectRoot(), source), scope.lineOf).find((p) => p.name === symbol && p.kind === "definition");
+      if (!prototype) return;
+      prototype.slots = slotsWithTypedefs(prototype.paramTypes ?? [], scope.source);
+      prototype.usedParameters = parameterReads(scope.source, symbol);
+      const identities = typeScopes([...(prototype.paramTypes ?? []), prototype.returnType ?? ""], scope.source, scope.lineOf, prototype.where);
+      prototype.typeScopes = { parameters: identities.slice(0, -1), result: identities.at(-1)! };
+      bundles.set(name, { prototype, preprocessed: processed.text, object: target.member.original, outputs: {}, inputs: processed.inputs,
+        inputHash: digest(JSON.stringify([processed.inputs, processed.text])) });
+      const admitted = structuredClone(prototype);
+      record.evidence.push(`${prototype.where}:${prototype.line}`, target.member.original);
+      record.status = "verified"; record.prototype = admitted; memo.set(name, admitted); return admitted;
+    } catch (error) { record.status = "rejected"; record.reason = String(error); return; }
+    finally { timings.push({ phase: `seed:${name}`, durationMs: performance.now() - start, reason: record.reason ?? record.status }); }
   };
   void directory; /* request-specific reports still link immutable verified artifacts */
   return { get, bundle: (name) => { get(name); return bundles.has(name) ? structuredClone(bundles.get(name)!) : undefined; }, records, timings };

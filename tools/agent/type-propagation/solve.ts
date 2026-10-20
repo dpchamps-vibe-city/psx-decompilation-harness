@@ -138,8 +138,10 @@ export function propagate(graph: EvidenceGraph, externalSeed: (name: string) => 
       const dest = direction === "forward" ? relation.to : relation.from;
       const sourceValue = nodes.get(fact.endpoint.function)?.report.ir.values[fact.endpoint.value];
       /* Constants are polymorphic uses, not one shared C variable: passing 10
-         to an s16 and an s32 parameter must not equate those formals. */
-      if (sourceValue?.op.kind === "const" && relation.rule === "argument" && direction === "forward") continue;
+         to an s16 and an s32 parameter must not equate those formals. A
+         relocated address is the same kind of literal: one object's address
+         may be passed as differently typed views of it. */
+      if ((sourceValue?.op.kind === "const" || sourceValue?.op.kind === "symbol") && relation.rule === "argument" && direction === "forward") continue;
       if (relation.rule === "phi-input" && direction === "forward") continue;
       /* Chained dispatch conditions are not silently intersected into a proof.
          Preserve the per-target fact, but stop across a different open edge. */
@@ -153,7 +155,8 @@ export function propagate(graph: EvidenceGraph, externalSeed: (name: string) => 
   const conflicts: Propagation["conflicts"] = [];
   for (const [endpoint, list] of byEndpoint) {
     const first = list[0]!;
-    if (nodes.get(first.endpoint.function)?.report.ir.values[first.endpoint.value]?.op.kind === "const") continue;
+    const literal = nodes.get(first.endpoint.function)?.report.ir.values[first.endpoint.value]?.op.kind;
+    if (literal === "const" || literal === "symbol") continue;
     const types = list.filter((f) => f.constraint.kind === "type-use");
     if (new Set(types.map((f) => f.constraint.kind === "type-use" ? typeKey(f.constraint.type, f.constraint.identity ?? f.constraint.scope) : "")).size > 1)
       conflicts.push({ endpoint, facts: types.map((f) => f.id).sort() });

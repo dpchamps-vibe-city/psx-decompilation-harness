@@ -3,22 +3,40 @@ import { projectRoot } from "../../lib/runtimeContext.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadContainers, containerTargetPath, vramToRom, type Container } from "../../lib/container.js";
-import { loadFunctionSpans, loadSymbolIndex, requireFunctionLocation, type FunctionSpan } from "../../lib/symbolIndex.js";
+import { loadFunctionSpans, loadSymbolIndex, requireFunctionLocation } from "../../lib/symbolIndex.js";
 
 import { digest, filesUnder, snapshot } from "../../lib/contentCache.js";
 import { decodeBytes } from "../matching-reconstruction/exec.js";
 import { buildMachineIr, type MachineIrReport } from "../machine-ir/index.js";
+import type { ValueOp } from "../machine-ir/ir.js";
 import { callbackTablesFromData, type CallbackTable } from "./data.js";
 import type { Prototype } from "../calleeTruth.js";
 import { DEFAULT_BOUNDS, type Bounds, type EvidenceGraph, type Summary, type Relation } from "./model.js";
 import { localSummary, baseBias, storedValue } from "./summary.js";
 import { inspectType } from "./c-types.js";
+import { loadLibraryProject } from "../../lib/project.js";
+import { libraryOriginalIndex } from "./library.js";
 
-interface IndexedFunction { id: string; name: string; container: Container; span: FunctionSpan; calls: string[]; references: number[] }
-interface OriginalIndex {
+export interface IndexedFunction {
+  id: string; name: string; container: string; span: { vram: number; size: number };
+  /** What another function's references hold when it takes this function's address. */
+  address: number | string;
+  calls: string[]; references: Array<number | string>;
+  /** Image functions only: the container whose data files hold callback tables. */
+  image?: Container;
+}
+export interface OriginalIndex {
   identity: string; nodes: Map<string, IndexedFunction>; incoming: Map<string, string[]>;
   instructions: number; complete: boolean; inputs: string[];
   resolve: (container: string, address: number) => string | undefined;
+  /** A relocated function reference (relocatable objects). A call also names an
+   * import no original defines as `extern:NAME`; an address never does. */
+  resolveSymbol?: (container: string, reference: string, addend: number, call: boolean) => string | undefined;
+  /** Relocated storage, identified across containers like a linked address. */
+  storage?: (container: string, reference: string, addend: number) => string;
+  rootId: (functionName: string) => string;
+  /** Whether a user's storage references can reach an owner's loaded pointers. */
+  sharesStorage: (user: string, owner: string) => boolean;
 }
 let cached: OriginalIndex | undefined;
 function copyIndex(index: OriginalIndex): OriginalIndex {
@@ -26,20 +44,23 @@ function copyIndex(index: OriginalIndex): OriginalIndex {
 }
 /** In-process immutable index. No persistent cache, worklist graph or candidate C. */
 export function originalIndex(limit = DEFAULT_BOUNDS.indexInstructions): OriginalIndex {
+  return copyIndex(loadLibraryProject() ? libraryOriginalIndex(limit) : imageOriginalIndex(limit));
+}
+function imageOriginalIndex(limit: number): OriginalIndex {
   const containers = loadContainers();
   const inputs = containers.flatMap((c) => [containerTargetPath(c), join(projectRoot(), c.paths.splat), join(projectRoot(), c.paths.symbolAddrs),
     join(projectRoot(), c.paths.undefinedFuncs), join(projectRoot(), c.paths.undefinedSyms), join(projectRoot(), c.paths.sectionLayout), join(projectRoot(), c.paths.ldScript),
     ...filesUnder(join(projectRoot(), c.paths.asmDir)).filter((p) => p.endsWith(".s"))])
     .concat(["build/engine_syms.txt", "build/dep_syms.txt", "build/lib_bss_syms.txt", "configs/overlays.json"].map((p) => join(projectRoot(), p)));
   const identity = digest(JSON.stringify([limit, snapshot(projectRoot(), inputs), containers]));
-  if (cached?.identity === identity) return copyIndex(cached);
+  if (cached?.identity === identity) return cached;
   const nodes = new Map<string, IndexedFunction>();
   const addresses = new Map<string, Map<number, string>>();
   for (const container of containers) {
     const byAddress = new Map<number, string>(); addresses.set(container.id, byAddress);
     for (const span of loadFunctionSpans(container)) {
       const id = `${container.id}:${span.name}`;
-      nodes.set(id, { id, name: span.name, container, span, calls: [], references: [] });
+      nodes.set(id, { id, name: span.name, container: container.id, image: container, span, address: span.vram, calls: [], references: [] });
       byAddress.set(span.vram, id);
     }
     /* SDK symbols have no C/asm subsegment. Admit external names only in
@@ -65,10 +86,10 @@ export function originalIndex(limit = DEFAULT_BOUNDS.indexInstructions): Origina
   const images = new Map<string, Buffer>();
   let instructions = 0, complete = true;
   for (const node of [...nodes.values()].sort((a, b) => a.id.localeCompare(b.id))) {
-    const path = containerTargetPath(node.container);
+    const container = node.image!, path = containerTargetPath(container);
     if (!existsSync(path) || instructions + node.span.size / 4 > limit) { complete = false; continue; }
     let image = images.get(path); if (!image) { image = readFileSync(path); images.set(path, image); }
-    const rom = vramToRom(node.container, node.span.vram);
+    const rom = vramToRom(container, node.span.vram);
     if (rom < 0 || rom + node.span.size > image.length) { complete = false; continue; }
     const words = decodeBytes(image.subarray(rom, rom + node.span.size), node.span.vram);
     instructions += words.length;
@@ -77,7 +98,7 @@ export function originalIndex(limit = DEFAULT_BOUNDS.indexInstructions): Origina
     const constants = new Map<number, number>();
     for (const word of words) {
       if (word.op === "jal" || (word.op === "j" && (word.target! < node.span.vram || word.target! >= node.span.vram + node.span.size))) {
-        const target = word.target === undefined ? undefined : resolve(node.container.id, word.target);
+        const target = word.target === undefined ? undefined : resolve(node.container, word.target);
         if (target) node.calls.push(target);
       }
       if (word.op === "lui") constants.set(word.rt, (word.uimm << 16) >>> 0);
@@ -85,15 +106,18 @@ export function originalIndex(limit = DEFAULT_BOUNDS.indexInstructions): Origina
         const address = word.op === "ori" ? (constants.get(word.rs)! | word.uimm) >>> 0 : (constants.get(word.rs)! + word.simm) >>> 0;
         node.references.push(address); constants.set(word.rt, address);
       } else if (["lw", "lh", "lhu", "lb", "lbu", "sw", "sh", "sb"].includes(word.op)) {
-        const base = word.rs === 28 ? node.container.gpValue : constants.get(word.rs);
+        const base = word.rs === 28 ? container.gpValue : constants.get(word.rs);
         if (base !== undefined) node.references.push((base + word.simm) >>> 0);
         if (word.op.startsWith("l")) constants.delete(word.rt);
       } else { if (word.rt) constants.delete(word.rt); if (word.rd) constants.delete(word.rd); }
     }
-    node.calls = [...new Set(node.calls)].sort(); node.references = [...new Set(node.references)].sort((a, b) => a - b);
+    node.calls = [...new Set(node.calls)].sort(); node.references = [...new Set(node.references as number[])].sort((a, b) => a - b);
     for (const target of node.calls) incoming.set(target, [...(incoming.get(target) ?? []), node.id]);
   }
-  cached = { identity, nodes, incoming, instructions, complete, inputs, resolve }; return copyIndex(cached);
+  const rootId = (functionName: string) => `${requireFunctionLocation(functionName).container.id}:${functionName}`;
+  /* Overlays share only the executable's storage. */
+  const sharesStorage = (user: string, owner: string) => user === owner || user === "exe";
+  cached = { identity, nodes, incoming, instructions, complete, inputs, resolve, rootId, sharesStorage }; return cached;
 }
 
 export interface GraphOptions { bounds?: Partial<Bounds>; seed?: (name: string) => Prototype | undefined; signal?: AbortSignal }
@@ -102,8 +126,7 @@ export function buildEvidenceGraph(functionName: string, options: GraphOptions =
   for (const key of Object.keys(bounds) as Array<keyof Bounds>)
     if (!Number.isInteger(bounds[key]) || bounds[key] < 1 || bounds[key] > DEFAULT_BOUNDS[key]) throw new Error(`Invalid ${key} bound`);
   const index = originalIndex(bounds.indexInstructions);
-  const location = requireFunctionLocation(functionName);
-  const root = `${location.container.id}:${functionName}`;
+  const root = index.rootId(functionName);
   const graph: EvidenceGraph = { root, bounds, nodes: [], relations: [], frontier: [], unsupported: [], inputs: [...index.inputs],
     indexComplete: index.complete, consumed: { functions: 0, instructions: 0, indexInstructions: index.instructions, storageDependencies: 0 } };
   const summaries = new Map<string, Summary>();
@@ -163,16 +186,20 @@ export function buildEvidenceGraph(functionName: string, options: GraphOptions =
       }
       summaries.set(id, summary); graph.nodes.push(summary); graph.relations.push(...relations);
       graph.consumed.functions++; graph.consumed.instructions += summary.report.size.instructions;
-      loadTables(node.container);
+      if (node.image) loadTables(node.image);
       for (const opaque of summary.report.unmodelled) graph.unsupported.push({ node: id, at: opaque.vram, reason: opaque.note });
       for (const call of summary.calls) {
         const effect = summary.report.ir.effects[call.effect];
         const word = summary.report.ir.cfg.insns.find((i) => i.vram === call.at);
         const target = effect?.op.kind === "call" ? effect.op.target : word?.target;
-        if (target !== undefined) {
-          const dest = index.resolve(node.container.id, target);
+        if (call.symbol && index.resolveSymbol) {
+          const dest = index.resolveSymbol(node.container, call.symbol.reference, call.symbol.addend, true);
           if (dest) { call.targets = [dest]; call.closed = true; if (!seed || id === root) enqueue(dest); }
-          else call.remainder.push(`unresolved original direct address 0x${target.toString(16)} in ${node.container.id}`);
+          else call.remainder.push(`unresolved original relocation ${call.symbol.reference}+${call.symbol.addend} in ${node.container}`);
+        } else if (target !== undefined) {
+          const dest = index.resolve(node.container, target);
+          if (dest) { call.targets = [dest]; call.closed = true; if (!seed || id === root) enqueue(dest); }
+          else call.remainder.push(`unresolved original direct address 0x${target.toString(16)} in ${node.container}`);
         } else if (call.through !== undefined) {
           const targets = localTargets(summary.report, call.through, index, tables, tableAddresses, bounds.indirectTargets);
           call.targets = targets.targets; call.closed = targets.closed; call.remainder = targets.remainder;
@@ -185,13 +212,14 @@ export function buildEvidenceGraph(functionName: string, options: GraphOptions =
       if (!seed && summary.slots.some((s) => s.used))
         for (const caller of index.incoming.get(id) ?? []) if (!seen.has(caller)) incomingQueue.push(caller);
       if (!seed && summary.calls.some((c) => c.kind === "indirect")) for (const user of index.nodes.values()) {
-        if (user.references.includes(node.span.vram) && !seen.has(user.id)) incomingQueue.push(user.id);
+        if (user.references.includes(node.address) && !seen.has(user.id)) incomingQueue.push(user.id);
       }
       const storage = summary.report.ir.values.flatMap((v) => v.op.kind === "load" ? [baseBias(summary.report, v.op.address)] : [])
-        .filter((p) => p?.base === "absolute").map((p) => p!.bias >>> 0);
+        .flatMap((p): Array<number | string> => p?.base === "absolute" ? [p.bias >>> 0]
+          : p?.base.startsWith("symbol:") && index.storage ? [index.storage(node.container, p.base.slice("symbol:".length), p.bias)] : []);
       /* Shared storage users only for live loaded function-pointer dependencies. */
       if (!seed && summary.calls.some((c) => c.kind === "indirect" && !c.closed)) for (const user of index.nodes.values()) {
-        if (user.container.id !== node.container.id && user.container.id !== "exe") continue;
+        if (!index.sharesStorage(user.container, node.container)) continue;
         if (!user.references.some((r) => storage.includes(r)) || seen.has(user.id)) continue;
         if (incomingQueue.includes(user.id)) continue;
         if (graph.consumed.storageDependencies >= bounds.storageDependencies) {
@@ -223,9 +251,10 @@ function localTargets(report: MachineIrReport, value: number, index: OriginalInd
   const unknown = (why: string) => ({ targets: [] as string[], closed: false, remainder: [why] });
   if (active.has(value) || active.size > 64) return unknown("cyclic/unsupported target value");
   const op = report.ir.values[value]?.op, next = new Set(active).add(value);
-  if (op?.kind === "const") {
-    const target = index.resolve(report.containerId, op.value);
-    return target ? { targets: [target], closed: true, remainder: [] } : unknown(`unknown target address 0x${op.value.toString(16)}`);
+  if (op?.kind === "const" || op?.kind === "symbol") {
+    const target = literalTarget(index, report.containerId, op);
+    return target ? { targets: [target], closed: true, remainder: [] }
+      : unknown(op.kind === "const" ? `unknown target address 0x${op.value.toString(16)}` : `unknown relocated target ${op.reference}+${op.addend}`);
   }
   if (op?.kind === "phi") {
     const parts = op.inputs.filter((v) => v !== value).map((v) => localTargets(report, v, index, tables, addresses, bound, next));
@@ -256,6 +285,13 @@ function localTargets(report: MachineIrReport, value: number, index: OriginalInd
   return unknown(`v${value}: ${op?.kind ?? "missing"} target remains open`);
 }
 
+/** A literal function address: an absolute constant, or a relocated function reference. */
+function literalTarget(index: OriginalIndex, container: string, op: ValueOp | undefined): string | undefined {
+  if (op?.kind === "const") return index.resolve(container, op.value);
+  if (op?.kind === "symbol" && op.part === "address") return index.resolveSymbol?.(container, op.reference, op.addend, false);
+  return undefined;
+}
+
 /** Iteration also resolves formal function-pointer forwarding, retaining an open
  * external-caller remainder. No known table member types its siblings. */
 function connectCalls(graph: EvidenceGraph, summaries: Map<string, Summary>, index: OriginalIndex, seed?: GraphOptions["seed"]): void {
@@ -277,16 +313,14 @@ function connectCalls(graph: EvidenceGraph, summaries: Map<string, Summary>, ind
     valueTargets.set(key, set); return changed;
   };
   for (const summary of summaries.values()) for (const value of summary.report.ir.values) {
-    if (value.op.kind === "const") {
-      const target = index.resolve(summary.container, value.op.value);
-      if (target) merge(endpoint(summary.id, value.id), [target]);
-    }
+    const target = literalTarget(index, summary.container, value.op);
+    if (target) merge(endpoint(summary.id, value.id), [target]);
     if (value.op.kind === "load") {
       const stored = storedValue(summary.report, value.op.memory, value.op.address, value.op.width);
       if (stored !== null) {
         /* An exact-width memory relation already exists in localSummary. */
-        const op = summary.report.ir.values[stored]?.op;
-        if (op?.kind === "const") { const target = index.resolve(summary.container, op.value); if (target) merge(endpoint(summary.id, value.id), [target]); }
+        const target = literalTarget(index, summary.container, summary.report.ir.values[stored]?.op);
+        if (target) merge(endpoint(summary.id, value.id), [target]);
       }
     }
   }
@@ -309,11 +343,9 @@ function connectCalls(graph: EvidenceGraph, summaries: Map<string, Summary>, ind
         if (formal) for (const incoming of summaries.values()) for (const edge of incoming.calls.filter((c) => c.targets.includes(caller.id))) {
           const actual = edge.args[formal.slot];
           const op = actual === undefined || actual === null ? undefined : incoming.report.ir.values[actual]?.op;
-          if (op?.kind === "const") {
-            const target = index.resolve(incoming.container, op.value);
-            if (target && !call.targets.includes(target) && call.targets.length < graph.bounds.indirectTargets) {
-              call.targets.push(target); changed = true;
-            }
+          const target = literalTarget(index, incoming.container, op);
+          if (target && !call.targets.includes(target) && call.targets.length < graph.bounds.indirectTargets) {
+            call.targets.push(target); changed = true;
           }
         }
       }

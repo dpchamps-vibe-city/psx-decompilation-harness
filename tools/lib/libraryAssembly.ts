@@ -10,12 +10,13 @@ import { fileDigest, snapshot } from "./contentCache.js";
 import { executedToolIdentity } from "./toolProvenance.js";
 import { dependencyPaths, scanDependencies } from "./dependencyScanner.js";
 import { analyzeCSource, walkActiveC } from "../agent/cSourceAnalysis.js";
-import { parseC } from "../agent/residual-source-search/tree-sitter-c.js";
+import { declaratorName, parseC } from "../agent/residual-source-search/tree-sitter-c.js";
 import { configuredAssembler, configuredAssemblyCppFlags, configuredTool } from "./toolchain.js";
 import { libraryContext, loadLibraryProject } from "./project.js";
 import { projectRoot } from "./runtimeContext.js";
 import { nativeRelocationOperands } from "./objectFormats/relocations.js";
 import { dmpsxSource, DMPSX_OPERATIONS } from "./stages/psyqDmpsx.js";
+import { cutListingSection, libraryRodataLayout, libraryRodataRegions, RODATA_SECTION, type LibraryRodataLayout } from "./libraryRodata.js";
 /** ID 1/2 exports precede GCC's file/option entries in assembly-origin members. */
 export function libraryMemberOrigin(member: LibraryMember): "c" | "assembly" {
   return member.originalObject?.object.records?.some(r => r.opcode === 12 && r.bytes.readUInt16LE(1) <= 2) ? "assembly" : "c";
@@ -39,11 +40,13 @@ export function librarySymbolPart(member: LibraryMember): string {
     lines.push(symbols.has(id) ? `.globl ${symbols.get(id)!.name}` : `__lnk_hidden_${id}:`);
   return lines.join("\n") + "\n";
 }
+/** Names the TU's sources link against. A C identifier declared with an asm
+ * label links against the label, not its own name. */
 function sourceReferences(member: LibraryMember): Set<string> {
   const file = resolve(projectRoot(), member.source);
   if (!existsSync(file) || !file.endsWith("/tu.json")) return new Set();
   const manifest = JSON.parse(readFileSync(file, "utf8"));
-  const names = new Set<string>();
+  const names = new Set<string>(), labels = new Set<string>(), labelled = new Set<string>();
   for (const part of manifest.parts) {
     if (part.backlog) continue;
     const text = readFileSync(join(dirname(file), part.path), "utf8");
@@ -53,9 +56,14 @@ function sourceReferences(member: LibraryMember): Set<string> {
     try { walkActiveC(tree.rootNode, node => {
       if (node.type === "identifier") names.add(node.text);
       if (node.type === "preproc_arg") for (const name of node.text.match(/[\w.$]+/g) ?? []) names.add(name);
+      const label = node.type === "gnu_asm_expression" ? node.descendantsOfType("string_content")[0]?.text : undefined;
+      const declared = label && (node.parent?.type === "function_declarator" ? declaratorName(node.parent) : node.parent?.type === "declaration" ? declaratorName(node.previousNamedSibling ?? undefined) : undefined);
+      if (label && declared) { labels.add(label); labelled.add(declared.text); }
       return true;
     }); } finally { tree.delete(); }
   }
+  for (const name of labelled) names.delete(name);
+  for (const label of labels) names.add(label);
   return names;
 }
 /** Reconstruct source order only where original patch order witnesses that GAS
@@ -105,8 +113,10 @@ function reorderDelaySlots(member: LibraryMember, text: string, context: string)
 }
 /** Render the listing, never repair it from target bytes. Visibility follows
  * witnessed labels; a missing original export is a generator gap, not a .set
- * manufactured from the target symbol table. */
-function symbolicListing(member: LibraryMember, assembly: string, period: boolean, contextAssembly = assembly): string {
+ * manufactured from the target symbol table. With `rodataRegions`, a reference
+ * into .rdata is written against the nearest label of the region it lands in,
+ * so it survives the other regions becoming C. */
+function symbolicListing(member: LibraryMember, assembly: string, period: boolean, contextAssembly = assembly, rodataRegions?: number[]): string {
   const exports = new Map(member.object.symbols.filter(s => s.binding !== 0 && member.object.sections.has(s.section)).map(s => [s.name, s]));
   const defined = new Set<string>();
   let section = "";
@@ -174,7 +184,11 @@ function symbolicListing(member: LibraryMember, assembly: string, period: boolea
           const local = /^(.+)@0$/.exec(operand.reference ?? "");
           if (local) {
             const anchors = labels.get(local[1]!) ?? [];
-            const anchor = anchors.find(a => a.offset === 0) ?? anchors[0];
+            let anchor = anchors.find(a => a.offset === 0) ?? anchors[0];
+            if (rodataRegions && local[1] === RODATA_SECTION) {
+              const start = rodataRegions.findLast(b => b <= addend) ?? 0;
+              anchor = anchors.filter(a => a.offset >= start && a.offset <= addend).reduce<typeof anchor>((best, a) => !best || a.offset > best.offset ? a : best, undefined) ?? anchor;
+            }
             if (!anchor) throw new Error(`${member.id}: no storage anchor for ${local[1]}`);
             const delta = addend - anchor.offset;
             expression = anchor.name + (delta ? `${delta < 0 ? "-" : "+"}${Math.abs(delta)}` : "");
@@ -221,6 +235,35 @@ function symbolicListing(member: LibraryMember, assembly: string, period: boolea
   for (const name of exports.keys()) if (!defined.has(name)) throw new Error(`${member.id}: generator gap: missing storage label ${name}`);
   return period ? reorderDelaySlots(member, rendered, contextAssembly) : rendered;
 }
+interface RodataCut {
+  assembly: string;
+  tables: Array<{ owner: string; text: string }>;
+  segments: Array<{ symbol: string; owner: string; text: string }>;
+  tail?: string;
+}
+/** The listing's .rdata cut at its switch tables: each table's words for its
+ * owner (aligned like cc1's own table), the data before each table, and the
+ * rest for the member data part. Only region 0 carries the section header. */
+function cutRodata(member: LibraryMember, assembly: string, layout: LibraryRodataLayout): RodataCut {
+  const headers = [...assembly.matchAll(/^\.section\s+([^\s,]+).*$/gm)], i = headers.findIndex(h => h[1] === RODATA_SECTION);
+  if (i < 0) throw new Error(`${member.id}: listing has no ${RODATA_SECTION} section for its switch tables`);
+  const start = headers[i]!.index!, end = headers[i + 1]?.index ?? assembly.length;
+  const regions = libraryRodataRegions(layout), offset = (member.viewObject ?? member.object).sections.get(RODATA_SECTION)!.offset;
+  let pieces: string[];
+  try { pieces = cutListingSection(assembly.slice(start, end), offset, regions.slice(1, -1)); }
+  catch (error) { throw new Error(`${member.id}: cannot extract switch tables: ${error instanceof Error ? error.message : error}`); }
+  const piece = (from: number) => {
+    const k = regions.indexOf(from), text = pieces[k]!;
+    if (k) return `.section ${RODATA_SECTION}\n${text}`;
+    // A table opening the section takes no section header alignment: cc1 aligns it itself.
+    const first = text.split("\n").findIndex(line => /^\s*\/\*\s*[\da-f]+\s+[\da-f]+/i.test(line));
+    return layout.tables[0]!.start ? text : `.section ${RODATA_SECTION}\n` + text.split("\n").filter((line, j) => j >= first || !/^\s*\.(?:section|align|balign|p2align)\b/.test(line)).join("\n");
+  };
+  return { assembly: assembly.slice(0, start) + pieces.join("\n") + assembly.slice(end),
+    tables: layout.tables.map(t => ({ owner: t.owner, text: piece(t.start).replace(/^(\.section[^\n]*\n)/, t.start % 8 ? "$1" : "$1.align 3\n") })),
+    segments: layout.segments.map(s => ({ symbol: s.symbol, owner: s.owner, text: piece(s.start) })),
+    ...(layout.tail < layout.size ? { tail: piece(layout.tail) } : {}) };
+}
 /** Materialize source BEFORE assembly. The expanded fragment is tied to its
  * source, headers, flags and actual cpp, so a tool switch cannot reuse it. */
 export function writeLibraryAssemblyParts(member: LibraryMember, parts: LibraryAssemblyPart[], root = projectRoot(), folder = join(root, "build/libraries/nonmatchings", member.id)): void {
@@ -236,6 +279,10 @@ export function writeLibraryAssemblyParts(member: LibraryMember, parts: LibraryA
     writeFileSync(`${output}.cpp.json`, JSON.stringify({ cpp: executedToolIdentity("cpp", root), flags,
       inputs: snapshot(root, [source, ...dependencies]), outputSha256: fileDigest(output) }, null, 2) + "\n");
   }
+}
+/** The .rdata segment parts this member's extraction generates (ECOFF period source only). */
+export function libraryExtractedRodataSegments(member: LibraryMember, root = projectRoot()) {
+  return configuredAssembler(libraryContext(member.id, root), root).objectFormat === "ecoff" ? libraryRodataLayout(member).segments : [];
 }
 export function libraryAssemblyInputs(member: LibraryMember, symbol: string, root = projectRoot()): string[] {
   const output = join(root, "build/libraries/nonmatchings", member.id, `${symbol}.s`);
@@ -255,6 +302,12 @@ export function libraryAssemblyParts(member: LibraryMember, assembly: string): L
   const context = project ? libraryContext(member.id, root, project) : { kind: "library" as const, id: member.id };
   const period = configuredAssembler(context, root).objectFormat === "ecoff";
   if (!period) return legacyLibraryAssemblyParts(member, assembly);
+  // Cut .rdata around compiler-owned switch tables first: the cuts add region
+  // labels that every part, and the whole listing, must see.
+  const layout = libraryRodataLayout(member);
+  const rodata = layout.tables.length ? cutRodata(member, assembly, layout) : undefined;
+  if (rodata) assembly = rodata.assembly;
+  const rodataRegions = rodata ? libraryRodataRegions(layout) : undefined;
   // Split before rendering markers into ordinary local labels.
   const parts: LibraryAssemblyPart[] = [], data: string[] = [];
   const sections = [...assembly.matchAll(/^\.section\s+([^\s,]+).*$/gm)];
@@ -262,6 +315,7 @@ export function libraryAssemblyParts(member: LibraryMember, assembly: string): L
   for (let i = 0; i < sections.length; i++) {
     const start = sections[i]!.index!, end = sections[i + 1]?.index ?? assembly.length;
     const section = sections[i]![1]!, original = member.object.sections.get(section), text = assembly.slice(start, end);
+    if (rodata && section === RODATA_SECTION) { if (rodata.tail !== undefined) data.push(rodata.tail); continue; }
     if (!(original?.flags! & 4)) { data.push(text); continue; }
     const anchors = member.functions.filter(f => f.section === section).flatMap(fn => {
       const match = new RegExp(`^nonmatching\\s+${escape(fn.name)}(?:,|\\s|$)`, "m").exec(text);
@@ -276,6 +330,17 @@ export function libraryAssemblyParts(member: LibraryMember, assembly: string): L
       const header = j === 0 ? prefix : sectionHeader.replace(/^\s*\.(?:align|balign|p2align)\b[^\n]*\n/gm, "");
       parts.push({ symbol: a.fn.name, functions: [a.fn.name], text: directives + header + text.slice(a.at, end) });
     }
+  }
+  if (rodata) {
+    // A table is written with its owner's code, as cc1 writes it; the .rdata
+    // before it is its own part, placed in front of the owner.
+    for (const table of rodata.tables) {
+      const owner = parts.find(p => p.symbol === table.owner);
+      if (!owner) throw new Error(`${member.id}: switch table owner ${table.owner} has no assembly part`);
+      owner.text += `\n${table.text}\n.section .text\n`;
+    }
+    for (const segment of rodata.segments)
+      parts.splice(parts.findIndex(p => p.symbol === segment.owner), 0, { symbol: segment.symbol, functions: [], text: directives + segment.text + "\n.section .text\n" });
   }
   const commons: string[] = [];
   for (const s of member.object.symbols.filter(s => s.section === "COMMON")) {
@@ -296,13 +361,13 @@ export function libraryAssemblyParts(member: LibraryMember, assembly: string): L
   // with only the exports it actually owns. No tail-byte or relocation fixups.
   // COMMON declarations have no listing section: both extraction forms must
   // carry the same original-derived data, including assembly-origin backlogs.
-  const whole = symbolicListing(member, assembly, period) + "\n" + commons.join("");
+  const whole = symbolicListing(member, assembly, period, assembly, rodataRegions) + "\n" + commons.join("");
   const manifest = resolve(root, member.source);
   const assemblyTu = period && (libraryMemberOrigin(member) === "assembly" || existsSync(manifest) && manifest.endsWith("/tu.json") && JSON.parse(readFileSync(manifest, "utf8")).parts.some((p: { path: string }) => /\.(?:s|ASM)$/.test(p.path)));
   for (const part of parts) {
     const owned = member.object.symbols.filter(s => !member.object.sections.has(s.section) ||
       new RegExp(`^\\s*(?:glabel|dlabel|jlabel|alabel|ehlabel)\\s+${escape(s.name)}(?:,|\\s|$)`, "m").test(part.text));
-    part.text = symbolicListing({ ...member, object: { ...member.object, symbols: owned } }, part.text, period, assembly);
+    part.text = symbolicListing({ ...member, object: { ...member.object, symbols: owned } }, part.text, period, assembly, rodataRegions);
     if (period) { part.preprocess = true; part.text = '#include <asm.h>\n#include <inline_s.h>\n' + part.text; }
   }
   if (assemblyTu) parts.push({ symbol: "__library_member_assembly", functions: [], preprocess: true, text: '#include <asm.h>\n#include <inline_s.h>\n' + whole });

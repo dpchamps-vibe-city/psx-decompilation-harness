@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import type { LibraryMember } from "./libraryTargets.js";
 import { assertAssemblySource } from "./assemblyPolicy.js";
-import { libraryAssemblyInputs } from "./libraryAssembly.js";
+import { libraryAssemblyInputs, libraryExtractedRodataSegments } from "./libraryAssembly.js";
 import { scanDependencies, dependencyPaths } from "./dependencyScanner.js";
 import { configuredAssemblyCppFlags, configuredFlags, type FlagContext } from "./toolchain.js";
 import { analyzeCSource, walkActiveC } from "../agent/cSourceAnalysis.js";
@@ -15,6 +15,7 @@ import { digest as fileTextDigest, fileDigest, invocationMemo, writeIfChanged } 
 import { classifyLibraryCode } from "../agent/libraryCodeClass.js";
 import { projectRoot } from "./runtimeContext.js";
 import { count } from "./perfCounters.js";
+import { isLibraryRodataSymbol, libraryRodataLayout, libraryRodataPartPath } from "./libraryRodata.js";
 
 /** A C part defines one function (`symbol`) or shared declarations/data. An
  * assembly part is the member's ONE `.s` source and lists every original
@@ -45,11 +46,18 @@ export interface LibraryTuPart { path: string; symbol?: string; symbols?: string
   cleanedSha256?: string }
 export interface LibraryTuManifest { schemaVersion: 1; member: string; parts: LibraryTuPart[] }
 export type LibraryTuForm = "c" | "assembly";
-export const isLibraryGeneratedSymbol = (symbol: string | undefined) => symbol === "__library_member_data" || symbol === "__library_member_symbols";
-/** The reserved part of each generated symbol, and its finishing-target pseudo-function. */
+export const isLibraryGeneratedSymbol = (symbol: string | undefined): boolean => symbol === "__library_member_data" || symbol === "__library_member_symbols" || isLibraryRodataSymbol(symbol);
+/** Generated parts holding member data: the data part and the .rdata in front of each switch table. */
+export const isLibraryDataSymbol = (symbol: string | undefined): boolean => symbol === "__library_member_data" || isLibraryRodataSymbol(symbol);
+/** The reserved part of each fixed generated symbol, and its finishing-target pseudo-function. */
 export const LIBRARY_GENERATED_PARTS = { __library_member_data: "_data.c", __library_member_symbols: "_symbols.c" } as const;
-export const libraryGeneratedFunction = (symbol: keyof typeof LIBRARY_GENERATED_PARTS) =>
-  ({ name: symbol, section: "", offset: 0, size: 0, inferredSize: false, generated: symbol === "__library_member_data" ? "data" as const : "symbols" as const });
+export const libraryGeneratedPartPath = (symbol: string): string =>
+  isLibraryRodataSymbol(symbol) ? libraryRodataPartPath(symbol) : LIBRARY_GENERATED_PARTS[symbol as keyof typeof LIBRARY_GENERATED_PARTS];
+/** Every generated symbol a member can have: the fixed parts and its .rdata segments. */
+export const libraryGeneratedSymbols = (member: LibraryMember): string[] =>
+  [...Object.keys(LIBRARY_GENERATED_PARTS), ...libraryRodataLayout(member).segments.map(s => s.symbol)];
+export const libraryGeneratedFunction = (symbol: string) =>
+  ({ name: symbol, section: "", offset: 0, size: 0, inferredSize: false, generated: isLibraryDataSymbol(symbol) ? "data" as const : "symbols" as const });
 export const isDirectoryTu = (member: LibraryMember) => member.source.endsWith("/tu.json");
 export const libraryOriginalSha256 = (member: LibraryMember) => member.originalObject?.sha256 ?? member.sha256;
 export const isAssemblyPart = (part: LibraryTuPart) => part.path.endsWith(".s") || part.path.endsWith(".ASM");
@@ -98,7 +106,7 @@ export function libraryAssemblyDependencies(tu: LibraryAssemblyTu, context: Flag
   return files;
 }
 export function libraryFunctionFilename(member: LibraryMember, symbol: string): string {
-  if (isLibraryGeneratedSymbol(symbol)) return LIBRARY_GENERATED_PARTS[symbol as keyof typeof LIBRARY_GENERATED_PARTS];
+  if (isLibraryGeneratedSymbol(symbol)) return libraryGeneratedPartPath(symbol);
   const original = member.functions.filter(fn => !fn.discovery);
   if (member.object) original.sort((a, b) => member.object.symbols.findIndex(s => s.name === a.name) - member.object.symbols.findIndex(s => s.name === b.name));
   const fn = member.functions.find(fn => fn.name === symbol);
@@ -174,11 +182,22 @@ function validateLibraryTu(manifest: LibraryTuManifest, member: LibraryMember, r
       if (!/^[A-Za-z_]\w*$/.test(part.symbol) || symbols.has(part.symbol)) throw new Error(`Invalid/duplicate TU symbol: ${part.symbol}`);
       symbols.add(part.symbol);
       if (!isLibraryGeneratedSymbol(part.symbol) && part.path !== libraryFunctionFilename(member, part.symbol)) throw new Error(`Function TU part must be ${libraryFunctionFilename(member, part.symbol)}`);
+      if (isLibraryRodataSymbol(part.symbol) && part.path !== libraryRodataPartPath(part.symbol)) throw new Error(`Read-only data TU part must be ${libraryRodataPartPath(part.symbol)}`);
     }
     if (part.retained !== undefined) validateRetainedFunction(part, member);
   }
   if (member.functions.some(fn => !symbols.has(fn.name) && !(options.allowDiscoveredBacklog && fn.discovery !== undefined)) || [...symbols].some(s => !isLibraryGeneratedSymbol(s) && !member.functions.some(fn => fn.name === s)))
     throw new Error(`TU manifest must list every original function exactly once: ${member.source}`);
+  // cc1 writes a switch table between the .rdata before it and the .rdata after
+  // it: the part holding the former must stay between the two table owners.
+  const segments = libraryRodataLayout(member).segments, at = (symbol: string) => manifest.parts.findIndex(p => libraryTuPartSymbols(p).includes(symbol));
+  for (const symbol of [...symbols].filter(isLibraryRodataSymbol)) {
+    const segment = segments.find(s => s.symbol === symbol);
+    if (!segment) throw new Error(`${member.source}: ${symbol} is not a read-only data segment of ${member.id}`);
+    const index = at(symbol), owner = at(segment.owner), after = segment.after === undefined ? -1 : at(segment.after);
+    if ((owner >= 0 && index > owner) || (after >= 0 && index < after))
+      throw new Error(`${member.source}: ${libraryRodataPartPath(symbol)} must come ${segment.after ? `after ${segment.after} and ` : ""}before ${segment.owner}, whose switch table follows its data`);
+  }
   return true;
 }
 function validateRetainedFunction(part: LibraryTuPart, member: LibraryMember): void {
@@ -337,6 +356,9 @@ export function libraryCompileInput(member: LibraryMember, source: string, outpu
   const selected = whole ? undefined : symbol ?? member.functions.find(fn => resolve(root, libraryFunctionSource(member, fn.name, root)) === absolute)?.name ?? (definitions.length === 1 ? definitions[0]!.name : undefined);
   if (!whole && !selected) throw new Error(`A TU candidate must identify one function: ${source}`);
   const status = libraryTuStatus(member, root, whole ? undefined : { symbol: selected!, source: absolute })!;
+  // The generated data part no longer holds the .rdata in front of switch tables.
+  const missing = status.some(p => p.symbol === "__library_member_data" && p.stub) ? libraryExtractedRodataSegments(member, root).filter(s => !status.some(p => p.symbol === s.symbol)) : [];
+  if (missing.length) throw new Error(`${member.id}: TU lacks the read-only data parts in front of its switch tables (${missing.map(s => libraryRodataPartPath(s.symbol)).join(", ")}); run split`);
   for (const part of status.filter(p => p.stub))
     libraryAssemblyInputs(member, part.symbol ?? analyzeCSource(readFileSync(part.source, "utf8")).includeAsm[0]!.symbol, root);
   mkdirSync(outputDir, { recursive: true });

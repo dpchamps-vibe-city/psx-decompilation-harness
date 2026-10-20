@@ -13,7 +13,7 @@ import { nativeObjectView } from "./objectFormats/view.js";
 import { libraryInputFiles, loadLibraryProject, type LibraryProject } from "./project.js";
 import { compareRelocatableObjects, objectFunctions, readRelocatableObject, type RelocatableObject } from "./relocatableObject.js";
 import { libraryMemberSource } from "./librarySourceLayout.js";
-import { LIBRARY_GENERATED_PARTS, libraryFunctionSource, libraryGeneratedFunction, librarySourceFiles } from "./libraryTranslationUnit.js";
+import { libraryFunctionSource, libraryGeneratedFunction, libraryGeneratedSymbols, librarySourceFiles } from "./libraryTranslationUnit.js";
 import { existsSync } from "node:fs";
 export interface LibraryMember {
   id: string; input: string; member: string; ordinal: number; sourceOffset: number;
@@ -144,7 +144,7 @@ function indexMembers(members: LibraryMember[]): LibraryIndex {
     index.locals.set(member.id, locals); index.offsets.set(member.id, offsets);
     const exported = new Set(member.object.symbols.filter(s => s.binding !== 0).map(s => `${s.section}:${s.name}`));
     // Finishing targets resolve by their qualified key only; they have no code extent.
-    for (const symbol of Object.keys(LIBRARY_GENERATED_PARTS) as Array<keyof typeof LIBRARY_GENERATED_PARTS>) {
+    for (const symbol of libraryGeneratedSymbols(member)) {
       const value = { member, fn: libraryGeneratedFunction(symbol), key: libraryTargetKey(member, symbol) };
       add(index.functions, value.key, value);
     }

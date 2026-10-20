@@ -84,7 +84,7 @@ export function planLibraryTu(member: LibraryMember, source: string): { manifest
       if (!symbol) continue;
       if (!isLibraryGeneratedSymbol(symbol) && !member.functions.some(fn => fn.name === symbol)) throw new Error(`Unexpected function in TU split: ${symbol}`);
       support(node.startIndex);
-      const path = symbol === "__library_member_data" ? "_data.c" : symbol === "__library_member_symbols" ? "_symbols.c" : libraryFunctionFilename(member, symbol);
+      const path = libraryFunctionFilename(member, symbol);
       if (files.has(path)) throw new Error(`Duplicate function in TU split: ${symbol}`);
       const end = node.endIndex;
       const text = source.slice(node.startIndex, end) + "\n", part = { path, symbol };

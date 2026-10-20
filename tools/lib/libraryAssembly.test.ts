@@ -141,6 +141,14 @@ test("ECOFF extraction: private labels use $L, except names the C TU references"
     assert.doesNotMatch(text, /\.NON_MATCHING|\.reloc/);
   });
 });
+test("ECOFF extraction: a C name declared with an asm label references the label, not the listing name", t => {
+  const { f, run } = setup(t);
+  run((member, listing) => {
+    f.put(join(dirname(member.source), "_shared.h"), 'extern int private_data __asm__("$Lprivate_data");\nextern int local_data;\n');
+    const text = libraryAssemblyParts(member, listing).map(p => p.text).join("\n");
+    assert.match(text, /\$Lprivate_data:/); assert.doesNotMatch(text, /^private_data:/m); assert.match(text, /^local_data:/m);
+  });
+});
 test("ECOFF extraction: witnessed jump and branch slots are written in assembler source order", t => {
   for (const branch of [false, true]) setup(t, { branch }).run((member, listing) => {
     const text = libraryAssemblyParts(member, listing).find(p => p.symbol === "entry")!.text;

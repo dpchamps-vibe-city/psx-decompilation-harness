@@ -51,6 +51,11 @@ function crossedByBranch(object: RelocatableObject, section: string, boundary: n
  * delay slot before stopping: FIRST.OBJ publishes its hook in a J delay slot. */
 function publishedAddress(data: Buffer, low: number): boolean {
   const registers = new Set([decodeWord(data.readUInt32LE(low), low).rt]);
+  // A call's delay slot runs before the callee: an address completed there in
+  // an argument register is that call's argument (`jal register_callback;
+  // addiu a0,a0,%lo(callback)`).
+  const call = low >= 4 ? decodeWord(data.readUInt32LE(low - 4), low - 4) : undefined;
+  if (call && (call.op === "jal" || (call.op === "jalr" && call.rd === 31)) && [4, 5, 6, 7].some(r => registers.has(r))) return true;
   const use = (i: DecodedInsn): boolean => {
     if (i.op === "unknown") { registers.clear(); return false; }
     if (i.op === "sw" && registers.has(i.rt) && !registers.has(i.rs)) return true;
@@ -165,7 +170,10 @@ export function discoverPrivateFunctions(object: RelocatableObject, named: Objec
         let clobbered = false;
         for (let at = h.offset + 4; at < r.offset; at += 4) {
           const i = decodeWord(code.data.readUInt32LE(at), at), written = definedRegister(i);
-          if (control(i) || written === "unknown" || written === high.rt) { clobbered = true; break; }
+          // The call whose delay slot completes the address is part of one
+          // formation; its link write still clobbers a high half held in $ra.
+          const slotCall = at === r.offset - 4 && (i.op === "jal" || (i.op === "jalr" && i.rd === 31));
+          if ((control(i) && !slotCall) || written === "unknown" || written === high.rt) { clobbered = true; break; }
         }
         if (h.addend === null || r.addend === null) continue;
         // Native HI already contains the signed-low pair and section-VMA

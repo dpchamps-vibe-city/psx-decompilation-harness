@@ -134,19 +134,36 @@ test("ECOFF extraction: symbol part is first, reserves holes, and has a fresh cp
     assert.match(readFileSync(join(f.root, `build/libraries/nonmatchings/${member.id}/__library_member_symbols.s`), "utf8"), /__lnk_hidden_5:/);
   });
 });
-test("ECOFF extraction: private labels use $L, except names the C TU references", t => {
+test("ECOFF extraction: a C TU keeps C-spellable private labels; an assembly TU spells them $L", t => {
   setup(t).run((member, listing) => {
     const text = libraryAssemblyParts(member, listing).map(p => p.text).join("\n");
-    assert.match(text, /local_data:/); assert.match(text, /\$Lprivate_data:/); assert.match(text, /\$Lprivate_exit:/);
-    assert.doesNotMatch(text, /\.NON_MATCHING|\.reloc/);
+    assert.match(text, /^local_data:/m); assert.match(text, /^private_data:/m); assert.match(text, /^private_exit:/m);
+    assert.doesNotMatch(text, /\$Lprivate|\.NON_MATCHING|\.reloc/);
+  });
+  setup(t, { assembly: true }).run((member, listing) => {
+    const text = libraryAssemblyParts(member, listing).map(p => p.text).join("\n");
+    assert.match(text, /\$Lprivate_data:/); assert.match(text, /\$Lprivate_exit:/); assert.doesNotMatch(text, /^private_data:/m);
   });
 });
-test("ECOFF extraction: a C name declared with an asm label references the label, not the listing name", t => {
+test("ECOFF extraction: a retired $L asm label does not bring the $L spelling back to a C TU", t => {
   const { f, run } = setup(t);
   run((member, listing) => {
     f.put(join(dirname(member.source), "_shared.h"), 'extern int private_data __asm__("$Lprivate_data");\nextern int local_data;\n');
     const text = libraryAssemblyParts(member, listing).map(p => p.text).join("\n");
-    assert.match(text, /\$Lprivate_data:/); assert.doesNotMatch(text, /^private_data:/m); assert.match(text, /^local_data:/m);
+    assert.match(text, /^private_data:/m); assert.doesNotMatch(text, /\$Lprivate_data/); assert.match(text, /^local_data:/m);
+  });
+});
+test("library policy refuses an added asm label in any spelling, and only an added one", t => {
+  const { f, run } = setup(t);
+  run(member => {
+    const file = join(dirname(member.source), "entry.c");
+    const patch = (...lines: string[]) => ["--- a/" + file, "+++ b/" + file, `@@ -1,0 +1,${lines.length} @@`, ...lines.map(l => "+" + l)].join("\n");
+    const kinds = (text: string) => checkSourcePolicy({ projectRoot: f.root, config: loadConfig(f.root), scanFunctions: [], patch: text }).hardFailures
+      .map(x => x.kind).filter(kind => kind === "asm-label");
+    for (const line of ['extern int q __asm__("private_data");', 'extern int q __asm__("$Lprivate_data");', 'extern char s[] __asm__("private_data+4");',
+      'static void helper(void) __asm__("$Lprivate_exit");'])
+      assert.deepEqual(kinds(patch(line)), ["asm-label"], line);
+    assert.deepEqual(kinds(patch("extern int private_data;", "/* was q __asm__(\"private_data\"); */")), []);
   });
 });
 test("ECOFF extraction: witnessed jump and branch slots are written in assembler source order", t => {

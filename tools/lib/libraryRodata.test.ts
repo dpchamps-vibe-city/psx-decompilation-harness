@@ -74,10 +74,10 @@ test("a switch table between strings belongs to its owner; the data before it is
     const part = (symbol: string) => parts.find(p => p.symbol === symbol)!.text;
     assert.match(part("__library_member_rodata_0"), /\.rdata\n\n\.align 4[^]*\.asciz "abc"[^]*\.text\n$/);
     assert.doesNotMatch(part("__library_member_rodata_0"), /xyz|\.word/);
-    assert.match(part("first"), /jr\s+ra[^]*\.rdata\n\.align 3\n[^]*\$Ljtbl:\n.*\.word first\+16\n.*\.word first\+24\n[^]*\.text\n$/);
+    assert.match(part("first"), /jr\s+ra[^]*\.rdata\n\.align 3\n[^]*\njtbl:\n.*\.word first\+16\n.*\.word first\+24\n[^]*\.text\n$/);
     // References land on the storage their own region defines.
-    assert.match(part("first"), /%hi\(\$Ljtbl\)[^]*%lo\(\$Ljtbl\)[^]*%hi\(\$Lstr0\)/);
-    assert.match(part("second"), /%hi\(\$Lstr2\)/);
+    assert.match(part("first"), /%hi\(jtbl\)[^]*%lo\(jtbl\)[^]*%hi\(str0\)/);
+    assert.match(part("second"), /%hi\(str2\)/);
     assert.match(part("__library_member_data"), /\.rdata\n[^]*\.asciz "xyz"/);
     assert.doesNotMatch(part("__library_member_data"), /\.align 4|abc|\.word first/);
     assert.deepEqual(libraryGeneratedSymbols(member), ["__library_member_data", "__library_member_symbols", "__library_member_rodata_0"]);

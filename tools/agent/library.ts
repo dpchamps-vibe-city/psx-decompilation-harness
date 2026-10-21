@@ -10,6 +10,7 @@ import { retainHandwrittenAssembly } from "./retainHandwrittenAssembly.js";
 import { libraryCodeClassCensus, renderCodeClassCensus } from "./libraryCodeClasses.js";
 import { reformLibraryTus } from "./reformLibraryTu.js";
 import { FOLD_STATUS, foldLibraryTus } from "./foldLibraryTu.js";
+import { unaliasLibraryTus } from "./unaliasLibraryTu.js";
 
 export async function main(args: string[]): Promise<void> {
   const [task, ...rest] = args;
@@ -25,6 +26,7 @@ export async function main(args: string[]): Promise<void> {
       "npm run library -- code-classes [--json] (read-only hand-written fingerprint census and its validation gate)\n" +
       "npm run library -- reform [--member ID ...] [--write] [--json] (assembly TU of a GCC-compiled member -> C parts; dry-run by default)\n" +
       "npm run library -- fold [--member ID ... | --all-ready] [--write] [--json] (finished C TU -> one module; check by default)\n" +
+      "npm run library -- unalias [--member ID ...] [--write] [--json] (asm-label aliases of local labels -> plain declarations; dry-run by default)\n" +
       "check without scope verifies EVERY configured member; --accepted is only an environment guard.");
     return;
   }
@@ -45,6 +47,21 @@ export async function main(args: string[]): Promise<void> {
       ...report.members.map(m => `  ${m.written ? "FOLDED" : m.refused ? "REFUSED" : m.verdict === "match" ? "READY" : "MISMATCH"}\t${m.id}\t${m.module}${m.refused ? `\t${m.refused}` : ""}`),
     ].join("\n"));
     if (report.members.some(m => m.verdict && m.verdict !== "match")) process.exitCode = 1;
+    return;
+  }
+  if (task === "unalias") {
+    const ids = rest.flatMap((a, i) => a === "--member" ? [rest[i + 1] ?? ""] : []);
+    if (rest.some((a, i) => !["--write", "--json", "--member"].includes(a) && rest[i - 1] !== "--member") || ids.some(id => !id || id.startsWith("--")))
+      throw new Error("unalias accepts --member ID (repeatable), --write and --json");
+    const report = unaliasLibraryTus(rest.includes("--write"), ids);
+    const kept = (label: { label: string; names: string[]; offsets: string[]; retired?: string[] }) =>
+      [...label.names.filter(n => !label.retired?.includes(n)).map(n => n === label.label ? n : `${n}=${label.label}`), ...label.offsets];
+    console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : [
+      `${report.written ? "Unaliased" : "Dry run:"} ${report.members.length} C TUs with asm-label aliases of local labels`,
+      ...report.members.map(m => `  ${m.error ? "FAILED" : m.written ? "WRITTEN" : "PLANNED"}\t${m.id}\t${m.labels.length} label(s)` +
+        (m.written ? `; kept: ${m.labels.flatMap(kept).join(", ") || "none"}` : "") + (m.error ? `\t${m.error}` : "")),
+    ].join("\n"));
+    if (report.members.some(m => m.error)) process.exitCode = 1;
     return;
   }
   if (task === "reform") {

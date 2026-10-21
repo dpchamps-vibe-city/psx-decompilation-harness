@@ -441,6 +441,16 @@ export function reviewMessage(functionName: string, findings: PolicyFinding[], s
   ].join("\n");
 }
 
+export function asmLabelReport(functionName: string, findings: PolicyFinding[]): string {
+  return [
+    `${functionName} declares a library label through an asm label; this is not a match the project accepts, and no review can approve it.`,
+    "",
+    findingsReport(findings),
+    "",
+    "Split defines every local label of a C member under its listing name, so declare it by that name: `extern T B_000015B8;` for storage, `static T func_00000088(...);` for a private function, with one type for each label across the TU. An offset into a label is a member or element of its object. Two C names or types for one label are a matching experiment to restructure, not a declaration to keep.",
+  ].join("\n");
+}
+
 export function rejectionReport(functionName: string, findings: PolicyFinding[], rationale: string): string {
   return [
     `Policy review rejected the forbidden constructs in ${functionName}; the edit has been reverted.`,

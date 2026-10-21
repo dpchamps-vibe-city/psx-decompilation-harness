@@ -55,6 +55,7 @@ import {
   nudgeMessage,
   openingMessage,
   rejectionReport,
+  asmLabelReport,
   reviewMessage,
 } from "./prompts.ts";
 import { isNotesPath, restoreDrift, snapshotFiles } from "./scope-guard.ts";
@@ -743,6 +744,15 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
       if (findings.length > 0) {
         changes = undefined;
         lastFindings = findings;
+        /* An asm label has no exemption to grant: its fix, the listing name, is
+           the agent's to write. Hand it back instead of asking a reviewer, or a
+           single-rung ladder would park it for a human. */
+        if (findings.some(finding => finding.kind === "asm-label")) {
+          lastReport = asmLabelReport(functionName, findings);
+          notify(deps, `${functionName}: asm label in library C; returned to the agent`, "warning");
+          if (attempt >= deps.config.maxReturnsPerTier) break;
+          continue;
+        }
         const review = await adjudicate(deps, functionName, findings, tierIndex);
         if (deps.flag.aborted) return { state: current, outcome: { kind: "aborted", functionName } };
 

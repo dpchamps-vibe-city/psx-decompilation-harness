@@ -98,6 +98,18 @@ function asmLabel(line: string): boolean {
   const declarator = line.slice(0, match.index).trim();
   return declarator.length > 0 && !/[;{}]$/.test(declarator);
 }
+/**
+ * Any declarator asm label, in any spelling — a `$L` local label or an offset
+ * into one included. A library C TU never needs one: split defines each local
+ * label under its listing name, which C declares directly. An alias gives one
+ * object a second C name and type, and the folded module would inherit it.
+ */
+function libraryAsmLabel(line: string): boolean {
+  const match = line.match(/\b(?:__asm__|__asm|asm)\s*\(\s*"\s*\$?[A-Za-z_][\w.$]*\s*(?:[+-]\s*\d+)?\s*"\s*\)\s*;\s*$/);
+  if (!match) return false;
+  const declarator = line.slice(0, match.index).trim();
+  return declarator.length > 0 && !/[;{}]$/.test(declarator);
+}
 
 /**
  * Assembly that does nothing but move the stack pointer.
@@ -482,6 +494,7 @@ function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
     }
     return sourceLines.get(file);
   };
+  const library = loadLibraryProject(options.projectRoot);
   let file = "";
   let scope: ReturnType<typeof patchScope> = {};
   let newLine = 0;
@@ -509,6 +522,11 @@ function scanAddedPatch(options: PolicyOptions): PolicyFinding[] {
         ? undefined
         : forbiddenLine(text, options.config, scope.name, scope.vram, scope.container);
       if (violation) findings.push({ kind: violation.kind, file, line: newLine, message: violation.message, text: text.trim() });
+      /* Added lines only: aliases already in a tree are migration debt that
+         `library -- unalias` reports and fold refuses, not a failure of every
+         unrelated check. Touching one still means writing it plainly. */
+      if (library && !commentOnly && policesConstructs(file) && libraryAsmLabel(text)) findings.push({ kind: "asm-label", file, line: newLine, text: trimmed,
+        message: "Asm labels are forbidden in library C: declare extracted storage and private functions by their listing names (`extern T B_000015B8;`, `static void func_00000088(void);`)" });
       /* A CC1FLAGS_ line names the stem it overrides, so the allowlist lookup
        * keys on that stem rather than on the patch scope. The scope is empty
        * whenever the caller audits the repo rather than one function, and

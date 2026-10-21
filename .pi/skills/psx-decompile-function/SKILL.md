@@ -369,6 +369,12 @@ poisons every later reading:
   reach, inspect the plausible table members before accepting a callback
   signature; values left in `$a1`–`$a3` at a `jalr` may be dead
   address-generation state, not arguments.
+- **Library storage and helpers.** In a library member, declare extracted
+  data and private functions by their listing names: `extern DsCq B_000015B8;`,
+  `static void func_00000088(DsCommand *);`. Split defines exactly those labels.
+  An asm label (`__asm__("…")` on a declaration) is refused: it gives one object
+  a second C name or type, which the folded module cannot keep. Use one type per
+  label across the TU, and reach into an object through its members.
 - **SDK operation boundaries.** Run `psx_sdk_idioms`. Hand-rolled bitfield
   arithmetic where the SDK has a macro is a reconstruction error, not a style
   choice. Restore the operation boundary before reading allocation or

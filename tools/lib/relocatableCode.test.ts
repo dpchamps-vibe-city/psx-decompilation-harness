@@ -108,6 +108,25 @@ test("a call's link write kills an old address before a delay-slot store", () =>
   assert(!objectFunctions(object).some(f => f.offset === 32), "the stored link is not the former callback address in ra");
 });
 
+/** DsInit's registration shape: the low half completes the argument in the
+ * delay slot of the call that consumes it. */
+function slotRegistration(hiReg = 4, between = 0x0c000000): RelocatableObject {
+  const object = callbacks(), d = object.sections.get(".text")!.data;
+  [0x3c000000 | hiReg << 16, between, 0x24000020 | hiReg << 21 | hiReg << 16, 0x03e00008, 0, 0, 0, 0].forEach((w, i) => d.writeUInt32LE(w >>> 0, i * 4));
+  object.relocations = [{ section: ".text", offset: 0, type: 5, reference: ".text@0" },
+    ...(between >>> 26 === 3 ? [{ section: ".text", offset: 4, type: 4, reference: "import:register_callback" }] : []),
+    { section: ".text", offset: 8, type: 6, reference: ".text@0" }];
+  return object;
+}
+
+test("a callback completed in its registration call's delay slot is published", () => {
+  assert.deepEqual(objectFunctions(slotRegistration()).map(f => [f.name, f.offset, f.discovery?.kind]),
+    [["entry", 0, undefined], ["func_00000090", 32, "address-relocation"]]);
+  assert(!objectFunctions(slotRegistration(8)).some(f => f.offset === 32), "a non-argument register in the slot is not the call's argument");
+  assert(!objectFunctions(slotRegistration(31)).some(f => f.offset === 32), "the link write clobbers a high half held in $ra");
+  assert(!objectFunctions(slotRegistration(4, 0x10000002)).some(f => f.offset === 32), "a branch between the halves is still a transfer");
+});
+
 test("callback address decoding honors local symbol values and signed-low HI16 carry", () => {
   const nonzero = callbacks();
   for (const r of nonzero.relocations) r.reference = ".text@16";

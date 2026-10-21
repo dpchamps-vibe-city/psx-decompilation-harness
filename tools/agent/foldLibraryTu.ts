@@ -13,6 +13,7 @@ import { activeSourceText } from "../lib/disabledSource.js";
 import { inspectLibraryPart, isDirectoryTu, isLibraryGeneratedSymbol, libraryAssemblyTu, libraryModulePart, libraryTuStatus, readLibraryTu,
   type LibraryTuManifest, type RetainedHandwrittenFunction } from "../lib/libraryTranslationUnit.js";
 import { compileSource } from "./decompToolchain.js";
+import { analyzeCSource, matchingConstructs } from "./cSourceAnalysis.js";
 import { checkLibrary } from "./libraryTarget.js";
 
 export interface FoldRow { id: string; module: string; parts: string[]; verdict?: string; refused?: string; written?: boolean; beforeSha256?: string; afterSha256?: string }
@@ -55,6 +56,16 @@ export function foldRefusal(member: LibraryMember, root: string): string | undef
     const text = readFileSync(part, "utf8");
     if (/PARKED by \/auto_decompilation_loop|PSX parked attempt/.test(text)) return `${relative(root, part)} holds a preserved attempt; settle it first`;
     if (/\b__(?:FILE|LINE|BASE_FILE|INCLUDE_LEVEL)__\b/.test(text)) return `${relative(root, part)} uses a location-dependent macro`;
+  }
+  /* One faithful module: each object has one name and one type. An asm label
+     is the split era's second C name for a label — in a part or in a private
+     header beside it. `library -- unalias` retires what it can; the rest is
+     restructured before the fold. */
+  const directory = join(root, dirname(member.source));
+  for (const name of readdirSync(directory).filter(name => /\.(?:c|h)$/.test(name)).sort()) {
+    const text = readFileSync(join(directory, name), "utf8");
+    const label = analyzeCSource(text).parses ? matchingConstructs(text).asmLabels[0] : undefined;
+    if (label) return `${relative(root, join(directory, name))}:${label.line} declares ${label.name} through asm label "${label.label}"; declare it by its listing name first`;
   }
   return undefined;
 }

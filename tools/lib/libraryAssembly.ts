@@ -28,6 +28,7 @@ export function librarySourceScaffold(member: LibraryMember, headers: string[], 
     parts.map(part => `INCLUDE_ASM("${folder}", ${part.symbol});\n`).join("");
 }
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const C_IDENTIFIER = /^[A-Za-z_]\w*$/;
 const registers = ["zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"];
 /** Reserve the assembler's external IDs before any part can mention a name.
  * Hidden slots are nil symbols, not serialized definitions. */
@@ -116,7 +117,7 @@ function reorderDelaySlots(member: LibraryMember, text: string, context: string)
  * manufactured from the target symbol table. With `rodataRegions`, a reference
  * into .rdata is written against the nearest label of the region it lands in,
  * so it survives the other regions becoming C. */
-function symbolicListing(member: LibraryMember, assembly: string, period: boolean, contextAssembly = assembly, rodataRegions?: number[]): string {
+function symbolicListing(member: LibraryMember, assembly: string, period: boolean, contextAssembly = assembly, rodataRegions?: number[], cNames = false): string {
   const exports = new Map(member.object.symbols.filter(s => s.binding !== 0 && member.object.sections.has(s.section)).map(s => [s.name, s]));
   const defined = new Set<string>();
   let section = "";
@@ -231,7 +232,11 @@ function symbolicListing(member: LibraryMember, assembly: string, period: boolea
   const localNames = [...contextAssembly.matchAll(/^\s*(?:(?:glabel|dlabel|jlabel|alabel|ehlabel)\s+([\w.$]+)|([\w.$]+):)/gm)].map(m => m[1] ?? m[2]!).filter(name => !globalNames.has(name));
   let rendered = result;
   const references = sourceReferences(member);
-  if (compilerLabels) for (const name of new Set(localNames.filter(name => !references.has(name)))) rendered = rendered.replace(new RegExp(`(?<![\\w.$])${escape(name)}(?![\\w.$])`, "g"), () => `$L${name.replace(/[^\w]/g, "_")}`);
+  /* In a C TU, a local label C can spell keeps its listing name: C names the
+     extracted storage and helpers by it, and a `$L` spelling would leave only
+     an asm label. Neither form reaches the object's symbol table. */
+  const compilerSpelled = (name: string) => !references.has(name) && !(cNames && C_IDENTIFIER.test(name));
+  if (compilerLabels) for (const name of new Set(localNames.filter(compilerSpelled))) rendered = rendered.replace(new RegExp(`(?<![\\w.$])${escape(name)}(?![\\w.$])`, "g"), () => `$L${name.replace(/[^\w]/g, "_")}`);
   for (const name of exports.keys()) if (!defined.has(name)) throw new Error(`${member.id}: generator gap: missing storage label ${name}`);
   return period ? reorderDelaySlots(member, rendered, contextAssembly) : rendered;
 }
@@ -367,7 +372,7 @@ export function libraryAssemblyParts(member: LibraryMember, assembly: string): L
   for (const part of parts) {
     const owned = member.object.symbols.filter(s => !member.object.sections.has(s.section) ||
       new RegExp(`^\\s*(?:glabel|dlabel|jlabel|alabel|ehlabel)\\s+${escape(s.name)}(?:,|\\s|$)`, "m").test(part.text));
-    part.text = symbolicListing({ ...member, object: { ...member.object, symbols: owned } }, part.text, period, assembly, rodataRegions);
+    part.text = symbolicListing({ ...member, object: { ...member.object, symbols: owned } }, part.text, period, assembly, rodataRegions, !assemblyTu);
     if (period) { part.preprocess = true; part.text = '#include <asm.h>\n#include <inline_s.h>\n' + part.text; }
   }
   if (assemblyTu) parts.push({ symbol: "__library_member_assembly", functions: [], preprocess: true, text: '#include <asm.h>\n#include <inline_s.h>\n' + whole });

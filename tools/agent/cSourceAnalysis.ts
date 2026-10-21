@@ -153,6 +153,8 @@ export interface MatchingConstructs {
   localRegisterBindings: RegisterBindingSite[];
   fileRegisterBindings: RegisterBindingSite[];
   otherAsm: Array<{ line: number; scope: "file" | "function"; text: string; start: number; end: number }>;
+  /** Symbol aliases: `extern int data asm("alias")`. Neither instructions nor pins. */
+  asmLabels: Array<{ line: number; name: string; label: string }>;
 }
 
 /** Local hard-register bindings, NOT assembler symbol labels. A declaration
@@ -163,7 +165,7 @@ export function matchingConstructs(source: string): MatchingConstructs {
   const guard = analyzeCSource(source);
   if (!guard.parses) throw new Error(`Cannot inspect register bindings: ${guard.reasons.join("; ")}`);
   const tree = parseC(source);
-  const result: MatchingConstructs = { localRegisterBindings: [], fileRegisterBindings: [], otherAsm: [] };
+  const result: MatchingConstructs = { localRegisterBindings: [], fileRegisterBindings: [], otherAsm: [], asmLabels: [] };
   try {
     walkActiveC(tree.rootNode, node => {
       if (node.type !== "gnu_asm_expression") return true;
@@ -177,8 +179,12 @@ export function matchingConstructs(source: string): MatchingConstructs {
       if (declaration?.type === "declaration" && operands.length === 1 && operands[0]?.type === "string_literal") {
         /* A non-register declarator asm is a symbol alias, not instructions
          * and not a pin. Never erase or diagnose it as either. */
-        if (!namedChildren(declaration).some(c => c.type === "storage_class_specifier" && c.text === "register")) return true;
         const preceding = namedChildren(declaration).filter(c => c.endIndex <= node.startIndex).at(-1);
+        if (!namedChildren(declaration).some(c => c.type === "storage_class_specifier" && c.text === "register")) {
+          const alias = node.parent?.type === "function_declarator" ? declaratorName(node.parent) : declaratorName(preceding);
+          if (alias) result.asmLabels.push({ line: node.startPosition.row + 1, name: alias.text, label: operands[0]!.text.slice(1, -1) });
+          return true;
+        }
         const name = declaratorName(preceding);
         if (!name) return true;
         const site = { name: name.text, start: node.startIndex, end: node.endIndex, line: node.startPosition.row + 1, binding: node.text,

@@ -29,7 +29,7 @@
     {
       "file": ".pi/extensions/psx-decomp/autoloop/prompts.ts",
       "descriptionsOnly": false,
-      "sha256": "669b8f467dc5653061218d579786131496fdce8c345510fd42280f45153dc8cd"
+      "sha256": "7b929e2030457ad485dc3ba6aeffc5b99df52362150fe350063d84717a1701f0"
     },
     {
       "file": ".pi/extensions/psx-decomp/index.ts",
@@ -134,12 +134,12 @@
     {
       "file": ".pi/skills/psx-decompile-function/SKILL.md",
       "descriptionsOnly": false,
-      "sha256": "26b72f86b5c8b971a7bb387d1e03d825f9331d68bf5570ffb497dcae26fd3bf1"
+      "sha256": "7eb939ee806d1db95439895122e299029d51ebef09b165e3d04d71c3ef03e10a"
     },
     {
       "file": ".pi/skills/psx-fold-cleanup/SKILL.md",
       "descriptionsOnly": false,
-      "sha256": "e44433b433cc2900e5193a282d19f9fef670bf3731e95049134c9322252ce15e"
+      "sha256": "71e44023c41c8a1755e70d42a5832db4d5d3e54c78b80f6d4a93ece005b8c00a"
     },
     {
       "file": ".pi/skills/psx-identify-project/SKILL.md",

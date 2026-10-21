@@ -215,7 +215,10 @@ writer; literal words in generated listings are not subject to source audits.
 The generated `__library_member_symbols` part comes first: original XDEF/XREF/XBSS
 names in wire-ID order, with local `__lnk_hidden_<id>` labels for omitted IDs.
 IDs start after cc1's two markers in a C TU, or at 1 in an assembly TU. All other
-generated labels use `$L…`, except names referenced by existing TU parts.
+generated labels in a C TU keep their listing names when they are C identifiers
+(`B_000015B8:`, `func_00000088:`), so C declares extracted storage and private
+functions by those names; asm labels are refused in library C. Labels C cannot
+spell, and every local label of an assembly TU, use `$L…`.
 Original patch order can witness assembler-filled delay slots; only those
 extracted regions are emitted in reorder-mode source order. Unpatched data
 words remain numeric; a patched word keeps its symbolic operand. OR moves are
@@ -295,6 +298,19 @@ out, and retained functions stay their canonical INCLUDE_ASM lines. It is named
 after the original object (`QSORT.OBJ` → `qsort.c`) and its manifest has one part:
 `{ "path": "qsort.c", "symbols": [...], "retainedFunctions": { ... } }`. The
 module must define exactly its non-retained functions and is the TU's only part.
+Fold refuses a TU whose parts, or private headers beside them, still declare
+anything through an asm label: the module gives each object one name and type.
+
+`npm run library -- unalias [--member ID ...] [--write] [--json]` migrates C TUs
+written against the earlier `$L` spellings. It re-spells each `$L` asm label to
+the plain label, then retires every alias it can: the label is dropped and the C
+name becomes the listing name throughout the TU, and a function bound to a local
+label becomes `static`. Each write re-splits and rebuilds the member and keeps
+only a whole-object match, retiring aliases one at a time when they cannot all
+go together; the written members are then verified together. What stays — an
+offset into a label, or C names whose types or qualifiers disagree — is listed
+for restructuring. A `$L`-spelled C name that stays gets a plain asm label so it
+still links. Parked attempts in disabled arms are re-spelled, not retired.
 
 The default is a check: the module is staged under `build/libraries/fold/<id>/`
 and built through the production chain, and it must reproduce the original object

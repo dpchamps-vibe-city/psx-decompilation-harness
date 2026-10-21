@@ -45,8 +45,8 @@ restored after this turn and fails the cleanup. Do not commit.
   `const`, alignment or sizes.
 - Retained hand-written functions: their `INCLUDE_ASM` lines stay exactly as
   they are.
-- No new embedded assembly, register pinning, flag overrides, `INCLUDE_ASM`
-  lines or allowlist changes.
+- No new embedded assembly, asm labels, register pinning, flag overrides,
+  `INCLUDE_ASM` lines or allowlist changes.
 
 ## Verify as you go
 

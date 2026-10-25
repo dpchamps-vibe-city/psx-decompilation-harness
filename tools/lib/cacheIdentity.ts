@@ -8,7 +8,7 @@ import { fileDigest } from "./contentCache.js";
 import { executedToolIdentity } from "./toolProvenance.js";
 import { assemblerIdentity } from "./assembler.js";
 
-export const COMPONENT_CONTRACTS = Object.freeze({ preparation: "preparation-v2", context: "declaration-context-v3", preprocess: "preprocess-v1", residual: "residual-waypoints-v2", compilation: "production-compile-v2" });
+export const COMPONENT_CONTRACTS = Object.freeze({ preparation: "preparation-v3", context: "declaration-context-v4", preprocess: "preprocess-v1", residual: "residual-waypoints-v2", compilation: "production-compile-v2" });
 export function stableHash(value: unknown): string {
   const stable = (v: any): any => Array.isArray(v) ? v.map(stable) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map(k => [k, stable(v[k])])) : v;
   return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");

@@ -21,6 +21,8 @@ import { decodeBytes } from "../matching-reconstruction/exec.js";
 import { decodeFunctionWords, type DecodedInsn } from "../matching-reconstruction/decode.js";
 import { resolveFunctionTarget, type FunctionTarget } from "../../lib/targetAdapter.js";
 import { targetWordsOf } from "../../lib/functionOracle.js";
+import { requireLibraryFunction } from "../../lib/libraryTargets.js";
+import { recoverRelocatableDispatches } from "./relocatable-dispatch.js";
 import { buildCfg, renderCfg, type Cfg } from "./cfg.js";
 import { computeDominators } from "./dominance.js";
 import { buildRegions, distinctRegionCount, regionCount, renderRegions, type RegionTree } from "./regions.js";
@@ -102,8 +104,12 @@ export function buildMachineIr(functionName: string): MachineIrReport {
   const target = resolveFunctionTarget(functionName);
   if (target.coordinate.kind === "section") {
     const insns = decodeFunctionWords(targetWordsOf(functionName));
+    const { member } = requireLibraryFunction(functionName);
+    const dispatches = new Map(recoverRelocatableDispatches(member.object, target.coordinate.section, insns)
+      .map(d => [d.instructionIndex, d.targets]));
     return { ...buildMachineIrFrom(functionName, insns, { containerId: target.owner.id,
-      vram: target.coordinate.offset, sizeBytes: target.coordinate.size }), coordinate: target.coordinate };
+      vram: target.coordinate.offset, sizeBytes: target.coordinate.size,
+      resolveDispatch: index => dispatches.get(index) }), coordinate: target.coordinate };
   }
   const location = requireFunctionLocation(functionName);
   const container = location.container;

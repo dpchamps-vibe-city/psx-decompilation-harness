@@ -1,8 +1,24 @@
 import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
-import { alignDefinition, unprototypeDeclarations } from "./libraryInference.js";
+import { alignDefinition, libraryImportedNames, unprototypeDeclarations } from "./libraryInference.js";
+import type { LibraryMember } from "../lib/libraryTargets.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
 import type { Prototype } from "./calleeTruth.js";
+
+test("native relocation-only object imports project callback types transitively without inventing contracts", () => {
+  const member = { object: { symbols: [], relocations: [
+    { reference: "import:hooks" }, { reference: "import:hooks" }, { reference: "import:dormant" }, { reference: ".data@0" },
+  ] } } as unknown as LibraryMember;
+  const index = emptyDeclarationIndex();
+  indexDeclarations(index, "typedef unsigned char Packet; typedef struct { Packet *(*draw[2][3])(); } Hooks; extern Hooks hooks;", "sdk.h", "public", "public-header");
+  const roots = libraryImportedNames(member);
+  assert.deepEqual(roots, ["dormant", "hooks"]);
+  const projection = projectDeclarations(index, roots, member.id);
+  assert.ok(projection.selected.some(d => d.name === "hooks"));
+  assert.ok(projection.selected.some(d => d.name === "Hooks"));
+  assert.ok(projection.selected.some(d => d.name === "Packet"));
+  assert.deepEqual(projection.unknown, ["dormant"], "missing/disabled SDK declarations stay explicit");
+});
 
 const declared = (name: string, returnType: string, paramTypes: string[], variadic = false): Prototype =>
   ({ name, signature: "", parameters: paramTypes.length, variadic, returnsVoid: returnType === "void", returnType, paramTypes, kind: "declaration", where: "sdk.h", line: 1 } as Prototype);

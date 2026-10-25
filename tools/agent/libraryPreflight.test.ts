@@ -17,6 +17,7 @@ import { preflightLibraryFunction, checkLibrarySplits } from "./libraryPreflight
 import { classifyLibraryCode } from "./libraryCodeClass.js";
 import { analyzeLibraryTypes } from "./libraryInference.js";
 import { seedOracle } from "./type-propagation/seeds.js";
+import { buildMachineIr } from "./machine-ir/index.js";
 
 /** Synthetic SDK-style mixed member: one size-zero export, two unnamed private
  * callees, an old BIOS veneer and data. No proprietary SDK/game bytes. */
@@ -239,7 +240,7 @@ test("end-to-end: address-only callbacks split and migrate into individual files
       assert.equal(readFileSync(oldDraft, "utf8"), stale, "stale draft evidence is preserved, not overwritten");
     }
     const recorded = JSON.parse(readFileSync(latest, "utf8"));
-    assert.equal(recorded.generationContract, "directory-tu-selected-related-v4");
+    assert.equal(recorded.generationContract, "directory-tu-selected-related-v5");
     assert.equal(typeof recorded.boundaryIdentity, "string");
     assert.notEqual(recorded.boundaryIdentity, "obsolete");
     const retained = join(f.root, "retained.c"), retainedText = readFileSync(join(f.root, recorded.draft), "utf8") + "\n/* keep this measured draft */\n";
@@ -264,6 +265,66 @@ test("preflight records a malformed split contract instead of throwing before it
     assert.match(result.stages[0]!.detail, /every original function exactly once/);
     assert.equal(JSON.parse(readFileSync(join(f.root, result.report), "utf8")).status, "failed");
     assert.equal(result.preparation, undefined);
+  });
+});
+
+test("library switch preparation names readonly tables and projects imported object types without changing originals", async t => {
+  const f = fixture(t);
+  await fixtureContext(f.root, async () => {
+    f.create();
+    writeFileSync(join(f.root, "sdk/include/api.h"), '#include "kernel.h"\ntypedef struct { SdkWord values[2]; int (*callback)(int); } Hooks;\nextern Hooks settings;\nint entry(SdkWord);\n');
+    const assembly = `.set noreorder
+.text
+.globl entry
+.type entry, @function
+entry:
+lui $t1,%hi(settings)
+lw $t1,%lo(settings)($t1)
+sltiu $v0,$a0,2
+beq $v0,$zero,.Ldefault
+sll $v0,$a0,2
+lui $at,%hi(.Ltable)
+addu $at,$at,$v0
+lw $v0,%lo(.Ltable)($at)
+nop
+jr $v0
+nop
+.Lcase0:
+addu $v0,$t1,$a0
+jr $ra
+nop
+.Lcase1:
+addiu $v0,$t1,1
+jr $ra
+nop
+.Ldefault:
+addiu $v0,$zero,-1
+jr $ra
+nop
+.size entry, .-entry
+.section .rodata
+.Ltable:
+.word .Lcase0,.Lcase1
+`;
+    writeFileSync(join(f.root, "switch.s"), assembly);
+    execFileSync(f.config.tools.as, [...f.config.flags.as, join(f.root, "switch.s"), "-o", join(f.root, "original.o")]);
+    const bytes = readFileSync(join(f.root, "original.o"));
+    const member = libraryMembers(f.root)[0]!, key = libraryTargetKey(member, "entry");
+    splitLibrary();
+    const live = join(f.root, dirname(member.source), "entry.c"), before = readFileSync(live);
+    const prepared = await prepareLibraryFunction(key, { alternative: true });
+    assert.equal(prepared.packet.generation.status, "generated", prepared.packet.compilation.diagnostics + "\n" + readFileSync(join(f.root, dirname(prepared.path), "function-scope.s"), "utf8"));
+    assert.match(prepared.packet.primary!.text, /switch\s*\(/);
+    const context = readFileSync(join(f.root, prepared.packet.context.projection), "utf8");
+    assert.match(context, /extern Hooks settings/);
+    assert.match(context, /\(\*callback\)\(int\)/);
+    assert.ok(!prepared.packet.context.unknown.includes("settings"));
+    const ir = buildMachineIr(key);
+    assert.equal(ir.ir.cfg.blocks.filter(b => b.terminator === "dispatch").length, 1);
+    assert.equal(ir.ir.cfg.blocks.filter(b => b.terminator === "indirect").length, 0);
+    assert.equal(ir.unmodelled.length, 0);
+    assert.ok(readFileSync(join(f.root, "original.o")).equals(bytes));
+    assert.ok(readFileSync(live).equals(before));
   });
 });
 

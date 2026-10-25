@@ -34,10 +34,10 @@ export interface BasicBlock {
   predecessors: number[];
   /**
    * How the block ends. `fall` blocks flow into their single successor;
-   * `branch` blocks test; `dispatch` blocks jump through a table; `return`
-   * and `trap` blocks leave the function.
+   * `branch` blocks test; `dispatch` blocks jump through a table; `indirect`
+   * blocks have unknown successors; `return` and `trap` leave the function.
    */
-  terminator: "fall" | "branch" | "jump" | "dispatch" | "return" | "trap";
+  terminator: "fall" | "branch" | "jump" | "dispatch" | "indirect" | "return" | "trap";
   /** Index of the branch/jump instruction, for a block that has one. */
   terminatorIndex?: number;
   /** Index of the delay slot, which executes before the transfer. */
@@ -57,7 +57,7 @@ export interface Cfg {
 }
 
 /** Instruction indices that begin a basic block. */
-function leaders(insns: DecodedInsn[]): Set<number> {
+function leaders(insns: DecodedInsn[], dispatches: Map<number, number[]>): Set<number> {
   const start = insns[0]?.vram ?? 0;
   const indexOf = (vram: number): number | undefined => {
     const index = (vram - start) / 4;
@@ -65,6 +65,10 @@ function leaders(insns: DecodedInsn[]): Set<number> {
   };
 
   const marks = new Set<number>([0]);
+  for (const targets of dispatches.values()) for (const target of targets) {
+    const index = indexOf(target);
+    if (index !== undefined) marks.add(index);
+  }
   for (let index = 0; index < insns.length; index++) {
     const insn = insns[index]!;
     if (isBranch(insn.op) || insn.op === "j") {
@@ -105,7 +109,19 @@ export function buildCfg(
     return Number.isInteger(index) && index >= 0 && index < insns.length ? index : undefined;
   };
 
-  const marks = [...leaders(insns)].filter((index) => index < insns.length).sort((a, b) => a - b);
+  const dispatches = new Map<number, number[]>();
+  const slots = new Set(insns.flatMap((insn, index) =>
+    isBranch(insn.op) || ["j", "jr", "jal", "jalr"].includes(insn.op) ? [index + 1] : []));
+  insns.forEach((insn, index) => {
+    if (insn.op === "jr" && insn.rs !== 31) {
+      const targets = options.resolveDispatch?.(index);
+      if (targets?.length && targets.every(target => {
+        const at = indexOf(target);
+        return at !== undefined && !slots.has(at);
+      })) dispatches.set(index, targets);
+    }
+  });
+  const marks = [...leaders(insns, dispatches)].filter((index) => index < insns.length).sort((a, b) => a - b);
   const blockOf = new Int32Array(insns.length).fill(-1);
   const blocks: BasicBlock[] = [];
 
@@ -152,8 +168,8 @@ export function buildCfg(
 
     if (transfer.op === "jr") {
       if (transfer.rs === 31) { block.terminator = "return"; continue; }
-      const targets = options.resolveDispatch?.(transferIndex);
-      if (!targets || targets.length === 0) { block.terminator = "return"; continue; }
+      const targets = dispatches.get(transferIndex);
+      if (!targets || targets.length === 0) { block.terminator = "indirect"; continue; }
       block.terminator = "dispatch";
       for (const target of targets) {
         const index = indexOf(target);

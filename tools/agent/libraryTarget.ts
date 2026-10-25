@@ -32,8 +32,9 @@ import { extractSignaturesFromSource } from "./sdkTypes.js";
 import { analyzeCSource } from "./cSourceGuard.js";
 import { preservedAttempt } from "./cSourceAnalysis.js";
 import { emptyDeclarationIndex, indexDeclarations, projectDeclarations } from "./declarationContext.js";
-import { alignDefinition, analyzeLibraryTypes, indexPreprocessed, inferenceDeclarations, unprototypeDeclarations, type LibraryTypeAnalysis } from "./libraryInference.js";
+import { alignDefinition, analyzeLibraryTypes, indexPreprocessed, inferenceDeclarations, libraryImportedNames, unprototypeDeclarations, type LibraryTypeAnalysis } from "./libraryInference.js";
 import { prepareM2c } from "../build/prepareM2c.js";
+import { normalizeM2cJumpTables } from "./m2cAssembly.js";
 import { packetOpening, packetEvidence, type PreparationPacket, type UnknownFact } from "./campaign/packet.js";
 import { detectFunctionMacroIdentity } from "../diagnostics/macroIdentity.js";
 import { sourceConstructFindings } from "../../.pi/extensions/shared/source-policy.js";
@@ -573,7 +574,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
       const previous = JSON.parse(readFileSync(latest, "utf8")) as { draft: string; destination?: string; generationContract?: string; boundaryIdentity?: string };
       const text = readFileSync(resolve(root, previous.draft), "utf8");
       if (isDirectoryTu(member)) {
-        if (previous.destination !== target.source || previous.generationContract !== "directory-tu-selected-related-v4" || previous.boundaryIdentity !== boundaryIdentity || inspectLibraryPart(text, { path: `${fn.name}.c`, symbol: fn.name }).stub) throw new Error("Prior draft belongs to a different source boundary");
+        if (previous.destination !== target.source || previous.generationContract !== "directory-tu-selected-related-v5" || previous.boundaryIdentity !== boundaryIdentity || inspectLibraryPart(text, { path: `${fn.name}.c`, symbol: fn.name }).stub) throw new Error("Prior draft belongs to a different source boundary");
       }
       retained = { origin: "m2c", path: previous.draft, text, sha256: digest(text), declarationsRequired: [] };
     } catch { /* No prior draft. Failed/empty generation never publishes this pointer. */ }
@@ -678,7 +679,10 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
           const call = resolveLibraryCall(member, r.reference, r.addend ?? (word & 0x3ffffff) * 4, [member]);
           return call ? [call.slice(call.lastIndexOf("::") + 2)] : [];
         });
-      const roots = [...(isDirectoryTu(member) ? [fn.name, ...callees, ...index.declarations.filter(d => d.visibility === "source-local" && d.kind === "object").map(d => d.name)] : member.functions.map(fn => fn.name)), ...member.object.symbols.filter(s => s.binding !== 0 && s.name && !s.name.endsWith(".NON_MATCHING")).map(s => s.name)];
+      // Native imports may exist only as relocation references, not symbols.
+      // Object imports need the same transitive type closure as direct callees.
+      const imports = libraryImportedNames(member);
+      const roots = [...(isDirectoryTu(member) ? [fn.name, ...callees, ...index.declarations.filter(d => d.visibility === "source-local" && d.kind === "object").map(d => d.name)] : member.functions.map(fn => fn.name)), ...imports, ...member.object.symbols.filter(s => s.binding !== 0 && s.name && !s.name.endsWith(".NON_MATCHING")).map(s => s.name)];
       const projection = projectDeclarations(index, roots, member.id), projectedPath = join(directory, "m2c.ctx");
       const declarations = analysis ? inferenceDeclarations(analysis, index, relative(root, constraintsPath)) : { callees: [], wrapperTypes: [], carriers: [], unknown: [] };
       writeFileSync(projectedPath, [...new Set([projection.text, ...declarations.wrapperTypes, ...declarations.callees, ...declarations.carriers].flatMap(t => t.split(/\n\n/)))].join("\n\n"));
@@ -704,6 +708,13 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
           return original && (original.flags & 4 || (!(original.flags & 1) && original.type !== 8))
             ? [listing.slice(s.index!, sections[i + 1]?.index ?? listing.length)] : [];
         }).join("\n"));
+      }
+      const normalized = normalizeM2cJumpTables(readFileSync(m2cAssembly, "utf8"));
+      if (normalized.renames.length) {
+        // Diagnostic copy only; production listings/relocations keep their names.
+        m2cAssembly = join(directory, "function-scope.s");
+        writeFileSync(m2cAssembly, normalized.text);
+        writeFileSync(join(directory, "jump-table-renames.json"), JSON.stringify(normalized.renames, null, 2) + "\n");
       }
       const command = await recordedCommand(configuredTool("python", root), [m2c.script, ...configuredFlags("m2c", flagContext, root), "--no-cache", "--context", projectedPath,
         m2cAssembly, ...(isDirectoryTu(member) ? ["--infer-related", "-f", fn.name] : []),
@@ -772,7 +783,7 @@ export async function prepareLibraryFunction(name: string, options: { root?: str
   packet.preparationState = "complete";
   packet.identity.fingerprint = digest(JSON.stringify({ inputs, memberships }));
   if (!options.alternative && packet.primary?.origin === "m2c" && packet.compilation.status === "succeeded")
-    writeFileSync(latest, JSON.stringify({ draft: packet.primary.path, destination: target.source, generationContract: "directory-tu-selected-related-v4", boundaryIdentity }) + "\n");
+    writeFileSync(latest, JSON.stringify({ draft: packet.primary.path, destination: target.source, generationContract: "directory-tu-selected-related-v5", boundaryIdentity }) + "\n");
   const path = relative(root, join(directory, "packet.json"));
   writeFileSync(join(root, path), JSON.stringify(packet, null, 2) + "\n");
   writeFileSync(join(directory, "handoff.md"), packetOpening(packet, path)); writeFileSync(join(directory, "evidence.md"), packetEvidence(packet)); writeFileSync(join(directory, "diagnostics.txt"), packet.compilation.diagnostics);

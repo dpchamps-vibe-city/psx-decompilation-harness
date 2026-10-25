@@ -304,6 +304,24 @@ relation, not original compiler input or assembler behavior. Raw compiler-source
 covers C, headers and machine descriptions independently of C-parser health; a
 file filter selecting no covered files fails without performing a search.
 
+Library preparation normalizes witnessed readonly code-label tables to m2c's
+jump-table naming convention in a diagnostic copy only. The original listings,
+split symbols, data and production assembler input are unchanged. The packet's
+run directory retains `jump-table-renames.json` when normalization is needed.
+Imported objects named only by native relocations are context-projection roots,
+including their transitive callback/aggregate types when actually declared.
+Missing declarations remain unknown: disabled `#if 0` SDK examples are not
+silently activated, and generation success does not imply a compiling draft.
+
+Machine IR recovers bounded library switches from original HI16/LO16 table
+references and readonly R_MIPS_32 entries in section coordinates. The supported
+form uses a `sltiu`/zero-branch guard and word-scaled index, with scaling in or
+after the guard's delay slot. Every entry must resolve inside the selected code
+extent; missing, mutable, imported or unsupported tables remain unresolved.
+Resolved case destinations become CFG leaders. Unresolved indirect jumps are
+explicit `indirect` exits with incomplete-structure diagnostics, not returns.
+This is diagnostic recovery, not symbolic linking or a new acceptance path.
+
 Recipe-atlas/near-miss image flag columns currently refuse library targets
 explicitly, before any EXE lookup or catalogue compilation.
 

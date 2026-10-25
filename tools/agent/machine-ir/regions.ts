@@ -90,7 +90,8 @@ export function buildRegions(cfg: Cfg, dominance: Dominance): RegionTree {
   const loops = findNaturalLoops(cfg, dominance);
   const irreducible = irreducibleBlocks(cfg, loops);
   const ipdom = computePostDominators(cfg);
-  const notes: string[] = [];
+  const notes: string[] = cfg.blocks.filter(b => b.terminator === "indirect")
+    .map(b => `B${b.index} has an unresolved indirect jump; its successors and downstream structure are incomplete`);
 
   const position = new Int32Array(cfg.blocks.length).fill(Number.MAX_SAFE_INTEGER);
   cfg.reversePostorder.forEach((block, index) => { position[block] = index; });

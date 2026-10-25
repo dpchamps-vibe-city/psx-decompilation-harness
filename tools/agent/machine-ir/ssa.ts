@@ -319,7 +319,10 @@ export function liftToSsa(functionName: string, cfg: Cfg, options: LiftOptions =
     memoryOut[blockIndex] = memory;
 
     /* Settle the exit. */
-    if (block.terminator === "return") {
+    if (block.terminator === "indirect") {
+      blockExit[blockIndex] = { kind: "indirect", target: dispatchIndex ?? null };
+      builder.opaque.push({ vram: cfg.insns[terminatorIndex!]!.vram, op: "jr", note: "unresolved indirect jump; successors unknown (not a function return)" });
+    } else if (block.terminator === "return") {
       blockExit[blockIndex] = { kind: "return", value: registers[2] ?? null };
     } else if (block.terminator === "trap") {
       const breakInsn = block.instructions.map((index) => cfg.insns[index]!).find((insn) => insn.op === "break");

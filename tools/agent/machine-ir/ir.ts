@@ -118,6 +118,7 @@ export type BlockExit =
   | { kind: "fall"; to: number }
   | { kind: "branch"; condition: ValueId; polarity: "taken-if-true"; onTrue: number; onFalse: number }
   | { kind: "dispatch"; index: ValueId; targets: number[] }
+  | { kind: "indirect"; target: ValueId | null }
   | { kind: "return"; value: ValueId | null }
   | { kind: "trap"; vram: number }
   | { kind: "unreachable" };

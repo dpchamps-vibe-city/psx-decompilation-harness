@@ -19,6 +19,12 @@ import { indexDeclarations, projectDeclarations, type DeclarationIndex } from ".
 import { declaratorName, namedChildren, parseC } from "./residual-source-search/tree-sitter-c.js";
 import { renameTypeTokens } from "./scopedTypes.js";
 
+/** Native object imports need not have symbol-table entries. These names are
+ * projection roots only: an absent declaration remains unknown, never invented. */
+export function libraryImportedNames(member: Pick<LibraryMember, "object">): string[] {
+  return [...new Set(member.object.relocations.flatMap(r => /^import:(.+)$/.exec(r.reference)?.slice(1) ?? []))].sort();
+}
+
 export interface LibraryTypeAnalysis {
   graph: EvidenceGraph; propagation: Propagation; seeds: SeedRecord[];
   /** Reference headers by include spelling, in include order: those declaring the

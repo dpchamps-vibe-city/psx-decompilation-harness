@@ -110,6 +110,17 @@ no assembly or policy exemptions. A member the oracle then verifies from one
 process from classification to unchanged, provenance-marked retained assembly.
 It does not authorize rewriting assembly into imagined original source.
 
+## Autonomous decompilation with subagents
+
+Optionally configure `subagents: { quantity, model }` in `.pi/autoloop.json` so
+each existing work turn delegates up to N functions in parallel while the main
+agent monitors, steers, stops or reroutes workers. There is still one main loop;
+its ladder, verification, parking, commits and auto-folding remain unchanged.
+An explicit successful worker integration honors `commitOnMatch` immediately,
+without waiting for an unrelated function to finish. Omitting the field retains
+ordinary single-agent work turns. See [configuration and shared-workspace behavior](docs/autoloop-subagents.md) for
+installation (Pi >=1.2.0, pinned `pi-subagents`), an example and the control tools.
+
 ## Validation and references
 
 `npm test` passes without BTN assets using [isolated fixtures](test-fixtures/harness/README.md)

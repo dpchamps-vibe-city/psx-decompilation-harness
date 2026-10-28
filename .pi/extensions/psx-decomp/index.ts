@@ -171,7 +171,7 @@ function dispatchSkill(
   }
 }
 
-export default function psxDecompExtension(pi: ExtensionAPI) {
+export default function psxDecompExtension(pi: ExtensionAPI, options: { worker?: boolean } = {}) {
   pi = projectAPI(pi);
   let activeRoot: string | undefined;
   const documents = new Map<string, ReturnType<typeof interactiveDocumentation>>();
@@ -197,7 +197,7 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
   registerExportContextTool(pi);
   registerFinalizeFunctionTool(pi, (name, files, ctx) => {
     const root = discoverProjectRoot(ctx.cwd);
-    if (!loopActive()) documentationFor(root).start(name, agentCompletion(root, files), ctx);
+    if (!options.worker && !loopActive()) documentationFor(root).start(name, agentCompletion(root, files), ctx);
   }, (ctx) => {
     /* Under the loop, the next selection's graph starts as soon as this
        function's machine verification passes; it never runs outside a loop. */
@@ -332,7 +332,7 @@ export default function psxDecompExtension(pi: ExtensionAPI) {
     },
   });
 
-  loopActive = registerAutoloopCommands(pi);
+  if (!options.worker) loopActive = registerAutoloopCommands(pi);
 
   pi.registerCommand("decomp-status", {
     description: "Show the current call-graph decompilation worklist summary",

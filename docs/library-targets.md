@@ -359,7 +359,11 @@ carry, requires an unclobbered `LUI`/`ADDIU` chain and a pointer store/argument/
 return/indirect-call use (including stores in delay slots), and validates the
 candidate's independent control flow. Text loads, indexed switch addresses,
 literals, unresolved computed jumps, fallthrough, cross-boundary shared blocks
-and interiors of explicitly sized original symbols are not new functions. Raw
+and interiors of explicitly sized original symbols are not new functions. A
+callback containing a guarded switch can be independent when the shared dispatch
+resolver proves its bound, readonly HI16/LO16 table address and every relocated
+case target inside that callback. Missing/unknown table entries, mutable storage,
+cross-boundary targets and targets entering delay slots fail closed. Raw
 fields and imports are never entry witnesses. Other address forms, including
 `R_MIPS_32`-only tables, are not promoted by this bounded recognizer.
 These bounds remain **inferred**, not recovered historical sizes. The adapter

@@ -11,6 +11,7 @@ import { createHandoffSink, registerHandoffTool, setHandoffToolActive } from "./
 import { createVerdictSink, registerPolicyVerdictTool, setVerdictToolActive } from "./policy-verdict.ts";
 import { readState } from "./state.ts";
 import { createTurnGate, registerTurnGate } from "./turn-gate.ts";
+import { CONTROLLER_TOOL, registerControllerTool, runLoopWithSubagents, type ControllerSink } from "./controller.ts";
 
 export const LOOP_COMMAND = "auto_decompilation_loop";
 
@@ -46,10 +47,9 @@ export function parseArgs(args: string): ParsedArgs {
 /**
  * `/auto_decompilation_loop` — the in-TUI escalation loop.
  *
- * It runs in this session, on this tree: no worktrees, no detached supervisor,
- * no forked agents. The command handler is the loop body, `sendUserMessage` +
- * `waitForIdle` is the turn, and the two oracles are the only things allowed to
- * call a function finished.
+ * Without subagents this retains the serial in-session ladder. With subagents,
+ * the ladder supervises isolated workers; byte/build/policy oracles still own
+ * completion, and integration remains serial.
  */
 export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
   const sink: LoopSinks = { verdict: createVerdictSink(), handoff: createHandoffSink(), prep: {}, gate: createTurnGate(), checkpoint: {} };
@@ -59,6 +59,8 @@ export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
   registerTurnGate(pi, sink.gate);
   registerCheckpointMonitor(pi, sink.checkpoint!);
 
+  const controller: ControllerSink = {};
+  registerControllerTool(pi, controller);
   let active: AbortFlag | null = null;
   let running: Promise<unknown> | undefined;
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -74,6 +76,7 @@ export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
     setVerdictToolActive(pi, false);
     setHandoffToolActive(pi, false);
     setPrepHandoffToolActive(pi, false);
+    pi.setActiveTools(pi.getActiveTools().filter(name => name !== CONTROLLER_TOOL));
   });
 
   /* Interactive input while the loop runs is the stop signal. The loop's own
@@ -128,7 +131,9 @@ export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
             `ladder: ${config.ladder.map((tier) => tier.label + (tier.role ? ` [${tier.role}]` : "")).join(" → ")}`,
             `checkpoints: ${config.ladder.map((tier) => `${tier.label}: ${tier.checkpointAtTokens ?? DEFAULT_CHECKPOINT_AT_TOKENS} tokens (0 = off)`).join("; ")}`,
             `returns per tier: ${config.returnsPerTier}`,
+            `mode: ${config.subagents ? `controller (${config.subagents.quantity} workers on ${config.subagents.model.provider}/${config.subagents.model.model})` : "serial"}`,
             `running: ${active ? "yes" : "no"}`,
+            ...(controller.batch ? [JSON.stringify(controller.batch.snapshot()).slice(0, 16_000)] : []),
             `parked (${parked.length}): ${parked.join(", ") || "none"}`,
             `agent-approved exemptions (${approvals.length}): ${approvals.join(", ") || "none"}`,
           ].join("\n"),
@@ -148,15 +153,17 @@ export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
       catch { ctx.ui.notify("Autoloop active.json lock exists; stop the other loop or remove a stale lock before restarting.", "error"); return; }
       const flag: AbortFlag = { aborted: false };
       active = flag;
+      controller.unsafe = false;
       ctx.ui.notify(
         `Escalation loop starting. Ladder: ${config.ladder.map((tier) => tier.label + (tier.role ? ` [${tier.role}]` : "")).join(" → ")}. Type any message to stop.`,
         "info",
       );
 
-      const task = Promise.resolve().then(async () => runLoop(
-        { pi, ctx, projectRoot, config, sink, flag, baseline: await getSessionBaseline(projectRoot) },
-        { firstTarget: parsed.target, maxFunctions: parsed.maxFunctions },
-      ));
+      const task = Promise.resolve().then(async () => {
+        const deps = { pi, ctx, projectRoot, config, sink, flag, baseline: await getSessionBaseline(projectRoot) };
+        const options = { firstTarget: parsed.target, maxFunctions: parsed.maxFunctions };
+        return config.subagents ? runLoopWithSubagents(deps, options, controller) : runLoop(deps, options);
+      });
       running = task.catch(() => {});
       try {
         const outcomes = await task;
@@ -164,7 +171,8 @@ export function registerAutoloopCommands(pi: ExtensionAPI): () => boolean {
       } catch (error) {
         ctx.ui.notify(`Escalation loop failed: ${error instanceof Error ? error.message : String(error)}`, "error");
       } finally {
-        rmSync(lock, { force: true });
+        if (!controller.unsafe) rmSync(lock, { force: true });
+        else ctx.ui.notify("Worker shutdown is unconfirmed. Retaining active.json and all workspaces; inspect the fleet before restarting.", "error");
         active = null;
         running = undefined;
       }

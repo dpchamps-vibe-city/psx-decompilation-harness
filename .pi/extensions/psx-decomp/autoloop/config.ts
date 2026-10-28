@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { LoopConfig, LoopTier, ThinkingLevel } from "./types.ts";
+import type { LoopConfig, LoopTier, SubagentsConfig, ThinkingLevel } from "./types.ts";
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 export const DEFAULT_CHECKPOINT_AT_TOKENS = 350_000;
@@ -64,6 +64,20 @@ function threshold(value: unknown, fallback: number, field: string): number {
   return value;
 }
 
+export function parseSubagents(value: unknown): SubagentsConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("subagents must be an object");
+  const raw = object(value);
+  rejectUnknown(raw, ["quantity", "model"], "subagents");
+  if (!Number.isSafeInteger(raw.quantity) || (raw.quantity as number) < 1) {
+    throw new Error("subagents.quantity must be a positive safe integer");
+  }
+  let model: LoopTier;
+  try { model = parseLadder([raw.model])[0]!; }
+  catch (error) { throw new Error(String(error).replace(/ladder\[0\]/g, "subagents.model")); }
+  return { quantity: raw.quantity as number, model };
+}
+
 export function parseLadder(value: unknown): LoopTier[] {
   if (value === undefined) return DEFAULT_LADDER;
   if (!Array.isArray(value) || value.length === 0) throw new Error("ladder must be a non-empty array");
@@ -102,6 +116,8 @@ export function parseLadder(value: unknown): LoopTier[] {
 /** Both the loop and its shared gates read this configuration file. */
 export const LOOP_CONFIG_FIELDS = [
   "ladder",
+  "subagents",
+  "subgents",
   "returnsPerTier",
   "maxReturnsPerTier",
   "tierMinutes",
@@ -134,6 +150,9 @@ export function loadLoopConfig(projectRoot: string): LoopConfig {
     throw new Error("approvalsDir must be a safe project-relative path");
   }
 
+  if (raw.subagents !== undefined && raw.subgents !== undefined) throw new Error("Specify subagents or subgents, not both");
+  /* Accept the spelling in the original configuration proposal as an alias. */
+  const subagents = parseSubagents(raw.subagents !== undefined ? raw.subagents : raw.subgents);
   const ladder = parseLadder(raw.ladder);
   if (ladder[ladder.length - 1].role === "prep") {
     throw new Error("autoloop config: a prep tier needs a later matching tier (omit role on that tier)");
@@ -159,6 +178,7 @@ export function loadLoopConfig(projectRoot: string): LoopConfig {
   }
 
   return {
+    ...(subagents ? { subagents } : {}),
     ladder,
     singleTier,
     returnsPerTier,

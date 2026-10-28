@@ -2,6 +2,7 @@ import { test } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { objectFunctions, type RelocatableObject } from "./relocatableObject.js";
 import type { Elf32Section } from "./elfSections.js";
+import { assemble } from "../agent/matching-reconstruction/fixture-asm.js";
 
 function fixture(): RelocatableObject {
   const words = [0x27bdffe8, 0xafbf0010, 0x0c00000a, 0, 0x8fbf0010, 0x27bd0018, 0x03e00008, 0, 0, 0, 0x03e00008, 0x24020007];
@@ -166,6 +167,52 @@ test("callback relocation pairs must be ordered, unambiguous and connected by an
   ]) {
     const object = callbacks(); mutate(object);
     assert(!objectFunctions(object).some(f => f.offset === 32), "ambiguous address formation is not an entry witness");
+  }
+});
+
+/** Two published callbacks, the second using a readonly relocated switch.
+ * The final table word belongs to a neighbour and is deliberately not in the bound. */
+function switchCallback(native = false): RelocatableObject {
+  const object = callbacks(), section = object.sections.get(".text")!;
+  const words = assemble([
+    ["slti", "t0", "a0", 3], ["beq", "t0", "zero", "default"], ["sll", "v0", "a0", 2],
+    ["lui", "at", 0], ["addu", "at", "at", "v0"], ["lw", "v0", 0, "at"], ["nop"], ["jr", "v0"], ["nop"],
+    ["jr", "ra"], ["addiu", "v0", "zero", 11],
+    ["jr", "ra"], ["addiu", "v0", "zero", 22],
+    ["label", "default"], ["jr", "ra"], ["addiu", "v0", "zero", 33],
+  ], 40);
+  words[0]!.raw = ((words[0]!.raw & 0x03ffffff) | (0x0b << 26)) >>> 0;
+  const data = Buffer.alloc(40 + words.length * 4); section.data.copy(data, 0, 0, 40);
+  words.forEach(w => data.writeUInt32LE(w.raw, w.vram)); section.data = data; section.size = data.length;
+  const table = Buffer.alloc(16), targets = [76, 84, 92, 0];
+  targets.forEach((at, i) => table.writeUInt32LE(native ? 0 : at, i * 4));
+  object.sections.set(".rdata", { ...section, index: 2, flags: 2, offset: 0, size: table.length, data: table });
+  object.relocations.push({ section: ".text", offset: 52, type: 5, reference: ".rdata@0", ...(native ? { addend: 0 } : {}) },
+    { section: ".text", offset: 60, type: 6, reference: ".rdata@0", ...(native ? { addend: 0 } : {}) },
+    ...targets.map((at, i) => ({ section: ".rdata", offset: i * 4, type: 2, reference: ".text@0", ...(native ? { addend: at } : {}) })));
+  return object;
+}
+
+test("published switch callbacks get independent extents from exact bounded relocation edges", () => {
+  for (const native of [false, true]) {
+    const object = switchCallback(native), before = Buffer.from(object.sections.get(".text")!.data);
+    assert.deepEqual(objectFunctions(object).map(f => [f.offset, f.size]), [[0, 32], [32, 8], [40, 60]]);
+    assert(object.sections.get(".text")!.data.equals(before));
+  }
+});
+
+test("switch callback discovery rejects unknown, mutable, cross-boundary and delay-slot case targets", () => {
+  for (const mutate of [
+    (o: RelocatableObject) => { o.relocations.splice(o.relocations.findIndex(r => r.section === ".rdata" && r.offset === 4), 1); },
+    (o: RelocatableObject) => { o.relocations.find(r => r.section === ".rdata")!.addend = null; },
+    (o: RelocatableObject) => { o.relocations.find(r => r.section === ".rdata")!.reference = "import:unknown"; },
+    (o: RelocatableObject) => { o.sections.get(".rdata")!.flags |= 1; },
+    (o: RelocatableObject) => { o.sections.get(".rdata")!.data.writeUInt32LE(32, 0); },
+    (o: RelocatableObject) => { o.sections.get(".rdata")!.data.writeUInt32LE(72, 0); },
+    (o: RelocatableObject) => { o.sections.get(".text")!.data.writeUInt32LE(0x00400008, 76); },
+  ]) {
+    const object = switchCallback(); mutate(object);
+    assert(!objectFunctions(object).some(f => f.offset === 40), "unsupported edges must not license a new partition");
   }
 });
 

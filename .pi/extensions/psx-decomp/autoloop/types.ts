@@ -3,8 +3,8 @@ import type { PolicyFinding } from "../../shared/types.ts";
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-/** One rung of the escalation ladder: a concrete provider/model plus its thinking level. */
-export interface LoopTier {
+/** Shared model configuration for ladder controllers and subagent workers. */
+export interface ModelSchema {
   provider: string;
   model: string;
   thinking: ThinkingLevel;
@@ -16,7 +16,16 @@ export interface LoopTier {
   checkpointAtTokens?: number;
 }
 
+export type LoopTier = ModelSchema;
+
+export interface SubagentsConfig {
+  quantity: number;
+  model: ModelSchema;
+}
+
 export interface LoopConfig {
+  /** Omitted retains the serial loop; configured workers put the ladder in controller mode. */
+  subagents?: SubagentsConfig;
   /** Ordered escalation ladder, cheapest/most-local first. */
   ladder: LoopTier[];
   /**

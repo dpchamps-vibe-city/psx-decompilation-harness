@@ -1,6 +1,8 @@
 import { test, ROOT, fixtureContext } from "../testing/runtimeTestContext.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { runLoopWithSubagents } from "../../.pi/extensions/psx-decomp/autoloop/controller.js";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -151,7 +153,7 @@ test("fold cleanup keeps only module-only edits that pass the refinement gate, a
   });
 });
 
-test("with autoFold the loop runs a pending fold cleanup as its own role before new targets, and commits it", async t => {
+for (const subagents of [false, true]) test(`with autoFold${subagents ? " and subagents" : ""} the same main loop cleans and commits a pending fold before new targets`, async t => {
   const f = fixture(t);
   await fixtureContext(f.root, async () => {
     const seed = compileSource(join(f.root, "original.c"), join(f.root, "seed"), "original", { containerKind: "exe", assemble: false });
@@ -165,12 +167,23 @@ test("with autoFold the loop runs a pending fold cleanup as its own role before 
     git("add", "-A"); git("commit", "--quiet", "-m", "fixture");
     const gate = createTurnGate(), sent: string[] = [], solverTools = ["read", "bash", "edit", "write", "psx_finalize_function"];
     const record = { tools: solverTools, toolsAtSend: [] as string[][], navigated: [] as string[] };
+    const events = new EventEmitter();
+    events.on("subagents:rpc:v1:request", request => events.emit(`subagents:rpc:v1:reply:${request.requestId}`,
+      { version: 1, requestId: request.requestId, success: true, data: {} }));
+    events.on("pi-subagents:runtime-agent-register:v1", request => {
+      request.result = { ok: true, registration: { dispose() {} } };
+    });
+    events.on("prompt-template:subagent:request", () => assert.fail("fold cleanup must stay in the original main-loop role, not start a worker loop"));
     const deps = {
       projectRoot: f.root, baseline: new Set<string>(), flag: { aborted: false },
       config: { ...DEFAULT_LOOP_CONFIG, runtimeDir: join(f.root, "run_output"), maxFunctions: 1, autoFold: true,
+        ...(subagents ? { subagents: { quantity: 3, model: { provider: "fixture", model: "worker", label: "worker", thinking: "off" } } } : {}),
         ladder: [{ provider: "fixture", model: "cleanup-model", label: "cleanup-model", thinking: "off" }] },
       sink: { verdict: {}, handoff: {}, prep: {}, gate },
       pi: {
+        events: { emit: (name: string, data: unknown) => events.emit(name, data), on: (name: string, handler: (...args: any[]) => void) => {
+          events.on(name, handler); return () => events.off(name, handler);
+        } },
         getActiveTools: () => record.tools, setActiveTools: (value: string[]) => { record.tools = value; },
         getThinkingLevel: () => "off", setThinkingLevel: () => {}, setModel: async () => true,
         sendUserMessage: (message: string) => { sent.push(message); record.toolsAtSend.push([...record.tools]); gate.settled++; },
@@ -183,7 +196,7 @@ test("with autoFold the loop runs a pending fold cleanup as its own role before 
         },
         ui: { notify: () => {}, setStatus: () => {}, setEditorText: () => {}, theme: { fg: (_color: string, text: string) => text } } },
     } as unknown as LoopDeps;
-    await quietly(t, () => runLoop(deps));
+    await quietly(t, () => subagents ? runLoopWithSubagents(deps, {}, {}) : runLoop(deps));
     assert.match(sent[0]!, /^\/skill:psx-fold-cleanup Target: \S+ \(src\/libraries\/.*original\.c\)/);
     assert.deepEqual(record.toolsAtSend, [DOCUMENTATION_TOOLS], "cleanup runs with the documentation role's tools");
     assert.deepEqual(record.navigated, ["solver-prompt"], "on a cleared conversation");

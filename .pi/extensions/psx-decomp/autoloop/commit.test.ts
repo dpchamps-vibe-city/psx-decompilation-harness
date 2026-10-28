@@ -141,6 +141,24 @@ test("a park commit clears the tree so the next function's changes stand alone",
   }
 });
 
+test("match commits leave unrelated staged changes in the user's index, including a no-op retry", async () => {
+  const { dir, cleanup } = await repo();
+  try {
+    write(dir, "unrelated.txt", "staged user work\n");
+    await git(dir, ["add", "unrelated.txt"]);
+    write(dir, "src/matched.c", "int matched(void) { return 1; }\n");
+    const matched = await commitMatchedFunction(dir, "matched", "tier", ["src/matched.c"]);
+    assert.equal(matched.committed, true);
+    assert.equal(await git(dir, ["show", "--name-only", "--format=", "HEAD"]), "src/matched.c");
+    assert.equal(await git(dir, ["diff", "--cached", "--name-only"]), "unrelated.txt");
+    const again = await commitMatchedFunction(dir, "matched", "tier", ["src/matched.c"]);
+    assert.equal(again.committed, false);
+    assert.equal(again.detail, "nothing staged");
+    assert.equal(await git(dir, ["diff", "--cached", "--name-only"]), "unrelated.txt");
+    assert.equal(await git(dir, ["rev-list", "--count", "HEAD"]), "2");
+  } finally { cleanup(); }
+});
+
 test("a commit with nothing to stage reports it instead of making an empty commit", async () => {
   const { dir, cleanup } = await repo();
   try {

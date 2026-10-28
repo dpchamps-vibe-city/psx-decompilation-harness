@@ -5,6 +5,7 @@
  * Unknown code stays in its original fragment; the byte oracle is unchanged. */
 import type { ObjectRelocation, RelocatableObject } from "./relocatableObject.js";
 import { decodeWord, definedRegister, isBranch, type DecodedInsn } from "../agent/matching-reconstruction/decode.js";
+import { recoverRelocatableDispatches } from "../agent/machine-ir/relocatable-dispatch.js";
 
 export interface ObjectFunction {
   name: string; section: string; offset: number; size: number; inferredSize: boolean;
@@ -86,16 +87,22 @@ function publishedAddress(data: Buffer, low: number): boolean {
   return false;
 }
 /** A published pointer must lead to code that is independently enterable and
- * exits without falling through into the next fragment. Unknown instructions,
+ * exits without falling through into the next fragment. Relocation-backed,
+ * bounded readonly switches contribute their exact case edges. Unknown instructions,
  * unresolved computed jumps and text literals are not silently called C functions.
  * Calls return after their delay slots; local branches stay inside the bound. */
 function independentAddressEntry(object: RelocatableObject, section: string, start: number, end: number, entries: Set<number>): boolean {
   const data = object.sections.get(section)!.data, pending = [start], visited = new Set<number>();
+  const insns: DecodedInsn[] = [];
+  for (let at = start; at + 4 <= end; at += 4) insns.push(decodeWord(data.readUInt32LE(at), at));
+  const dispatches = new Map(recoverRelocatableDispatches(object, section, insns)
+    .map(d => [insns[d.instructionIndex]!.vram, d.targets]));
+  const slots = new Set(insns.filter(i => control(i) && i.op !== "break").map(i => i.vram + 4));
   let exits = false;
   while (pending.length) {
     const at = pending.pop()!;
     if (visited.has(at)) continue;
-    if (at < start || at + 4 > end || at % 4) return false;
+    if (at < start || at + 4 > end || at % 4 || slots.has(at)) return false;
     visited.add(at);
     const i = decodeWord(data.readUInt32LE(at), at);
     if (i.op === "unknown") return false;
@@ -105,8 +112,12 @@ function independentAddressEntry(object: RelocatableObject, section: string, sta
     const slot = decodeWord(data.readUInt32LE(at + 4), at + 4);
     if (slot.op === "unknown" || control(slot)) return false;
     if (i.op === "jr") {
-      if (i.rs !== 31) return false;
-      exits = true;
+      if (i.rs === 31) exits = true;
+      else {
+        const targets = dispatches.get(at);
+        if (!targets) return false;
+        pending.push(...targets);
+      }
     } else if (i.op === "j") {
       const r = object.relocations.find(r => r.section === section && r.offset === at && r.type === 4);
       if (!r || r.addend === null) return false; // An unrelocated/unknown J field is not a section coordinate.

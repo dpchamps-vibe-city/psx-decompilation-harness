@@ -2,7 +2,7 @@
  * No synthetic linking: each table word must relocate into this code extent.
  * Unrecognised/unguarded forms stay unresolved, never acquire guessed edges. */
 import type { RelocatableObject } from "../../lib/relocatableObject.js";
-import { relocatableAddend } from "../../lib/relocatableFunctionOracle.js";
+import { relocatableAddend } from "../../lib/relocatableAddend.js";
 import { definedRegister, isBranch, type DecodedInsn } from "../matching-reconstruction/decode.js";
 
 export interface RelocatableDispatch {

@@ -12,6 +12,11 @@
       "sha256": "5bda8a822aac57d77ede8e8f9694828715a30a87355c9e0b61b55e6ecae8f4c5"
     },
     {
+      "file": ".pi/extensions/psx-decomp/autoloop/controller.ts",
+      "descriptionsOnly": true,
+      "sha256": "989d6a4f8856368393183bad6022db6c565d405a21dc478168d8e416f5ff47fd"
+    },
+    {
       "file": ".pi/extensions/psx-decomp/autoloop/handoff.ts",
       "descriptionsOnly": true,
       "sha256": "621050143d3461dcc652e1a1f783f5169d1a25018b43d4798a05ce5bfd275f12"
@@ -30,6 +35,11 @@
       "file": ".pi/extensions/psx-decomp/autoloop/prompts.ts",
       "descriptionsOnly": false,
       "sha256": "7b929e2030457ad485dc3ba6aeffc5b99df52362150fe350063d84717a1701f0"
+    },
+    {
+      "file": ".pi/extensions/psx-decomp/autoloop/subagents.ts",
+      "descriptionsOnly": true,
+      "sha256": "14820c0ca6a31e6f1f413ce75401bee18c1cb114cd7d58d7905b81f43b69c18b"
     },
     {
       "file": ".pi/extensions/psx-decomp/index.ts",

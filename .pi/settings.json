@@ -1,3 +1,6 @@
 {
-  "enableSkillCommands": true
+  "enableSkillCommands": true,
+  "packages": [
+    "npm:pi-subagents@0.82.1"
+  ]
 }

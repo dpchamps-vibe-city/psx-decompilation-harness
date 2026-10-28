@@ -3,8 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "../../../../tools/testing/runtimeTestContext.js";
-import { DEFAULT_CHECKPOINT_AT_TOKENS, DEFAULT_LADDER, loadLoopConfig, parseLadder } from "./config.ts";
+import { DEFAULT_CHECKPOINT_AT_TOKENS, DEFAULT_LADDER, loadLoopConfig, parseLadder, parseSubagents } from "./config.ts";
 import { parseArgs } from "./commands.ts";
+import { loadConfig } from "../../shared/config.ts";
 
 test("the default ladder escalates local -> openrouter -> codex with the configured thinking levels", () => {
   assert.deepEqual(
@@ -103,6 +104,44 @@ test("command arguments select a target, a limit, or a subcommand", () => {
   assert.equal(parseArgs("func_1 func_2").action, "usage");
   assert.equal(parseArgs("--max=0").action, "usage");
   assert.equal(parseArgs("--nonsense").action, "usage");
+});
+
+test("optional subagents reuse ladder model parsing; both strict config readers accept controller mode", () => {
+  const model = { provider: "p", model: "worker", thinking: "low", checkpointAtTokens: 120_000, label: "worker-label" };
+  assert.equal(parseSubagents(undefined), undefined);
+  assert.deepEqual(parseSubagents({ quantity: 3, model })?.model, parseLadder([model])[0]);
+  for (const key of ["subagents", "subgents"]) {
+    const project = projectWith({ [key]: { quantity: 3, model } });
+    try {
+      assert.equal(loadLoopConfig(project.dir).subagents?.quantity, 3);
+      assert.doesNotThrow(() => loadConfig(project.dir));
+    } finally { project.cleanup(); }
+  }
+});
+
+test("controller configuration rejects malformed, ambiguous and unsupported requests", () => {
+  const model = { provider: "p", model: "m" };
+  for (const bad of [null, false, [], "yes", {}, { quantity: 1 }, { quantity: 0, model }, { quantity: 1.5, model },
+    { quantity: Number.MAX_SAFE_INTEGER + 1, model }, { quantity: 1, model: { ...model, speed: 1 } }, { quantity: 1, model, extra: true }]) {
+    assert.throws(() => parseSubagents(bad), /subagents/);
+  }
+  for (const config of [{ subagents: null }, { subagents: { quantity: 1, model }, subgents: { quantity: 1, model } }]) {
+    const project = projectWith(config);
+    try { assert.throws(() => loadLoopConfig(project.dir), /subagents|subgents|autoFold/); }
+    finally { project.cleanup(); }
+  }
+});
+
+test("subagent fan-out preserves auto-fold and accepts the same model roles as the ladder", () => {
+  for (const key of ["subagents", "subgents"]) {
+    const project = projectWith({ [key]: { quantity: 3, model: { provider: "p", model: "m", role: "prep" } }, autoFold: true });
+    try {
+      const config = loadLoopConfig(project.dir);
+      assert.equal(config.autoFold, true);
+      assert.equal(config.subagents?.quantity, 3);
+      assert.equal(config.subagents?.model.role, "prep");
+    } finally { project.cleanup(); }
+  }
 });
 
 test("auto-fold is off unless a project turns it on", () => {

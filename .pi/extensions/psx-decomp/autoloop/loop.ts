@@ -116,6 +116,16 @@ export interface LoopDeps {
   baseline: Set<string>;
   /** Before this function's ladder: preserve pre-existing TU edits on park. */
   libraryPartBases?: Map<string, string | null>;
+  /** Optional fan-out for a work turn; the single main loop retains every decision. */
+  work?: {
+    prepare(functionName: string, state: LoopState): Promise<void>;
+    next?(skip: Set<string>, defer: Set<string>): string | undefined;
+    /** A verified integration may already have committed during this work turn. */
+    committed?(functionName: string): string | undefined;
+    /** Release a successful/parked promotion, or roll back an interrupted one. */
+    settled?(functionName: string, outcome: FunctionOutcome): Promise<void>;
+    turn(deps: LoopDeps, state: LoopState, functionName: string, message: string): Promise<boolean>;
+  };
 }
 
 function notify(deps: LoopDeps, message: string, level: "info" | "warning" | "error" = "info"): void {
@@ -609,8 +619,10 @@ export async function runFunction(deps: LoopDeps, state: LoopState, functionName
   const abort = new AbortController();
   const poll = setInterval(() => { if (deps.flag.aborted) abort.abort(); }, 100);
   if (deps.flag.aborted) abort.abort();
-  try { return await runFunctionWithSignal(deps, state, functionName, abort.signal); }
-  finally { clearInterval(poll); }
+  try {
+    if (!deps.flag.aborted) await deps.work?.prepare(functionName, state);
+    return await runFunctionWithSignal(deps, state, functionName, abort.signal);
+  } finally { clearInterval(poll); }
 }
 
 async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionName: string, signal: AbortSignal): Promise<{ state: LoopState; outcome: FunctionOutcome }> {
@@ -688,7 +700,8 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
         for (let attempt = 1; attempt <= deps.config.maxReturnsPerTier; attempt++) {
           setStatus(deps, `↻ ${functionName} · ${tier.label} · prep ${attempt}`);
           const message = attempt === 1 ? prepMessage(functionName, preparedOpening) : prepNudge(lastReport, preparedOpening);
-          if (!(await turn(deps, message))) return { state: current, outcome: { kind: "aborted", functionName } };
+          if (!(await (deps.work ? deps.work.turn(deps, current, functionName, message) : turn(deps, message))))
+            return { state: current, outcome: { kind: "aborted", functionName } };
 
           /* Re-measure the preserved primary draft, not the untouched assembly
              stub. Forward this refreshed packet without replacing agent edits. */
@@ -730,7 +743,8 @@ async function runFunctionWithSignal(deps: LoopDeps, state: LoopState, functionN
             ? openingMessage(functionName) + "\n\n" + preparedOpening
             : escalationMessage(functionName, tier.label, lastReport, handoff, prepHandoff ? preparedOpening : "", prepHandoff);
 
-      if (!(await turn(deps, message))) return { state: current, outcome: { kind: "aborted", functionName } };
+      if (!(await (deps.work ? deps.work.turn(deps, current, functionName, message) : turn(deps, message))))
+        return { state: current, outcome: { kind: "aborted", functionName } };
       /* The agent's own finalization passed in this process: the next
          selection's graph can be built while the loop checks this one. */
       if (libraryReceiptMembers(deps.projectRoot, functionName)) prefetchLibraryGraph(deps.projectRoot);
@@ -997,7 +1011,7 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
         : Object.entries(state.completions ?? {}).find(([name, c]) => c.documentation === "pending" && !skip.has(name))?.[0];
       const target = index === 0 && options.firstTarget
         ? options.firstTarget
-        : pendingDocumentation ?? await timed("selection", () => nextTarget(deps.projectRoot, skip, defer));
+        : pendingDocumentation ?? deps.work?.next?.(skip, defer) ?? await timed("selection", () => nextTarget(deps.projectRoot, skip, defer));
       if (!target) {
         notify(deps, "No remaining clean-C decompilation targets.", "info");
         break;
@@ -1005,6 +1019,7 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
       skip.add(target);
 
       const run = await runFunction(deps, state, target);
+      await deps.work?.settled?.(target, run.outcome);
       state = run.state;
       outcomes.push(run.outcome);
       timedItem = { functionName: target, outcome: run.outcome.kind };
@@ -1015,6 +1030,9 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
         break;
       }
 
+      if (run.outcome.kind === "matched") {
+        run.outcome.commit = deps.work?.committed?.(target) ?? state.completions?.[target]?.commit;
+      }
       /* A verified match is committed whether or not its documentation finished.
        * Documentation is notes-only and resumes as a pending item. Held back for
        * it, the match stays in the tree, and the next function's `match` commit
@@ -1028,9 +1046,13 @@ export async function runLoop(input: LoopDeps, options: LoopOptions = {}): Promi
         } else if (commit.failed) {
           notify(deps, `Loop stopped: ${target} matched but was not committed — ${commit.detail}`, "error");
           break;
-        } else {
+        } else if (!run.outcome.commit) {
           notify(deps, `Not committed: ${target} — ${commit.detail}`, "warning");
         }
+      }
+      if (run.outcome.kind === "matched" && run.outcome.commit && state.completions?.[target]) {
+        state.completions[target].commit = run.outcome.commit;
+        writeState(deps.config, state);
       }
 
       /* A member whose last target just matched folds into one module. */

@@ -64,6 +64,8 @@ export interface Completion {
   tier?: string;
   /** Actual model that completed the notes-only turn, not the source author. */
   documentationModel?: string;
+  /** Actual successful match commit, including an immediate controller integration. */
+  commit?: string;
   verifiedIdentity: string;
   /** The verified inputs; absent once persisted (see completionCurrent). */
   inputs?: Record<string, string>;

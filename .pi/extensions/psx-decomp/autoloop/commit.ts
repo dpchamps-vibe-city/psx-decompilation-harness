@@ -72,12 +72,12 @@ async function commitFiles(projectRoot: string, files: string[], message: string
     return { committed: false, failed: true, detail: `git add failed: ${staged.stderr || staged.stdout}` };
   }
 
-  const pending = await runCommand("git", ["diff", "--cached", "--name-only"], { cwd: projectRoot, timeoutMs: 60_000 });
+  const pending = await runCommand("git", ["diff", "--cached", "--name-only", "--", ...files], { cwd: projectRoot, timeoutMs: 60_000 });
   if (pending.code === 0 && !pending.stdout.trim()) {
     return { committed: false, detail: "nothing staged" };
   }
 
-  const commit = await runCommand("git", ["commit", "-m", message], {
+  const commit = await runCommand("git", ["commit", "--only", "-m", message, "--", ...files], {
     cwd: projectRoot,
     timeoutMs: 120_000,
   });
